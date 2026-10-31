@@ -1401,27 +1401,15 @@ function createWindowFacadeTexture(baseHex, litHex, darkHex) {
   const c = document.createElement('canvas');
   c.width = 128; c.height = 128;
   const ctx = c.getContext('2d');
-  ctx.fillStyle = baseHex;
+  // One continuous glass field. The old 2x2 cell layout drew a dark reveal around every
+  // cell and then tiled it, which produced the visible 3x3 window grid on distant facades.
+  ctx.fillStyle = darkHex;
   ctx.fillRect(0, 0, 128, 128);
-
-  const cols = 2, rows = 2;
-  const cellW = 64, cellH = 64;
-  for (let r = 0; r < rows; r++) {
-    for (let col = 0; col < cols; col++) {
-      const x = col * cellW, y = r * cellH;
-      const lit = false;
-      const glass = darkHex;
-
-      // Recessed dark reveal and a single uninterrupted glass surface.
-      ctx.fillStyle = 'rgba(12, 16, 20, 0.88)';
-      ctx.fillRect(x + 2, y + 2, cellW - 4, cellH - 4);
-      ctx.fillStyle = glass;
-      ctx.fillRect(x + 5, y + 5, cellW - 10, cellH - 10);
-
-      // Broad uninterrupted pane with a restrained reflection; no internal grid bars.
-      ctx.fillStyle = 'rgba(220, 240, 255, 0.16)';
-      ctx.fillRect(x + 6, y + 6, cellW - 12, 3);
-    }
+  // Seamless vertical sky-reflection sheen (cos wrap keeps the tile edges matching).
+  for (let px = 0; px < 128; px++) {
+    const a = 0.035 + 0.05 * (0.5 + 0.5 * Math.cos((px / 128) * Math.PI * 4));
+    ctx.fillStyle = `rgba(200, 225, 245, ${a.toFixed(3)})`;
+    ctx.fillRect(px, 0, 1, 128);
   }
   const t = new THREE.CanvasTexture(c);
   t.wrapS = THREE.RepeatWrapping;
@@ -2382,7 +2370,9 @@ function buildEmpireStateFromOSMFootprint(ringXZ, baseHeight) {
           const wh=Math.min(2.25,d.floor*.69);
           const base=windowQuad*4;
           windowPositions.push(px-ux+nx*.16,y,pz-uz+nz*.16, px+ux+nx*.16,y,pz+uz+nz*.16, px+ux+nx*.16,y+wh,pz+uz+nz*.16, px-ux+nx*.16,y+wh,pz-uz+nz*.16);
-          const col=((Math.floor(y/d.floor)+j+i*3)%9===0)?windowLit:windowDark;
+          // Hash-based per-pane tone (no periodic lattice): subtle variation, no lit squares.
+          const hv=Math.abs(Math.sin(y*12.9898+j*78.233+i*37.719))%1, tone=0.92+0.16*hv;
+          const col={r:windowDark.r*tone,g:windowDark.g*tone,b:windowDark.b*tone};
           for(let k=0;k<4;k++) windowColors.push(col.r,col.g,col.b);
           windowIndices.push(base,base+1,base+2,base,base+2,base+3); windowQuad++;
         }
@@ -2476,6 +2466,7 @@ function addLandmarkWindowPanels(ring, height, style) {
   // Batch facade windows into one mesh per landmark to avoid thousands of separate objects.
   const positions=[], colors=[], indices=[];
   const baseColor=new THREE.Color(style.window), litColor=new THREE.Color(style.trim);
+  const litMix=baseColor.clone().lerp(litColor,0.35);
   let quad=0;
   for(let e=0;e<ring.length;e++) {
     const a=ring[e], b=ring[(e+1)%ring.length];
@@ -2494,7 +2485,11 @@ function addLandmarkWindowPanels(ring, height, style) {
         const ux=dx/len*ww*0.5, uz=dz/len*ww*0.5;
         const vx=nx*0.03, vz=nz*0.03;
         const verts=[[px-ux,y,pz-uz],[px+ux,y,pz+uz],[px+ux,y+wh,pz+uz],[px-ux,y+wh,pz-uz]];
-        for(const v of verts){positions.push(v[0]+vx,v[1],v[2]+vz); const lit=((f*13+c*7+e*3)%11)<3; const col=lit?litColor:baseColor; colors.push(col.r,col.g,col.b);}
+        // Hash-based tone per pane. Only a rare share gets a faint warm interior tint; no periodic lattice.
+        const hv=Math.abs(Math.sin(f*12.9898+c*78.233+e*37.719))%1;
+        const src=hv>0.96?litMix:baseColor, tone=0.92+0.16*hv;
+        const col={r:src.r*tone,g:src.g*tone,b:src.b*tone};
+        for(const v of verts){positions.push(v[0]+vx,v[1],v[2]+vz); colors.push(col.r,col.g,col.b);}
         const k=quad*4; indices.push(k,k+1,k+2,k,k+2,k+3); quad++;
       }
     }
@@ -6154,8 +6149,10 @@ function gfx2Update() {
   for (const o of GFX2.neon) { const f = 0.82 + 0.2 * Math.sin(t * 3.1 + o.userData.ph) + (Math.sin(t * 17 + o.userData.ph * 3) > 0.96 ? -0.35 : 0); o.material.emissiveIntensity = o.userData.neonBase * boost * Math.max(0.3, f); }
 }
 
+let glContextLost = false;
 function animate() {
   requestAnimationFrame(animate);
+  if (glContextLost) return; // no GL calls while the context is lost
   const now = performance.now();
   const dt = Math.min(0.05, (now - lastTime) / 1000);
   lastTime = now;
@@ -6739,6 +6736,20 @@ function init() {
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
   document.body.appendChild(renderer.domElement);
 
+  // WebGL context loss (common on iOS Safari under memory pressure). Stop GL work while lost.
+  // three r128 does not reliably rebuild every GPU resource in place, so on restore we reload once
+  // (capped at 3 recoveries per tab session) to rebuild cleanly instead of rendering into a dead context.
+  renderer.domElement.addEventListener('webglcontextlost', (e) => {
+    e.preventDefault();
+    glContextLost = true;
+  }, false);
+  renderer.domElement.addEventListener('webglcontextrestored', () => {
+    try {
+      const n = +(sessionStorage.getItem('nycCtxRecover') || 0);
+      if (n < 3) { sessionStorage.setItem('nycCtxRecover', String(n + 1)); location.reload(); }
+    } catch (_) { location.reload(); }
+  }, false);
+
   const hemiLight = new THREE.HemisphereLight(0xe2e8f0, 0x1e293b, 1.0);
   hemiLightRef = hemiLight;
   scene.add(hemiLight);
@@ -6843,7 +6854,8 @@ function init() {
     setWaypoint(wPt.x, wPt.z, `도로 지점 (${ll.lat.toFixed(4)}°N, ${ll.lon.toFixed(4)}°W)`);
   });
 
-  requestAnimationFrame(animate);
+  // Start the render loop exactly once (animate() self-schedules; a second start would double the loop).
+  if (!window.__loopStarted) { window.__loopStarted = true; requestAnimationFrame(animate); }
 }
 window.onload = init;
 </script>
