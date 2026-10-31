@@ -6091,7 +6091,12 @@ function gfx2RenderG(W, H) {
   scene.traverse(o => {
     if (o.isMesh) {
       const m = o.material; if (!o.visible) return;
-      if (Array.isArray(m) || (m && (m.transparent || m.depthWrite === false || m.colorWrite === false)) || o === GFXS.mesh || o === GFX2.proxy2) { swap.push(o, 1, o.visible); o.visible = false; return; }
+      // 불투명 멀티 머티리얼 메시(예: Empire State Building 기단)는 G-buffer에 포함한다.
+      // 배열 자체를 제외하면 기단의 깊이/법선 정보가 비어 레이트레이싱 합성에서 구멍처럼 보일 수 있다.
+      const hasTransparentMaterial = Array.isArray(m)
+        ? m.some(mm => mm && (mm.transparent || mm.depthWrite === false || mm.colorWrite === false))
+        : !!(m && (m.transparent || m.depthWrite === false || m.colorWrite === false));
+      if (hasTransparentMaterial || o === GFXS.mesh || o === GFX2.proxy2) { swap.push(o, 1, o.visible); o.visible = false; return; }
       swap.push(o, 0, m);
       const n = o.name || '';
       if (n.indexOf('NYC_Facade_') === 0 && m.roughnessMap) { const sp = NYC_FACADE_SPECS[n.slice(11)]; o.material = gfx2GMat(0, m.roughnessMap, sp && sp.fam === 'glass' ? 1.0 : 0.85); }
