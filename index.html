@@ -3231,18 +3231,20 @@ function buildDetailedEmpireState(ringXZ, baseHeight) {
   for (const p of pts){ const u=(p.x-cx0)*co+(p.z-cz0)*si, v=-(p.x-cx0)*si+(p.z-cz0)*co; mnU=Math.min(mnU,u);mxU=Math.max(mxU,u);mnV=Math.min(mnV,v);mxV=Math.max(mxV,v); }
   const L=mxU-mnU, D=mxV-mnV, uc=(mnU+mxU)/2, vc=(mnV+mxV)/2;
   const bx=cx0+uc*co-vc*si, bz=cz0+uc*si+vc*co;
-  // 석회암 + 세로 기둥 + 알루미늄 스팬드럴 창 텍스처
-  const cv=document.createElement('canvas'); cv.width=64; cv.height=64; const g=cv.getContext('2d');
-  g.fillStyle='#cdc6b8'; g.fillRect(0,0,64,64);
-  g.fillStyle='#bdb6a7'; g.fillRect(0,0,9,64); g.fillRect(55,0,9,64);
-  g.fillStyle='#27363c'; g.fillRect(16,8,32,42);
-  g.fillStyle='#4b5d63'; g.fillRect(16,8,32,6);
-  g.fillStyle='#98a2a7'; g.fillRect(14,52,36,10);
+  // 일반 콘크리트 텍스처 (창문/석회암 패턴 없음)
+  const cv=document.createElement('canvas'); cv.width=256; cv.height=256; const g=cv.getContext('2d');
+  g.fillStyle='#b6b4ae'; g.fillRect(0,0,256,256);
+  let _s=20241031; const _r=()=>{ _s=(_s*1664525+1013904223)>>>0; return _s/4294967296; };
+  for(let i=0;i<5200;i++){ const v=Math.floor(150+_r()*70); g.fillStyle='rgba('+v+','+v+','+(v-4)+','+(0.10+_r()*0.22)+')'; const s=1+Math.floor(_r()*3); g.fillRect(_r()*256,_r()*256,s,s); }
+  for(let i=0;i<26;i++){ const x=_r()*256,y=_r()*256,rr=14+_r()*40; const gr=g.createRadialGradient(x,y,0,x,y,rr); const dk=_r()<0.5; gr.addColorStop(0,dk?'rgba(90,90,86,0.10)':'rgba(225,223,216,0.10)'); gr.addColorStop(1,'rgba(0,0,0,0)'); g.fillStyle=gr; g.fillRect(x-rr,y-rr,rr*2,rr*2); }
+  g.fillStyle='rgba(60,60,58,0.10)'; g.fillRect(0,0,256,2); g.fillRect(0,128,256,2);
   const baseTex=new THREE.CanvasTexture(cv); baseTex.wrapS=baseTex.wrapT=THREE.RepeatWrapping;
-  const texMat=(rx,ry,glow)=>{ const t=baseTex.clone(); t.needsUpdate=true; t.wrapS=t.wrapT=THREE.RepeatWrapping; t.repeat.set(rx,ry);
-    return new THREE.MeshStandardMaterial({map:t,roughness:0.7,metalness:0.1,emissive:glow?0x6a5528:0x000000,emissiveMap:glow?t:null,emissiveIntensity:glow?0.9:0}); };
-  const roofMat=(glow)=>new THREE.MeshStandardMaterial({color:glow?0xf1dca0:0x8d877b,roughness:0.8,emissive:glow?0x8a7030:0x000000,emissiveIntensity:glow?0.6:0});
-  const stone=new THREE.MeshStandardMaterial({color:0xc9c2b4,roughness:0.8});
+  try { baseTex.anisotropy=Math.min(16, renderer.capabilities.getMaxAnisotropy()); } catch(e) {}
+  const _conc=(m)=>{ vfxPatch(m,{ao:true,aoMin:0.55,grain:0.05,bump:0.12,scale:1}); return m; };
+  const texMat=(rx,ry,glow)=>{ const t=baseTex.clone(); t.needsUpdate=true; t.wrapS=t.wrapT=THREE.RepeatWrapping; t.repeat.set(rx*0.6,ry*0.6);
+    return _conc(new THREE.MeshStandardMaterial({map:t,roughness:0.92,metalness:0.0})); };
+  const roofMat=(glow)=>_conc(new THREE.MeshStandardMaterial({color:0x9a9892,roughness:0.92,metalness:0.0}));
+  const stone=_conc(new THREE.MeshStandardMaterial({color:0xaeaca6,roughness:0.92,metalness:0.0}));
   // 1) 실제 외곽선 기단 (약 6층, 24m)
   const shape=new THREE.Shape(); pts.forEach((p,i)=>{const x=p.x-cx0,y=-(p.z-cz0); if(i===0)shape.moveTo(x,y); else shape.lineTo(x,y);}); shape.closePath();
   const bg=new THREE.ExtrudeGeometry(shape,{depth:24,bevelEnabled:false,steps:1,curveSegments:1}); bg.rotateX(-Math.PI/2); bg.translate(cx0,0,cz0); bg.computeVertexNormals();
@@ -3257,7 +3259,7 @@ function buildDetailedEmpireState(ringXZ, baseHeight) {
   // 3) 크라운 첨탑 + 안테나 (381m → 443m)
   const top=381, metal=new THREE.MeshStandardMaterial({color:0xaeb6ba,roughness:0.35,metalness:0.6});
   const add=(geo,y,mat)=>{ const m=new THREE.Mesh(geo,mat); m.position.set(bx,y,bz); group.add(m); };
-  add(new THREE.CylinderGeometry(3.4,5.0,9,16),top+4.5,new THREE.MeshStandardMaterial({color:0xe8dcae,roughness:0.5,emissive:0x9a8238,emissiveIntensity:0.7}));
+  add(new THREE.CylinderGeometry(3.4,5.0,9,16),top+4.5,_conc(new THREE.MeshStandardMaterial({color:0xaeaca6,roughness:0.92,metalness:0.0})));
   add(new THREE.CylinderGeometry(1.7,3.2,16,16),top+17,metal);
   add(new THREE.CylinderGeometry(0.15,1.1,37,10),top+33.5,metal);
   add(new THREE.SphereGeometry(0.7,10,8),top+52.5,new THREE.MeshBasicMaterial({color:0xffffff}));
@@ -5649,6 +5651,7 @@ function gfxBloomInit() {
       vec3 rotv(vec3 v){ return camWorld[0].xyz * v.x + camWorld[1].xyz * v.y + camWorld[2].xyz * v.z; }
       float gDepth(vec2 u, out float rf){ vec4 g = texture2D(tG, u); if (gfl > 0.5) { rf = g.g; return g.r; } rf = g.b; return (g.r + g.g / 255.0) * 2600.0; }
       vec3 gNorm(vec2 u){ vec2 e = texture2D(tG, u).ba; vec3 n = vec3(e, 1.0 - abs(e.x) - abs(e.y)); if (n.z < 0.0) n.xy = (1.0 - abs(n.yx)) * vec2(n.x >= 0.0 ? 1.0 : -1.0, n.y >= 0.0 ? 1.0 : -1.0); return normalize(n); }
+      vec2 proj(vec3 p){ return vec2(p.x / (-p.z) / (tanHalf * aspect), p.y / (-p.z) / tanHalf) * 0.5 + 0.5; }
       vec3 vPos(vec2 u, float D){ vec2 n = u * 2.0 - 1.0; return vec3(n.x * tanHalf * aspect * D, n.y * tanHalf * D, -D); }
       float h3(vec3 p){ p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
       float n3(vec3 p){ vec3 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
@@ -5701,20 +5704,33 @@ function gfxBloomInit() {
             vec3 V = normalize(vp); vec3 Rv = reflect(V, nV);
             float fres = 0.04 + 0.96 * pow(1.0 - clamp(dot(nV, -V), 0.0, 1.0), 5.0);
             vec3 hitCol = vec3(0.0); float hit = 0.0;
-            if (Rv.z < 0.92) {
-              float stepL = max(0.6, D * 0.018); vec3 p = vp;
-              for (int i = 0; i < 28; i++) {
-                stepL *= 1.13; p += Rv * stepL; if (p.z > -0.2) break;
-                vec2 su = vec2(p.x / (-p.z) / (tanHalf * aspect), p.y / (-p.z) / tanHalf) * 0.5 + 0.5;
+            // 반사 레이: 선형 스텝 + 교차 검출 + 이분 탐색 정제 + 두께/뒷면 거부 (줄무늬·유령 반사 방지)
+            if (Rv.z < 0.5) {
+              float stepL = max(0.8, D * 0.012); vec3 p = vp, pp = vp; float pd = -1.0;
+              p += Rv * stepL * hh(gl_FragCoord.xy * 0.731);   // 고정 지터(시간 변화 없음 → 깜빡임 없음)
+              for (int i = 0; i < 40; i++) {
+                pp = p; p += Rv * stepL; stepL *= 1.06; if (p.z > -0.3) break;
+                vec2 su = proj(p);
                 if (su.x < 0.0 || su.x > 1.0 || su.y < 0.0 || su.y > 1.0) break;
                 float tr; float Ds = gDepth(su, tr); float diff = (-p.z) - Ds;
-                if (tr < -0.5) continue;   // 스파이더맨 본체는 반사에 비치지 않음(복제된 분신 현상 방지)
-                if (diff > 0.0 && diff < stepL * 2.0 + 0.6 && Ds < 2150.0) {
-                  float edge = smoothstep(0.0, 0.08, min(min(su.x, 1.0 - su.x), min(su.y, 1.0 - su.y)));
-                  float br = ground > 0.5 ? (1.0 - pud) * 0.006 : 0.0012;
-                  hitCol = (texture2D(tScene, su).rgb * 2.0 + texture2D(tScene, su + vec2(br, 0.0)).rgb + texture2D(tScene, su - vec2(br, 0.0)).rgb) * 0.25;
-                  hit = edge; break;
+                if (tr < -0.5) continue;   // 스파이더맨 본체는 반사에서 제외
+                if (diff > 0.0 && pd <= 0.0 && Ds < 2150.0) {
+                  vec3 ra = pp, rb = p;
+                  for (int j = 0; j < 6; j++) { vec3 rm = (ra + rb) * 0.5; float tq; float dm = (-rm.z) - gDepth(proj(rm), tq); if (dm > 0.0) rb = rm; else ra = rm; }
+                  vec2 hs = proj(rb); float tq2; float Dh = gDepth(hs, tq2); float dd = (-rb.z) - Dh;
+                  float thick = clamp(Dh * 0.02, 0.35, 3.0);
+                  bool ok = abs(dd) < thick && tq2 >= -0.5 && hs.x > 0.0 && hs.x < 1.0 && hs.y > 0.0 && hs.y < 1.0;
+                  if (ok && gfl > 0.5) { vec3 nh = gNorm(hs); if (dot(nh, Rv) > 0.12) ok = false; }   // 뒷면 히트 거부
+                  if (ok) {
+                    float edge = smoothstep(0.0, 0.14, min(min(hs.x, 1.0 - hs.x), min(hs.y, 1.0 - hs.y)));
+                    float br = ground > 0.5 ? (1.0 - pud) * 0.006 : 0.0015;
+                    hitCol = (texture2D(tScene, hs).rgb * 2.0 + texture2D(tScene, hs + vec2(br, 0.0)).rgb + texture2D(tScene, hs - vec2(br, 0.0)).rgb) * 0.25;
+                    hitCol = min(hitCol, vec3(3.0));
+                    hit = edge * (1.0 - smoothstep(0.55, 1.0, float(i) / 40.0)) * (1.0 - smoothstep(0.2, 0.5, Rv.z));
+                    break;
+                  }
                 }
+                pd = diff;
               }
             }
             vec3 RW = normalize(rotv(Rv));
@@ -5724,7 +5740,9 @@ function gfxBloomInit() {
             if (RW.y < 0.0) skyC = skyHor * 0.35;
             if (hasEnv > 0.5) { skyC = textureCube(tEnv, RW).rgb; if (RW.y < 0.0) skyC *= 0.5; }
             vec3 rc = mix(skyC, hitCol, hit);
+            float disc = max(max(abs(Dl - D), abs(Dr - D)), max(abs(Du - D), abs(Dd - D))) / max(D, 1.0);
             float w = clamp(refl * mix(0.5, 1.0, fres) * 1.15, 0.0, 0.92);
+            w *= (1.0 - smoothstep(0.015, 0.05, disc)) * (1.0 - smoothstep(260.0, 650.0, D));   // 깊이 불연속(건물 모서리)·원거리 글리치 억제
             c = mix(c, rc, w);
           }
         }
