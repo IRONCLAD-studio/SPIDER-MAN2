@@ -291,13 +291,12 @@ canvas { display: block; width: 100%; height: 100%; }
 <script>
 // 비정상 종료(메모리 강제종료→자동 새로고침) 감지: 직전 로딩이 끝나지 않았으면 경량 모드로 자동 전환 (?lite=1 / ?full=1 로 수동 지정)
 (function(){var q=location.search;window.__LITE=false;try{
-  // 전체 도시 데이터가 기본값. 메모리 복구 플래그만으로 경량 모드에 진입하지 않도록 수정.
   if(/[?&]full=1/.test(q)){localStorage.setItem('nycLite','0');}
-  else if(/[?&]lite=1/.test(q)){localStorage.setItem('nycLite','1');}
-  else {localStorage.setItem('nycLite','0');}
+  if(/[?&]lite=1/.test(q)){localStorage.setItem('nycLite','1');}
+  if(localStorage.getItem('nycBoot')==='1'&&!/[?&]full=1/.test(q)){localStorage.setItem('nycLite','1');}
   localStorage.setItem('nycBoot','1');
   window.__LITE=localStorage.getItem('nycLite')==='1';
-}catch(e){window.__LITE=false;}})();
+}catch(e){}})();
 </script>
 <script>window.addEventListener("error",function(e){var t=document.getElementById("load-status");if(t&&!window.__worldReady)t.textContent="오류: "+(e.message||"알 수 없음")+" (줄 "+e.lineno+")";});</script>
 <script>
@@ -5644,33 +5643,15 @@ function gfxBloomInit() {
     uniforms: { tScene: { value: null }, tB1: { value: null }, tB2: { value: null }, strength: { value: 0.6 },
       ultra: { value: 0.0 }, sunUv: { value: new THREE.Vector2(0.5, 0.5) }, sunVis: { value: 0.0 }, aspect: { value: 1.0 }, time: { value: 0.0 },
       cinema: { value: 0.0 }, tG: { value: null }, tEnv: { value: null }, gfl: { value: 0.0 }, hasEnv: { value: 0.0 }, gsize: { value: new THREE.Vector2(1, 1) }, tanHalf: { value: 0.65 }, wet: { value: 0.0 }, fogK: { value: 0.0015 }, mbK: { value: 0.5 }, sunI: { value: 1.0 },
-      tRefl: { value: null }, hrtSize: { value: new THREE.Vector2(1, 1) }, hrtOn: { value: 0 }, hrtEnc: { value: 1 }, rtMaxDist: { value: 420 }, rtSteps: { value: 72 },
-      tRT: { value: null }, rtInfo: { value: new THREE.Vector4(0, 0, 512, 1 / 512) }, spPos: { value: new THREE.Vector3() }, winGlow: { value: 0 }, rtOn: { value: 0 },
       camWorld: { value: new THREE.Matrix4() }, prevVP: { value: new THREE.Matrix4() }, camPos: { value: new THREE.Vector3() }, fogCol: { value: new THREE.Color() }, sunDirW: { value: new THREE.Vector3(0, 1, 0) }, sunCol: { value: new THREE.Color() }, skyTop: { value: new THREE.Color() }, skyHor: { value: new THREE.Color() } },
     fragmentShader: `uniform sampler2D tScene, tB1, tB2; uniform float strength, ultra, sunVis, aspect, time; uniform vec2 sunUv; varying vec2 vUv;
       float hh(vec2 p){ return fract(sin(dot(p, vec2(12.9898,78.233))) * 43758.5453); }
       uniform sampler2D tG; uniform samplerCube tEnv; uniform vec2 gsize; uniform float cinema, tanHalf, wet, fogK, mbK, sunI, gfl, hasEnv;
       uniform mat4 camWorld, prevVP; uniform vec3 camPos, fogCol, sunDirW, sunCol, skyTop, skyHor;
-      uniform sampler2D tRT; uniform vec4 rtInfo; uniform vec3 spPos; uniform float winGlow, rtOn;
-      uniform sampler2D tRefl; uniform vec2 hrtSize; uniform float hrtOn, hrtEnc;
       vec3 rotv(vec3 v){ return camWorld[0].xyz * v.x + camWorld[1].xyz * v.y + camWorld[2].xyz * v.z; }
       float gDepth(vec2 u, out float rf){ vec4 g = texture2D(tG, u); if (gfl > 0.5) { rf = g.g; return g.r; } rf = g.b; return (g.r + g.g / 255.0) * 2600.0; }
       vec3 gNorm(vec2 u){ vec2 e = texture2D(tG, u).ba; vec3 n = vec3(e, 1.0 - abs(e.x) - abs(e.y)); if (n.z < 0.0) n.xy = (1.0 - abs(n.yx)) * vec2(n.x >= 0.0 ? 1.0 : -1.0, n.y >= 0.0 ? 1.0 : -1.0); return normalize(n); }
       vec2 proj(vec3 p){ return vec2(p.x / (-p.z) / (tanHalf * aspect), p.y / (-p.z) / tanHalf) * 0.5 + 0.5; }
-      ${RT_GLSL}
-      // 저해상도 반사 버퍼 → 풀해상도 업샘플. 4개의 이웃 텍셀을 '양선형 가중치 × 깊이 유사도'로 섞는다(Bilateral).
-      // 깊이가 다른 텍셀(다른 건물/하늘)의 반사가 모서리로 번지는 것을 막는다.
-      vec4 hrtSample(vec2 uv, float D){
-        vec2 tp = uv * hrtSize - 0.5; vec2 f = fract(tp); vec2 b = (floor(tp) + 0.5) / hrtSize; vec2 o = 1.0 / hrtSize;
-        vec4 acc = vec4(0.0); float ws = 0.0;
-        for (int j = 0; j < 2; j++) for (int i = 0; i < 2; i++) {
-          vec2 u2 = b + vec2(float(i), float(j)) * o; float r; float Ds = gDepth(u2, r);
-          float bw = (i == 0 ? 1.0 - f.x : f.x) * (j == 0 ? 1.0 - f.y : f.y);
-          float dw = exp(-abs(Ds - D) / max(D * 0.03, 0.3));
-          float w = bw * dw + 1e-4; acc += texture2D(tRefl, u2) * w; ws += w;
-        }
-        return acc / ws;
-      }
       vec3 vPos(vec2 u, float D){ vec2 n = u * 2.0 - 1.0; return vec3(n.x * tanHalf * aspect * D, n.y * tanHalf * D, -D); }
       float h3(vec3 p){ p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
       float n3(vec3 p){ vec3 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
@@ -5719,23 +5700,49 @@ function gfxBloomInit() {
           c *= 1.0 - 0.42 * wet * ground;
           float refl = max(rf, wetG);
           // --- SSR (화면공간 레이마칭 + 하늘 폴백) ---
-          if (hrtOn > 0.5) {
-            // 하이브리드 RT 결과(사전곱 RGBA): C' = C·(1-A) + P
-            vec4 hr = hrtSample(uv, D); c = c * (1.0 - hr.a) + hr.rgb / hrtEnc;
-          } else if (refl > 0.03) {
+          if (refl > 0.03) {
             vec3 V = normalize(vp); vec3 Rv = reflect(V, nV);
             float fres = 0.04 + 0.96 * pow(1.0 - clamp(dot(nV, -V), 0.0, 1.0), 5.0);
+            vec3 hitCol = vec3(0.0); float hit = 0.0;
+            // 반사 레이: 선형 스텝 + 교차 검출 + 이분 탐색 정제 + 두께/뒷면 거부 (줄무늬·유령 반사 방지)
+            if (Rv.z < 0.5) {
+              float stepL = max(0.8, D * 0.012); vec3 p = vp, pp = vp; float pd = -1.0;
+              p += Rv * stepL * hh(gl_FragCoord.xy * 0.731);   // 고정 지터(시간 변화 없음 → 깜빡임 없음)
+              for (int i = 0; i < 40; i++) {
+                pp = p; p += Rv * stepL; stepL *= 1.06; if (p.z > -0.3) break;
+                vec2 su = proj(p);
+                if (su.x < 0.0 || su.x > 1.0 || su.y < 0.0 || su.y > 1.0) break;
+                float tr; float Ds = gDepth(su, tr); float diff = (-p.z) - Ds;
+                if (tr < -0.5) continue;   // 스파이더맨 본체는 반사에서 제외
+                if (diff > 0.0 && pd <= 0.0 && Ds < 2150.0) {
+                  vec3 ra = pp, rb = p;
+                  for (int j = 0; j < 6; j++) { vec3 rm = (ra + rb) * 0.5; float tq; float dm = (-rm.z) - gDepth(proj(rm), tq); if (dm > 0.0) rb = rm; else ra = rm; }
+                  vec2 hs = proj(rb); float tq2; float Dh = gDepth(hs, tq2); float dd = (-rb.z) - Dh;
+                  float thick = clamp(Dh * 0.02, 0.35, 3.0);
+                  bool ok = abs(dd) < thick && tq2 >= -0.5 && hs.x > 0.0 && hs.x < 1.0 && hs.y > 0.0 && hs.y < 1.0;
+                  if (ok && gfl > 0.5) { vec3 nh = gNorm(hs); if (dot(nh, Rv) > 0.12) ok = false; }   // 뒷면 히트 거부
+                  if (ok) {
+                    float edge = smoothstep(0.0, 0.14, min(min(hs.x, 1.0 - hs.x), min(hs.y, 1.0 - hs.y)));
+                    float br = ground > 0.5 ? (1.0 - pud) * 0.006 : 0.0015;
+                    hitCol = (texture2D(tScene, hs).rgb * 2.0 + texture2D(tScene, hs + vec2(br, 0.0)).rgb + texture2D(tScene, hs - vec2(br, 0.0)).rgb) * 0.25;
+                    hitCol = min(hitCol, vec3(3.0));
+                    hit = edge * (1.0 - smoothstep(0.55, 1.0, float(i) / 40.0)) * (1.0 - smoothstep(0.2, 0.5, Rv.z));
+                    break;
+                  }
+                }
+                pd = diff;
+              }
+            }
             vec3 RW = normalize(rotv(Rv));
             float sh = clamp(RW.y, 0.0, 1.0);
             vec3 skyC = mix(skyHor, skyTop, pow(sh, 0.55)) * 0.85;
             skyC += sunCol * pow(max(dot(RW, sunDirW), 0.0), 500.0) * sunI * 3.0;
             if (RW.y < 0.0) skyC = skyHor * 0.35;
             if (hasEnv > 0.5) { skyC = textureCube(tEnv, RW).rgb; if (RW.y < 0.0) skyC *= 0.5; }
-            vec3 rc = skyC;
-            // 월드공간 레이트레이싱: 화면 밖·카메라 뒤 건물, 그림자, 야간 창문 불빛, 캐릭터까지 반사
-            if (rtOn > 0.5) rc = min(rtTrace(wp + nW * 0.5, RW, skyC), vec3(6.0));
+            vec3 rc = mix(skyC, hitCol, hit);
+            float disc = max(max(abs(Dl - D), abs(Dr - D)), max(abs(Du - D), abs(Dd - D))) / max(D, 1.0);
             float w = clamp(refl * mix(0.5, 1.0, fres) * 1.15, 0.0, 0.92);
-            if (gfl < 0.5) { float disc = max(max(abs(Dl - D), abs(Dr - D)), max(abs(Du - D), abs(Dd - D))) / max(D, 1.0); w *= 1.0 - smoothstep(0.015, 0.05, disc); }
+            w *= (1.0 - smoothstep(0.015, 0.05, disc)) * (1.0 - smoothstep(260.0, 650.0, D));   // 깊이 불연속(건물 모서리)·원거리 글리치 억제
             c = mix(c, rc, w);
           }
         }
@@ -5832,7 +5839,12 @@ function gfxRenderBloom() {
     u.sunUv.value.set(sp.x * 0.5 + 0.5, sp.y * 0.5 + 0.5);
     u.sunVis.value = (sp.z < 1 && GFX.sunI > 0) ? Math.max(0, 1 - Math.max(Math.abs(sp.x), Math.abs(sp.y)) * 0.55) * Math.min(1, GFX.sunI) : 0;
   }
-  if (GFX_PRESETS[GFX.quality].cinema) { gfx2Prep(u, W, H); try { hrtRender(u, W, H); } catch (e) { u.hrtOn.value = 0; console.warn('HRT', e); } } else u.cinema.value = 0;
+  if (GFX_PRESETS[GFX.quality].cinema) {
+    // G-buffer와 이전 프레임 VP 행렬은 프레임당 한 번만 갱신해야 한다.
+    // 중복 호출하면 prevVP가 현재 프레임으로 덮여 카메라 이동 재투영이 무효화된다.
+    gfx2Prep(u, W, H);
+    try { hrtRender(u, W, H); } catch (e) { u.hrtOn.value = 0; console.warn('HRT', e); }
+  } else { u.cinema.value = 0; u.hrtOn.value = 0; }
   gfxPass(GFXB.mComp, null);
 }
 function gfxSetBloom(on) {
