@@ -293,8 +293,8 @@ canvas { display: block; width: 100%; height: 100%; }
 (function(){var q=location.search;window.__LITE=false;try{
   if(/[?&]full=1/.test(q)){localStorage.setItem('nycLite','0');}
   if(/[?&]lite=1/.test(q)){localStorage.setItem('nycLite','1');}
-  if(localStorage.getItem('nycBoot')==='1'&&!/[?&]full=1/.test(q)){localStorage.setItem('nycLite','1');}
-  localStorage.setItem('nycBoot','1');
+  var _b=Number(localStorage.getItem('nycBoot')||0); if(_b>1&&(Date.now()-_b)<120000&&!/[?&]full=1/.test(q)){localStorage.setItem('nycLite','1');}
+  localStorage.setItem('nycBoot',String(Date.now()));
   window.__LITE=localStorage.getItem('nycLite')==='1';
 }catch(e){}})();
 </script>
@@ -3290,6 +3290,14 @@ function buildDetailedEmpireState(ringXZ, baseHeight) {
 // ===== 청크 로딩 시스템 =====
 // (1) 거대한 건물 메쓰를 구역(청크)별로 쪼개 시야 밖/먼 청크는 그리지 않음 (정점 데이터는 공유 → 메모리 증가 없음)
 // (2) 모든 건물의 디테일은 플레이어 주변 청크만 생성하고, 멀어지면 해제
+// 경량 모드 필터: 스폰(미드타운) 반경 2300m 밖은 생략하되, 월스트리트·FiDi·배터리파크·WTC 권역은 항상 생성한다.
+// (월스트리트는 스폰에서 약 4.3km 떨어져 있어 예전 필터가 이 지역 건물을 전부 걸러냈다)
+function nycLiteSkip(cx, cz) {
+  if (!window.__LITE) return false;
+  if (Math.hypot(cx, cz - 900) <= 2300) return false;
+  if (cz > 3300 && cz < 6000 && cx > -3300 && cx < -300) return false;   // 로어 맨해튼 박스
+  return true;
+}
 const NYC_CHUNK = 250; let NYC_LOAD_R = 700, NYC_UNLOAD_R = 950;
 function splitMeshIntoChunks(orig, cell, maxD, out) {
   const geo = orig.geometry, pos = geo.attributes.position.array, idx = geo.index ? geo.index.array : null;
@@ -3347,7 +3355,7 @@ function buildNYCDetailLayer() {
     const ring = pts.map(q => ({x:q[0], z:q[1]}));
     const cx = ring.reduce((a,q)=>a+q.x,0)/ring.length, cz = ring.reduce((a,q)=>a+q.z,0)/ring.length;
     if (cx<bounds.minX||cx>bounds.maxX||cz<bounds.minZ||cz>bounds.maxZ) return null;
-    if (window.__LITE && Math.hypot(cx, cz - 900) > 2300) return null;
+    if (nycLiteSkip(cx, cz)) return null;
     let mnX=1e9,mxX=-1e9,mnZ=1e9,mxZ=-1e9;
     for (const q of ring){ mnX=Math.min(mnX,q.x);mxX=Math.max(mxX,q.x);mnZ=Math.min(mnZ,q.z);mxZ=Math.max(mxZ,q.z); }
     if (mxX-mnX<2.4 || mxZ-mnZ<2.4) return null;
@@ -3453,7 +3461,7 @@ function buildOSMBuildingsFromEmbeddedData(onProgress, onDone) {
     const cx = ringXZ.reduce((s,p)=>s+p.x,0)/ringXZ.length;
     const cz = ringXZ.reduce((s,p)=>s+p.z,0)/ringXZ.length;
     if (cx < bounds.minX || cx > bounds.maxX || cz < bounds.minZ || cz > bounds.maxZ) { rejectedBounds++; continue; }
-    if (window.__LITE && Math.hypot(cx, cz - 900) > 2300) continue;   // 경량 모드: 스폰 주변만 생성
+    if (nycLiteSkip(cx, cz)) continue;   // 경량 모드: 스폰 주변 + 로어 맨해튼(월스트리트) 권역만 생성
 
     let minX=Infinity,maxX=-Infinity,minZ=Infinity,maxZ=-Infinity;
     for (const p of ringXZ) { minX=Math.min(minX,p.x); maxX=Math.max(maxX,p.x); minZ=Math.min(minZ,p.z); maxZ=Math.max(maxZ,p.z); }
@@ -5642,16 +5650,29 @@ function gfxBloomInit() {
   GFXB.mComp = new THREE.ShaderMaterial({ depthTest: false, depthWrite: false, vertexShader: vs,
     uniforms: { tScene: { value: null }, tB1: { value: null }, tB2: { value: null }, strength: { value: 0.6 },
       ultra: { value: 0.0 }, sunUv: { value: new THREE.Vector2(0.5, 0.5) }, sunVis: { value: 0.0 }, aspect: { value: 1.0 }, time: { value: 0.0 },
-      cinema: { value: 0.0 }, tG: { value: null }, tEnv: { value: null }, gfl: { value: 0.0 }, hasEnv: { value: 0.0 }, gsize: { value: new THREE.Vector2(1, 1) }, tanHalf: { value: 0.65 }, wet: { value: 0.0 }, fogK: { value: 0.0015 }, mbK: { value: 0.5 }, sunI: { value: 1.0 },
+      cinema: { value: 0.0 }, tRefl: { value: null }, hrtSize: { value: new THREE.Vector2(1, 1) }, hrtOn: { value: 0 }, hrtEnc: { value: 1 }, tG: { value: null }, tEnv: { value: null }, gfl: { value: 0.0 }, hasEnv: { value: 0.0 }, gsize: { value: new THREE.Vector2(1, 1) }, tanHalf: { value: 0.65 }, wet: { value: 0.0 }, fogK: { value: 0.0015 }, mbK: { value: 0.5 }, sunI: { value: 1.0 },
       camWorld: { value: new THREE.Matrix4() }, prevVP: { value: new THREE.Matrix4() }, camPos: { value: new THREE.Vector3() }, fogCol: { value: new THREE.Color() }, sunDirW: { value: new THREE.Vector3(0, 1, 0) }, sunCol: { value: new THREE.Color() }, skyTop: { value: new THREE.Color() }, skyHor: { value: new THREE.Color() } },
     fragmentShader: `uniform sampler2D tScene, tB1, tB2; uniform float strength, ultra, sunVis, aspect, time; uniform vec2 sunUv; varying vec2 vUv;
       float hh(vec2 p){ return fract(sin(dot(p, vec2(12.9898,78.233))) * 43758.5453); }
       uniform sampler2D tG; uniform samplerCube tEnv; uniform vec2 gsize; uniform float cinema, tanHalf, wet, fogK, mbK, sunI, gfl, hasEnv;
       uniform mat4 camWorld, prevVP; uniform vec3 camPos, fogCol, sunDirW, sunCol, skyTop, skyHor;
+      uniform sampler2D tRefl; uniform vec2 hrtSize; uniform float hrtOn, hrtEnc;
       vec3 rotv(vec3 v){ return camWorld[0].xyz * v.x + camWorld[1].xyz * v.y + camWorld[2].xyz * v.z; }
       float gDepth(vec2 u, out float rf){ vec4 g = texture2D(tG, u); if (gfl > 0.5) { rf = g.g; return g.r; } rf = g.b; return (g.r + g.g / 255.0) * 2600.0; }
       vec3 gNorm(vec2 u){ vec2 e = texture2D(tG, u).ba; vec3 n = vec3(e, 1.0 - abs(e.x) - abs(e.y)); if (n.z < 0.0) n.xy = (1.0 - abs(n.yx)) * vec2(n.x >= 0.0 ? 1.0 : -1.0, n.y >= 0.0 ? 1.0 : -1.0); return normalize(n); }
       vec2 proj(vec3 p){ return vec2(p.x / (-p.z) / (tanHalf * aspect), p.y / (-p.z) / tanHalf) * 0.5 + 0.5; }
+      // 저해상도 반사 버퍼 → 풀해상도 업샘플: 이웃 4텍셀을 '양선형 × 깊이 유사도'로 섞는 Bilateral Upsample
+      vec4 hrtSample(vec2 uv, float D){
+        vec2 tp = uv * hrtSize - 0.5; vec2 f = fract(tp); vec2 b = (floor(tp) + 0.5) / hrtSize; vec2 o = 1.0 / hrtSize;
+        vec4 acc = vec4(0.0); float ws = 0.0;
+        for (int j = 0; j < 2; j++) for (int i = 0; i < 2; i++) {
+          vec2 u2 = b + vec2(float(i), float(j)) * o; float r; float Ds = gDepth(u2, r);
+          float bw = (i == 0 ? 1.0 - f.x : f.x) * (j == 0 ? 1.0 - f.y : f.y);
+          float dw = exp(-abs(Ds - D) / max(D * 0.03, 0.3));
+          float w = bw * dw + 1e-4; acc += texture2D(tRefl, u2) * w; ws += w;
+        }
+        return acc / ws;
+      }
       vec3 vPos(vec2 u, float D){ vec2 n = u * 2.0 - 1.0; return vec3(n.x * tanHalf * aspect * D, n.y * tanHalf * D, -D); }
       float h3(vec3 p){ p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
       float n3(vec3 p){ vec3 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
@@ -5700,7 +5721,10 @@ function gfxBloomInit() {
           c *= 1.0 - 0.42 * wet * ground;
           float refl = max(rf, wetG);
           // --- SSR (화면공간 레이마칭 + 하늘 폴백) ---
-          if (refl > 0.03) {
+          if (hrtOn > 0.5) {
+            // 하이브리드 반사 결과(사전곱 RGBA): C' = C·(1-A) + P
+            vec4 hr = hrtSample(uv, D); c = c * (1.0 - hr.a) + hr.rgb / hrtEnc;
+          } else if (refl > 0.03) {
             vec3 V = normalize(vp); vec3 Rv = reflect(V, nV);
             float fres = 0.04 + 0.96 * pow(1.0 - clamp(dot(nV, -V), 0.0, 1.0), 5.0);
             vec3 hitCol = vec3(0.0); float hit = 0.0;
@@ -6168,7 +6192,7 @@ function gfx2Apply(on) {
     try { gfx2PatchConcrete(); } catch (e) { console.warn('concrete', e); }
     GFX2.lastMain = -1; GFX2.cx2 = 1e9;
   } else {
-    gfx2DetachPBR(); GFX2.conc.value = 0;
+    gfx2DetachPBR(); GFX2.conc.value = 0; try { hrtDispose(); } catch (e) {}
     if (GFX2.base > 0 && sunLight) sunLight.intensity = GFX2.base;
     if (GFX2.gb) { GFX2.gb.dispose(); GFX2.gb = null; GFX2.gbW = 0; }
     for (const m of GFX2.neon) if (m.material) m.material.emissiveIntensity = m.userData.neonBase || 0.32;
@@ -7099,13 +7123,12 @@ const HRT_VS = 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(posi
 
 function hrtBuildMaterials(u) {
   const reflFS = `
-    uniform sampler2D tScene, tG, tRT; uniform samplerCube tEnv;
-    uniform vec2 gsize; uniform float tanHalf, aspect, gfl, hasEnv, wet, fogK, sunI, winGlow, rtOn;
+    uniform sampler2D tScene, tG; uniform samplerCube tEnv;
+    uniform vec2 gsize; uniform float tanHalf, aspect, gfl, hasEnv, wet, fogK, sunI;
     uniform float hrtFrame, hrtSteps, hrtMaxDist, hrtRough, hrtEnc, hrtMaxL;
-    uniform mat4 camWorld; uniform vec3 camPos, fogCol, sunDirW, sunCol, skyTop, skyHor, spPos; uniform vec4 rtInfo;
+    uniform mat4 camWorld; uniform vec3 camPos, fogCol, sunDirW, sunCol, skyTop, skyHor;
     varying vec2 vUv;
     ${HRT_COMMON}
-    ${RT_GLSL}
     float h3(vec3 p){ p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
     float n3(vec3 p){ vec3 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
       return mix(mix(mix(h3(i), h3(i + vec3(1,0,0)), f.x), mix(h3(i + vec3(0,1,0)), h3(i + vec3(1,1,0)), f.x), f.y),
@@ -7176,10 +7199,8 @@ function hrtBuildMaterials(u) {
       skyC += sunCol * pow(max(dot(RW, sunDirW), 0.0), 500.0) * sunI * 3.0;
       if (RW.y < 0.0) skyC = skyHor * 0.35;
       if (hasEnv > 0.5) { skyC = textureCube(tEnv, RW).rgb; if (RW.y < 0.0) skyC *= 0.5; }
-      // --- 2단계: SSR이 완전히 성공하지 못한 픽셀만 월드공간 RT 호출 (비싼 연산을 필요한 곳에만)
-      vec3 rc = skyC;
-      if (hit < 0.999 && rtOn > 0.5) rc = min(rtTrace(wp + nW * 0.5, RW, skyC), vec3(hrtMaxL));
-      rc = mix(rc, hitCol, hit);
+      // --- 2단계: SSR이 놓친 부분(hit<1)은 환경 큐브맵(하늘+도시 스카이라인)으로 부드럽게 폴백
+      vec3 rc = mix(skyC, hitCol, hit);
       float w = clamp(refl * mix(0.5, 1.0, fres) * 1.15, 0.0, 0.92);
       if (gfl < 0.5) { float disc = max(max(abs(Dl - D), abs(Dr - D)), max(abs(Du - D), abs(Dd - D))) / max(D, 1.0); w *= 1.0 - smoothstep(0.015, 0.05, disc); }
       w *= 1.0 - smoothstep(600.0, 1300.0, D);
@@ -7187,10 +7208,10 @@ function hrtBuildMaterials(u) {
       gl_FragColor = vec4(min(rc, vec3(hrtMaxL)) * w * hrtEnc, w);
     }`;
   HRT.mRefl = new THREE.ShaderMaterial({ depthTest: false, depthWrite: false, vertexShader: HRT_VS, fragmentShader: reflFS,
-    uniforms: { tScene: u.tScene, tG: u.tG, tRT: u.tRT, tEnv: u.tEnv, gsize: u.gsize, tanHalf: u.tanHalf, aspect: u.aspect, gfl: u.gfl, hasEnv: u.hasEnv,
-      wet: u.wet, fogK: u.fogK, sunI: u.sunI, winGlow: u.winGlow, rtOn: u.rtOn, rtInfo: u.rtInfo, spPos: u.spPos, camWorld: u.camWorld, camPos: u.camPos,
+    uniforms: { tScene: u.tScene, tG: u.tG, tEnv: u.tEnv, gsize: u.gsize, tanHalf: u.tanHalf, aspect: u.aspect, gfl: u.gfl, hasEnv: u.hasEnv,
+      wet: u.wet, fogK: u.fogK, sunI: u.sunI, camWorld: u.camWorld, camPos: u.camPos,
       fogCol: u.fogCol, sunDirW: u.sunDirW, sunCol: u.sunCol, skyTop: u.skyTop, skyHor: u.skyHor,
-      rtMaxDist: { value: 420 }, rtSteps: { value: 72 }, hrtFrame: { value: 0 }, hrtSteps: { value: 32 }, hrtMaxDist: { value: 300 },
+      hrtFrame: { value: 0 }, hrtSteps: { value: 32 }, hrtMaxDist: { value: 300 },
       hrtRough: { value: 0 }, hrtEnc: { value: 1 }, hrtMaxL: { value: 6 } } });
 
   // ---------- 시간적 디노이저 ----------
@@ -7284,7 +7305,6 @@ function hrtRender(u, W, H) {
   HRT.frame = (HRT.frame + 1) % 4096;
   const ru = HRT.mRefl.uniforms;
   ru.hrtFrame.value = HRT.frame; ru.hrtSteps.value = Math.max(8, o.ssr); ru.hrtMaxDist.value = o.dist; ru.hrtRough.value = o.rough;
-  ru.rtSteps.value = Math.max(16, o.rt); ru.rtMaxDist.value = o.dist * 1.0 + (o.mode === 'still' ? 0 : 0);
   ru.hrtEnc.value = HRT.hdr ? 1 : 0.25; ru.hrtMaxL.value = HRT.hdr ? 6 : 4;
   gfxPass(HRT.mRefl, HRT.cur);                                   // ① 반사 (저해상도)
   const rd = HRT.hist[HRT.ri], wr = HRT.hist[1 - HRT.ri], tu = HRT.mTemp.uniforms;
