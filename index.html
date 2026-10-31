@@ -1401,21 +1401,33 @@ function createWindowFacadeTexture(baseHex, litHex, darkHex) {
   const c = document.createElement('canvas');
   c.width = 128; c.height = 128;
   const ctx = c.getContext('2d');
-  // One continuous glass field. The old 2x2 cell layout drew a dark reveal around every
-  // cell and then tiled it, which produced the visible 3x3 window grid on distant facades.
-  ctx.fillStyle = darkHex;
+  ctx.fillStyle = baseHex;
   ctx.fillRect(0, 0, 128, 128);
-  // Seamless vertical sky-reflection sheen (cos wrap keeps the tile edges matching).
-  for (let px = 0; px < 128; px++) {
-    const a = 0.035 + 0.05 * (0.5 + 0.5 * Math.cos((px / 128) * Math.PI * 4));
-    ctx.fillStyle = `rgba(200, 225, 245, ${a.toFixed(3)})`;
-    ctx.fillRect(px, 0, 1, 128);
+
+  const cols = 2, rows = 2;
+  const cellW = 64, cellH = 64;
+  for (let r = 0; r < rows; r++) {
+    for (let col = 0; col < cols; col++) {
+      const x = col * cellW, y = r * cellH;
+      const lit = false;
+      const glass = darkHex;
+
+      // Recessed dark reveal and a single uninterrupted glass surface.
+      ctx.fillStyle = 'rgba(12, 16, 20, 0.88)';
+      ctx.fillRect(x + 2, y + 2, cellW - 4, cellH - 4);
+      ctx.fillStyle = glass;
+      ctx.fillRect(x + 5, y + 5, cellW - 10, cellH - 10);
+
+      // Broad uninterrupted pane with a restrained reflection; no internal grid bars.
+      ctx.fillStyle = 'rgba(220, 240, 255, 0.16)';
+      ctx.fillRect(x + 6, y + 6, cellW - 12, 3);
+    }
   }
   const t = new THREE.CanvasTexture(c);
   t.wrapS = THREE.RepeatWrapping;
   t.wrapT = THREE.RepeatWrapping;
   // Fewer, larger windows across the facade texture.
-  t.repeat.set(1, 3);
+  t.repeat.set(1, 1);
   t.colorSpace = THREE.SRGBColorSpace;
   t.anisotropy = 4;
   return t;
@@ -1570,26 +1582,26 @@ function addAlignedBoxBuildingUV(uCenter, vCenter, widthU, depthV, heightY, mat,
     const h2 = heightY * 0.30;
     const h3 = heightY - h1 - h2;
 
-    const m1 = new THREE.Mesh(new THREE.BoxGeometry(widthU, h1, depthV), mat);
+    const m1 = new THREE.Mesh(vfxBoxUV(new THREE.BoxGeometry(widthU, h1, depthV), widthU, h1, depthV), mat);
     m1.position.y = h1 * 0.5;
     bGroup.add(m1);
     registerTierColliderAndAnchors(baseRingXZ, 0.0, h1);
 
     const w2 = widthU * 0.78, d2 = depthV * 0.78;
-    const m2 = new THREE.Mesh(new THREE.BoxGeometry(w2, h2, d2), mat);
+    const m2 = new THREE.Mesh(vfxBoxUV(new THREE.BoxGeometry(w2, h2, d2), w2, h2, d2), mat);
     m2.position.y = h1 + h2 * 0.5;
     bGroup.add(m2);
     registerTierColliderAndAnchors(makeBoxRingXZ(w2, d2), h1, h1 + h2);
 
     const w3 = widthU * 0.56, d3 = depthV * 0.56;
-    const m3 = new THREE.Mesh(new THREE.BoxGeometry(w3, h3, d3), mat);
+    const m3 = new THREE.Mesh(vfxBoxUV(new THREE.BoxGeometry(w3, h3, d3), w3, h3, d3), mat);
     m3.position.y = h1 + h2 + h3 * 0.5;
     bGroup.add(m3);
     registerTierColliderAndAnchors(makeBoxRingXZ(w3, d3), h1 + h2, heightY);
   } else if (style === "Cylindrical_Drum_Arena" || style === "Organic_Inverted_Spiral_Rotunda") {
     // 원통형 건물은 사각형이 아닌 실제 24각 원형 링으로 충돌 박스를 생성해 모서리 투명벽을 제거
     const rad = Math.min(widthU, depthV) * 0.48;
-    const cyl = new THREE.Mesh(new THREE.CylinderGeometry(rad, rad * 0.92, heightY, 24), mat);
+    const cyl = new THREE.Mesh(vfxCylUV(new THREE.CylinderGeometry(rad, rad * 0.92, heightY, 24), rad, heightY), mat);
     cyl.position.y = heightY * 0.5;
     bGroup.add(cyl);
 
@@ -1600,7 +1612,7 @@ function addAlignedBoxBuildingUV(uCenter, vCenter, widthU, depthV, heightY, mat,
     }
     registerTierColliderAndAnchors(cylRingXZ, 0.0, heightY);
   } else {
-    const mainBox = new THREE.Mesh(new THREE.BoxGeometry(widthU, heightY, depthV), mat);
+    const mainBox = new THREE.Mesh(vfxBoxUV(new THREE.BoxGeometry(widthU, heightY, depthV), widthU, heightY, depthV), mat);
     mainBox.position.y = heightY * 0.5;
     bGroup.add(mainBox);
 
@@ -2247,7 +2259,7 @@ async function loadRealNYCBuildingFootprints() {
       combined.setAttribute('color', new THREE.Float32BufferAttribute(mergedColors, 3));
       combined.setIndex(mergedIndices);
       combined.computeBoundingSphere();
-      const material = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.62, metalness: 0.16, side: THREE.DoubleSide });
+      const material = vfxMat({ vertexColors: true, roughness: 0.62, metalness: 0.16, side: THREE.DoubleSide });
       const mesh = new THREE.Mesh(combined, material);
       mesh.name = 'NYC_Official_Building_Footprints';
       scene.add(mesh);
@@ -2370,9 +2382,7 @@ function buildEmpireStateFromOSMFootprint(ringXZ, baseHeight) {
           const wh=Math.min(2.25,d.floor*.69);
           const base=windowQuad*4;
           windowPositions.push(px-ux+nx*.16,y,pz-uz+nz*.16, px+ux+nx*.16,y,pz+uz+nz*.16, px+ux+nx*.16,y+wh,pz+uz+nz*.16, px-ux+nx*.16,y+wh,pz-uz+nz*.16);
-          // Hash-based per-pane tone (no periodic lattice): subtle variation, no lit squares.
-          const hv=Math.abs(Math.sin(y*12.9898+j*78.233+i*37.719))%1, tone=0.92+0.16*hv;
-          const col={r:windowDark.r*tone,g:windowDark.g*tone,b:windowDark.b*tone};
+          const col=((Math.floor(y/d.floor)+j+i*3)%9===0)?windowLit:windowDark;
           for(let k=0;k<4;k++) windowColors.push(col.r,col.g,col.b);
           windowIndices.push(base,base+1,base+2,base,base+2,base+3); windowQuad++;
         }
@@ -2383,7 +2393,7 @@ function buildEmpireStateFromOSMFootprint(ringXZ, baseHeight) {
   windowGeo.setAttribute('position',new THREE.Float32BufferAttribute(windowPositions,3));
   windowGeo.setAttribute('color',new THREE.Float32BufferAttribute(windowColors,3));
   windowGeo.setIndex(windowIndices); windowGeo.computeVertexNormals();
-  group.add(new THREE.Mesh(windowGeo,new THREE.MeshStandardMaterial({vertexColors:true,roughness:.48,metalness:.05,side:THREE.DoubleSide})));
+  group.add(new THREE.Mesh(windowGeo,vfxMat({vertexColors:true,roughness:.48,metalness:.05,side:THREE.DoubleSide})));
   const pierGeo=new THREE.BufferGeometry().setFromPoints(pierLines);
   group.add(new THREE.LineSegments(pierGeo,new THREE.LineBasicMaterial({color:0xe0d8c8,transparent:true,opacity:.8})));
 
@@ -2466,7 +2476,6 @@ function addLandmarkWindowPanels(ring, height, style) {
   // Batch facade windows into one mesh per landmark to avoid thousands of separate objects.
   const positions=[], colors=[], indices=[];
   const baseColor=new THREE.Color(style.window), litColor=new THREE.Color(style.trim);
-  const litMix=baseColor.clone().lerp(litColor,0.35);
   let quad=0;
   for(let e=0;e<ring.length;e++) {
     const a=ring[e], b=ring[(e+1)%ring.length];
@@ -2485,11 +2494,7 @@ function addLandmarkWindowPanels(ring, height, style) {
         const ux=dx/len*ww*0.5, uz=dz/len*ww*0.5;
         const vx=nx*0.03, vz=nz*0.03;
         const verts=[[px-ux,y,pz-uz],[px+ux,y,pz+uz],[px+ux,y+wh,pz+uz],[px-ux,y+wh,pz-uz]];
-        // Hash-based tone per pane. Only a rare share gets a faint warm interior tint; no periodic lattice.
-        const hv=Math.abs(Math.sin(f*12.9898+c*78.233+e*37.719))%1;
-        const src=hv>0.96?litMix:baseColor, tone=0.92+0.16*hv;
-        const col={r:src.r*tone,g:src.g*tone,b:src.b*tone};
-        for(const v of verts){positions.push(v[0]+vx,v[1],v[2]+vz); colors.push(col.r,col.g,col.b);}
+        for(const v of verts){positions.push(v[0]+vx,v[1],v[2]+vz); const lit=((f*13+c*7+e*3)%11)<3; const col=lit?litColor:baseColor; colors.push(col.r,col.g,col.b);}
         const k=quad*4; indices.push(k,k+1,k+2,k,k+2,k+3); quad++;
       }
     }
@@ -2498,7 +2503,7 @@ function addLandmarkWindowPanels(ring, height, style) {
   const g=new THREE.BufferGeometry();
   g.setAttribute('position',new THREE.Float32BufferAttribute(positions,3));
   g.setAttribute('color',new THREE.Float32BufferAttribute(colors,3)); g.setIndex(indices); g.computeVertexNormals();
-  const mesh=new THREE.Mesh(g,new THREE.MeshStandardMaterial({vertexColors:true,roughness:0.34,metalness:style.kind.includes('glass')||style.kind==='grid'?0.35:0.08,side:THREE.DoubleSide}));
+  const mesh=new THREE.Mesh(g,vfxMat({vertexColors:true,roughness:0.34,metalness:style.kind.includes('glass')||style.kind==='grid'?0.35:0.08,side:THREE.DoubleSide}));
   mesh.name=`${style.name}_Facade_Windows`; scene.add(mesh);
 }
 function addLandmarkRoofSignature(ring, height, style) {
@@ -2969,14 +2974,17 @@ const NYC_FACADE_MATS = {};
 function nycFacadeMat(style){
   if (NYC_FACADE_MATS[style]) return NYC_FACADE_MATS[style];
   const coarse = window.matchMedia && window.matchMedia('(pointer:coarse)').matches;
-  const S = coarse ? 256 : 512, cv=document.createElement('canvas'); cv.width=cv.height=S;
+  const S = coarse ? 512 : 1024, cv=document.createElement('canvas'); cv.width=cv.height=S;
   const g=cv.getContext('2d'); g.scale(S/512,S/512); nycDrawFacade(style,g,512,512);
   const tex=new THREE.CanvasTexture(cv); tex.wrapS=tex.wrapT=THREE.RepeatWrapping;
-  try { tex.anisotropy=Math.min(4, renderer.capabilities.getMaxAnisotropy()); } catch(e) {}
+  tex.generateMipmaps=true; tex.minFilter=THREE.LinearMipmapLinearFilter; tex.magFilter=THREE.LinearFilter;
+  try { tex.anisotropy=Math.min(16, renderer.capabilities.getMaxAnisotropy()); } catch(e) { tex.anisotropy=8; }
   const sp=NYC_FACADE_SPECS[style];
   const m=new THREE.MeshStandardMaterial({map:tex, vertexColors:true, roughness:sp.rough, metalness:sp.metal, side:THREE.DoubleSide, polygonOffset:true, polygonOffsetFactor:-2, polygonOffsetUnits:-4});
-  if (typeof GFX2 !== 'undefined' && GFX2.on) { try { gfx2AttachPBR(m, style); } catch (e) {} }
-  NYC_FACADE_MATS[style]=m; return m;
+  NYC_FACADE_MATS[style]=m;
+  try { vfxPatch(m,{ao:true,aoMin:0.5,aoH:16}); } catch(e) { console.warn('vfx ao',e); }
+  try { if (typeof GFX !== 'undefined' && GFX.quality !== 'low') vfxAttachFacadePBR(m, style); } catch(e) { console.warn('vfx pbr',e); }
+  return m;
 }
 
 // ---- 건물 판별: 높이 · 바닥면적 · 세장비 · 용도 · 위치(미드타운 코어 여부) · 랜드마크 여부 ----
@@ -3061,7 +3069,7 @@ function nycStyledDetail(ring,h,btype,seed,acc,tacc,bi,lm){
     const quad=(p,c0,c1)=>push(p,c0,c1);
     const es=(info.blankEnds && len<longest*0.42)?'blank':st, esp=NYC_FACADE_SPECS[es], T=getT(es);
     const nB=Math.max(1,Math.round(len/esp.bay)), u0=Math.floor(hs(e+20)*esp.bpt)/esp.bpt;
-    const U=(t)=>u0+t*nB/esp.bpt, V=(y)=>y/(eF*esp.fpt);
+    const U=(t)=>u0+t*(len/esp.bay)/esp.bpt, V=(y)=>y/(eF*esp.fpt);
     const wall=(y0,y1,k0,k1)=>tpush(T,[P(0,y0,.12),P(1,y0,.12),P(1,y1,.12),P(0,y1,.12)],[[U(0),V(y0)],[U(1),V(y0)],[U(1),V(y1)],[U(0),V(y1)]],shade(k0),shade(k1));
     const yA=Math.min(gT,h-1), yB=Math.min(h, yA+(fam==='glass'?16:11));
     const _doWall=()=>{ if (big && es!=='blank') bigWall(); else { wall(yA,yB,.76,1.0); if (yB<h-.01) wall(yB,h,1.0,1.06); } };
@@ -3083,7 +3091,7 @@ function nycStyledDetail(ring,h,btype,seed,acc,tacc,bi,lm){
           prevVi[ci]=vi; rowPrev=vi;
           const vs=keys[vi], vsp=NYC_FACADE_SPECS[vs], VT=getT(vs), [t0,t1]=chunks[ci];
           const tk=.88+.24*hs(e*13+ci*5+bi*3+2), fs=Math.floor(hs(e*17+ci*7+bi*5)*vsp.fpt), uo=Math.floor(hs(e*19+ci*3+bi)*vsp.bpt)/vsp.bpt;
-          const Uc=(t)=>uo+(t-t0)*nB/vsp.bpt, Vc=(y)=>(y/eF+fs)/vsp.fpt;
+          const Uc=(t)=>uo+(t-t0)*(len/vsp.bay)/vsp.bpt, Vc=(y)=>(y/eF+fs)/vsp.fpt;
           const ks=(y)=>tk*(y<yG?(.76+.24*(y-yA)/(yG-yA)):1.0+.05*(y/h));
           const emit=(y0,y1)=>tpush(VT,[P(t0,y0,.12),P(t1,y0,.12),P(t1,y1,.12),P(t0,y1,.12)],[[Uc(t0),Vc(y0)],[Uc(t1),Vc(y0)],[Uc(t1),Vc(y1)],[Uc(t0),Vc(y1)]],shade(ks(y0)),shade(ks(y1)));
           const [b0,b1]=bands[bi];
@@ -3369,14 +3377,15 @@ function buildNYCDetailLayer() {
     try { const old = scene.getObjectByName('Empire_State_Building_Real_Footprint'); buildDetailedEmpireState(esb, 381); if (old) { scene.remove(old); nycDisposeObject(old); } }
     catch (err) { console.error('ESB detail', err); }
   }
-  const mat = new THREE.MeshStandardMaterial({vertexColors:true, roughness:0.55, metalness:0.12, side:THREE.DoubleSide});
+  const mat = vfxMat({vertexColors:true, roughness:0.55, metalness:0.12, side:THREE.DoubleSide});
   const loadCell = (c) => {
     const acc = {positions:[], colors:[], indices:[]};
-    const tacc = {};
+    const tacc = {}; const vfxAoAcc = {pos:[],col:[],idx:[]};
     const lmM = window.__nycLmMatches || new Map();
-    for (const bi of c.list) { try { const b = prep(bi); if (b) { if (!nycStyledDetail(b.ring, b.h, b.btype, b.seed, acc, tacc, bi, lmM.get(bi) || null)) addNYCExtraDetail(b.ring, b.h, b.btype, b.seed, acc, bi); } } catch (err) { if (!window.__nycFacadeErr) { window.__nycFacadeErr = 1; console.error('facade', err); } } }
+    for (const bi of c.list) { try { const b = prep(bi); if (b) { try { vfxContactAO(b.ring, b.h, vfxAoAcc); } catch (e) {} if (!nycStyledDetail(b.ring, b.h, b.btype, b.seed, acc, tacc, bi, lmM.get(bi) || null)) addNYCExtraDetail(b.ring, b.h, b.btype, b.seed, acc, bi); } } catch (err) { if (!window.__nycFacadeErr) { window.__nycFacadeErr = 1; console.error('facade', err); } } }
     c.loaded = true;
     c.texMeshes = [];
+    try { vfxMakeAoMesh(vfxAoAcc, c); } catch (e) {}
     for (const st in tacc) {
       const T = tacc[st]; if (!T.pos.length) continue;
       const tg = new THREE.BufferGeometry();
@@ -3521,7 +3530,7 @@ function buildOSMBuildingsFromEmbeddedData(onProgress, onDone) {
     fg.setAttribute('color', new THREE.Float32BufferAttribute(facadeDetails.colors, 3));
     fg.setIndex(facadeDetails.indices);
     fg.computeVertexNormals();
-    const fm = new THREE.Mesh(fg, new THREE.MeshStandardMaterial({vertexColors:true, roughness:0.48, metalness:0.12, side:THREE.DoubleSide}));
+    const fm = new THREE.Mesh(fg, vfxMat({vertexColors:true, roughness:0.48, metalness:0.12, side:THREE.DoubleSide}));
     fm.name = 'OSM_Buildings_Generic_Facade_Details';
     scene.add(fm);
   }
@@ -3538,12 +3547,12 @@ function buildOSMBuildingsFromEmbeddedData(onProgress, onDone) {
     });
     window.__baseWallMat = baseMat;
     baseMat.onBeforeCompile = (sh) => {
-      sh.uniforms.uWinQ = window.__winQ = {value:1.0};
+      sh.uniforms.uWinQ = window.__winQ = {value:1.0}; sh.uniforms.uWinGlow = window.__winGlow = {value: vfxGlowValue()};
       sh.vertexShader = sh.vertexShader
         .replace('#include <common>','#include <common>\nvarying vec3 vWP; varying vec3 vWN;')
         .replace('#include <begin_vertex>','#include <begin_vertex>\nvWP=(modelMatrix*vec4(position,1.0)).xyz; vWN=normalize(mat3(modelMatrix)*normal);');
       sh.fragmentShader = sh.fragmentShader
-        .replace('#include <common>','#include <common>\nvarying vec3 vWP; varying vec3 vWN; uniform float uWinQ;\nfloat h21(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}')
+        .replace('#include <common>','#include <common>\nvarying vec3 vWP; varying vec3 vWN; uniform float uWinQ; uniform float uWinGlow; float vfxWin = 0.0;\nfloat h21(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}')
         .replace('#include <color_fragment>',`#include <color_fragment>
         {
           vec3 wn = normalize(vWN);
@@ -3556,20 +3565,24 @@ function buildOSMBuildingsFromEmbeddedData(onProgress, onDone) {
             float fy = vWP.y / fl, fu = u / 3.0;
             vec2 id = vec2(floor(fu), floor(fy));
             vec2 f = vec2(fract(fu), fract(fy));
-            float win = step(0.2,f.x)*step(f.x,0.8)*step(0.28,f.y)*step(f.y,0.82);
+            float aa_ = clamp(max(fwidth(fu), fwidth(fy))*1.5, 0.0, 0.35); float win = smoothstep(0.2-aa_,0.2+aa_,f.x)*(1.0-smoothstep(0.8-aa_,0.8+aa_,f.x))*smoothstep(0.28-aa_,0.28+aa_,f.y)*(1.0-smoothstep(0.82-aa_,0.82+aa_,f.y)); win *= 1.0 - smoothstep(0.25,0.6,aa_);
             float dist = length(cameraPosition - vWP);
             float fade = 1.0 - smoothstep(120.0, 430.0, dist);
             float r = h21(id + floor(vWP.xz*0.01));
-            float lit = step(0.86, r);
+            float lit = step(0.72, r);
             vec3 glass = mix(vec3(0.07,0.10,0.13), vec3(0.28,0.38,0.47), f.y*0.8) * (0.8+0.5*r);
             float sill = step(f.y,0.28)*step(0.2,f.x)*step(f.x,0.8);
             vec3 col = diffuseColor.rgb;
-            col = mix(col, glass, win*0.82*fade*uWinQ);
+            glass = mix(glass, fogColor*1.25+vec3(0.03,0.05,0.08), pow(1.0-abs(dot(normalize(cameraPosition-vWP),wn)),3.0)*0.45); col = mix(col, glass, win*0.86*fade*uWinQ); vfxWin = win*fade*uWinQ; totalEmissiveRadiance += vec3(1.0,0.78,0.46)*lit*win*fade*uWinQ*uWinGlow*(0.6+0.9*h21(id+7.3));
             col *= 1.0 - 0.18*sill*fade;
             diffuseColor.rgb = col;
           }
-        }`);
+        }`)
+        .replace('#include <roughnessmap_fragment>','#include <roughnessmap_fragment>\n roughnessFactor = mix(roughnessFactor, 0.12, vfxWin);')
+        .replace('#include <metalnessmap_fragment>','#include <metalnessmap_fragment>\n metalnessFactor = mix(metalnessFactor, 0.55, vfxWin);');
     };
+    baseMat.extensions = Object.assign({}, baseMat.extensions, { derivatives: true });
+    vfxPatch(baseMat, { ao: true, aoMin: 0.5, grain: 0.05, bump: 0.09, scale: 1 });
     const mesh=new THREE.Mesh(combined,baseMat);
     mesh.name='OpenStreetMap_Manhattan_Buildings';
     scene.add(mesh);
@@ -3918,6 +3931,7 @@ function nycLoadStatus(t, p) {
 }
 function nycLoadReady() {
   try { gfxFreezeStatic(); } catch (e) { console.warn(e); }
+  try { vfxPostPass(); } catch (e) { console.warn('vfx', e); }
   try { localStorage.setItem('nycBoot', '0'); } catch (e) {}
   window.__worldReady = true; nycLoadStatus(window.__LITE ? '준비 완료 ✓ (경량 모드 — 주소 뒤에 ?full=1 을 붙이면 전체 모드)' : '준비 완료 ✓ 시작할 수 있습니다', 1);
   for (const id of ['btn-quick-start', 'btn-pick-spawn']) { const b = document.getElementById(id); if (b) b.disabled = false; }
@@ -4463,11 +4477,11 @@ function applyWeatherTheme(mode) {
     scene.background.setHex(0x38bdf8);
     scene.fog.color.setHex(0x7dd3fc);
     scene.fog.density = 0.00032;
-    hemiLightRef.color.setHex(0xffffff);
-    hemiLightRef.groundColor.setHex(0x334155);
-    hemiLightRef.intensity = 1.15;
-    sunLight.color.setHex(0xfffbeb);
-    sunLight.intensity = 1.35;
+    hemiLightRef.color.setHex(0xdbeafe);
+    hemiLightRef.groundColor.setHex(0x3b3a38);
+    hemiLightRef.intensity = 0.85;
+    sunLight.color.setHex(0xfff4e0);
+    sunLight.intensity = 1.6;
     sunLight.position.set(260, 520, 200);
   } else if (mode === 'sunset') {
     // Golden-hour sunset: warm atmospheric fill and a low, directional sun.
@@ -4476,7 +4490,7 @@ function applyWeatherTheme(mode) {
     scene.fog.density = 0.00038;
     hemiLightRef.color.setHex(0xffdfad);
     hemiLightRef.groundColor.setHex(0x583321);
-    hemiLightRef.intensity = 1.12;
+    hemiLightRef.intensity = 0.8;
     sunLight.color.setHex(0xffa23a);
     sunLight.intensity = 2.0;
     sunLight.position.set(-420, 245, 280);
@@ -4495,11 +4509,12 @@ function applyWeatherTheme(mode) {
     scene.background.setHex(0x0f172a);
     scene.fog.color.setHex(0x0f172a);
     scene.fog.density = 0.00045;
-    hemiLightRef.color.setHex(0xe2e8f0);
-    hemiLightRef.groundColor.setHex(0x1e293b);
-    hemiLightRef.intensity = 0.85;
-    sunLight.color.setHex(0x93c5fd);
-    sunLight.intensity = 0.75;
+    // 밤: 하늘(별이 뜬 어두운 밤)과 일관되도록 환경광을 크게 낮추고 차가운 달빛 톤으로
+    hemiLightRef.color.setHex(0x5f78b0);
+    hemiLightRef.groundColor.setHex(0x0b1020);
+    hemiLightRef.intensity = 0.42;
+    sunLight.color.setHex(0x8fb0ff);
+    sunLight.intensity = 0.6;
     sunLight.position.set(200, 450, 180);
   }
   document.querySelectorAll('.weather-btn').forEach(btn => {
@@ -5435,7 +5450,7 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
 // =============================================================================
 const GFX_PRESETS = {
   low:    { label: '낮음 (최적화)',          maxPR: 1.0, shadow: 0,    bShadow: false, bloom: false },
-  medium: { label: '보통 (권장)',            maxPR: 1.5, shadow: 1024, bShadow: true,  bloom: false },
+  medium: { label: '보통 (권장)',            maxPR: 1.5, shadow: 2048, bShadow: true,  bloom: false, shR: 110 },
   high:   { label: '높음 (고화질 그림자+블룸)', maxPR: 1.5, shadow: 2048, bShadow: true,  bloom: true, loadR: 900, shR: 100 },
   ultra:  { label: '최고급 (울트라: 반사·빛줄기·시네마 후처리)', maxPR: 2.0, shadow: 4096, bShadow: true, bloom: true, ultra: true, loadR: 1200, shR: 150 },
   cinema: { label: '시네마틱 (SSR·볼류메트릭·모션블러·AO·2단 그림자)', maxPR: 2.0, shadow: 4096, bShadow: true, bloom: true, ultra: true, cinema: true, loadR: 1200, shR: 150 }
@@ -5515,9 +5530,10 @@ function gfxCreateSky() {
 }
 
 function gfxAfterWeather(mode) {
+  try { vfxApplyGlow(); } catch (e) {}
   const P = GFX_SKY[mode] || GFX_SKY.night;
   if (renderer) renderer.toneMappingExposure = P.expo;
-  GFXB.strength = P.bloom; GFX.sunI = P.sunI; GFX.envKey = ''; if (renderer && GFX_PRESETS[GFX.quality] && GFX_PRESETS[GFX.quality].ultra) setTimeout(() => { try { gfxBuildEnv(); } catch (e) { console.warn('env', e); } }, 50);
+  GFXB.strength = P.bloom; GFX.sunI = P.sunI; GFX.envKey = ''; if (renderer && GFX.quality !== 'low') setTimeout(() => { try { gfxBuildEnv(); } catch (e) { console.warn('env', e); } }, 50);
   if (sunLight) GFX.sunDir.copy(sunLight.position).normalize();
   GFXS.dirty = true;
   if (!GFX.sky) return;
@@ -5818,8 +5834,8 @@ function gfxBuildEnv() {
   if (!GFX.sky) return;
   const key = currentWeatherMode + '|' + scene.fog.color.getHex(); if (key === GFX.envKey) return; GFX.envKey = key;
   const es = new THREE.Scene(), em = GFX.sky.material.clone(); em.fragmentShader = em.fragmentShader.replace('#include <tonemapping_fragment>', ''); em.depthTest = false; em.depthWrite = false; em.needsUpdate = true;
-  const m = new THREE.Mesh(new THREE.SphereGeometry(1000, 32, 16), em); m.frustumCulled = false; es.add(m);
-  if (!GFX.envRT) GFX.envRT = new THREE.WebGLCubeRenderTarget(128, { generateMipmaps: true, minFilter: THREE.LinearMipmapLinearFilter, type: THREE.UnsignedByteType });
+  const m = new THREE.Mesh(new THREE.SphereGeometry(1000, 32, 16), em); m.frustumCulled = false; es.add(m); try { es.add(vfxSkylineMesh(currentWeatherMode)); } catch (e) {}
+  if (!GFX.envRT) GFX.envRT = new THREE.WebGLCubeRenderTarget(GFX_MOBILE ? 128 : 256, { generateMipmaps: true, minFilter: THREE.LinearMipmapLinearFilter, type: THREE.UnsignedByteType });
   const cc = new THREE.CubeCamera(1, 3000, GFX.envRT);
   const old = renderer.toneMapping; renderer.toneMapping = THREE.NoToneMapping;
   cc.update(renderer, es);
@@ -5832,9 +5848,9 @@ function gfxApplyEnv() {
   const seen = new Set();
   scene.traverse(o => { if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => {
     if (seen.has(m) || !m.isMeshStandardMaterial) return; seen.add(m);
-    const want = ult ? GFX.envTex : null;
+    const want = GFX.quality !== 'low' ? GFX.envTex : null;
     if (m.envMap !== want) { m.envMap = want; m.needsUpdate = true; }
-    m.envMapIntensity = ult ? 0.5 : 1.0;
+    m.envMapIntensity = m.roughnessMap ? 0.9 : 0.4;
   }); });
 }
 function gfxApplyShadows() {
@@ -5851,7 +5867,7 @@ function gfxApplyShadows() {
   if (GFXS.mesh) GFXS.mesh.visible = !!(P.shadow && P.bShadow);
   GFXS.dirty = true;
   const seen = new Set();   // 셰이더 재컴파일
-  const ult = !!P.ultra, aniso = ult ? Math.min(16, renderer.capabilities.getMaxAnisotropy()) : 4;
+  const ult = !!P.ultra, aniso = GFX.quality !== 'low' ? Math.min(16, renderer.capabilities.getMaxAnisotropy()) : 4;
   gfxApplyEnv();
   scene.traverse(o => { if (o.material) { (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => { if (!seen.has(m)) { seen.add(m); if (m.map) { m.map.anisotropy = aniso; m.map.needsUpdate = true; } m.needsUpdate = true; } }); } });
   if (window.__winQ) window.__winQ.value = 1.0;
@@ -5865,8 +5881,8 @@ function gfxSetQuality(q) {
   try { localStorage.setItem('gfxQuality', q); } catch (e) {}
   const P = GFX_PRESETS[q];
   NYC_LOAD_R = GFX_MOBILE ? 520 : (P.loadR || 700); NYC_UNLOAD_R = NYC_LOAD_R + 250;
-  if (P.ultra) { try { GFX.envKey = ''; gfxBuildEnv(); } catch (e) { console.warn('env', e); } }
-  gfxApplyShadows(); gfxSetPR(Math.min(window.devicePixelRatio || 1, GFX_MOBILE ? Math.min(P.maxPR, 1.25) : P.maxPR)); gfxSetBloom(P.bloom); gfx2Apply(!!P.cinema);
+  if (q !== 'low') { try { GFX.envKey = ''; gfxBuildEnv(); } catch (e) { console.warn('env', e); } }
+  gfxApplyShadows(); gfxSetPR(Math.min(window.devicePixelRatio || 1, GFX_MOBILE ? Math.min(P.maxPR, 1.25) : P.maxPR)); gfxSetBloom(P.bloom); gfx2Apply(!!P.cinema); try { vfxApplyQuality(q); } catch (e) { console.warn('vfxq', e); }
   const b = document.getElementById('btn-gfx-quality');
   if (b) { b.innerText = '그래픽 품질: ' + P.label; b.classList.toggle('off', q === 'low'); }
 }
@@ -5902,7 +5918,7 @@ function gfxFreezeStatic() {
 }
 function gfxUpdate() {
   gfx2Update();
-  if (GFX_PRESETS[GFX.quality].ultra && GFX.envTex && (GFX.envTick = (GFX.envTick || 0) + 1) % 180 === 0) gfxApplyEnv();
+  if (GFX.quality !== 'low' && GFX.envTex && (GFX.envTick = (GFX.envTick || 0) + 1) % 180 === 0) gfxApplyEnv();
   if (GFX.sky) GFX.sky.position.copy(camera.position);
   if (sunLight.castShadow) {
     const p = player.pos, d = GFX.sunDir;
@@ -5979,7 +5995,9 @@ function gfx2PatchConcrete() {
   let mat = null; scene.traverse(o => { if (!mat && o.isMesh && o.name && o.name.indexOf('OpenStreetMap_Manhattan_Buildings') === 0) mat = o.material; });
   if (!mat) return;
   mat.extensions = Object.assign({}, mat.extensions, { derivatives: true });
-  mat.onBeforeCompile = (sh) => {
+  const _pOBC = mat.onBeforeCompile, _pStr = String(_pOBC); mat.customProgramCacheKey = () => _pStr + 'conc';
+  mat.onBeforeCompile = (sh, rr) => {
+    if (_pOBC) _pOBC.call(mat, sh, rr);
     sh.uniforms.gfx2Conc = GFX2.conc;
     sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vGWP;')
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvGWP = (modelMatrix * vec4(transformed, 1.0)).xyz;');
@@ -6149,10 +6167,8 @@ function gfx2Update() {
   for (const o of GFX2.neon) { const f = 0.82 + 0.2 * Math.sin(t * 3.1 + o.userData.ph) + (Math.sin(t * 17 + o.userData.ph * 3) > 0.96 ? -0.35 : 0); o.material.emissiveIntensity = o.userData.neonBase * boost * Math.max(0.3, f); }
 }
 
-let glContextLost = false;
 function animate() {
   requestAnimationFrame(animate);
-  if (glContextLost) return; // no GL calls while the context is lost
   const now = performance.now();
   const dt = Math.min(0.05, (now - lastTime) / 1000);
   lastTime = now;
@@ -6736,20 +6752,6 @@ function init() {
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
   document.body.appendChild(renderer.domElement);
 
-  // WebGL context loss (common on iOS Safari under memory pressure). Stop GL work while lost.
-  // three r128 does not reliably rebuild every GPU resource in place, so on restore we reload once
-  // (capped at 3 recoveries per tab session) to rebuild cleanly instead of rendering into a dead context.
-  renderer.domElement.addEventListener('webglcontextlost', (e) => {
-    e.preventDefault();
-    glContextLost = true;
-  }, false);
-  renderer.domElement.addEventListener('webglcontextrestored', () => {
-    try {
-      const n = +(sessionStorage.getItem('nycCtxRecover') || 0);
-      if (n < 3) { sessionStorage.setItem('nycCtxRecover', String(n + 1)); location.reload(); }
-    } catch (_) { location.reload(); }
-  }, false);
-
   const hemiLight = new THREE.HemisphereLight(0xe2e8f0, 0x1e293b, 1.0);
   hemiLightRef = hemiLight;
   scene.add(hemiLight);
@@ -6854,9 +6856,194 @@ function init() {
     setWaypoint(wPt.x, wPt.z, `도로 지점 (${ll.lat.toFixed(4)}°N, ${ll.lon.toFixed(4)}°W)`);
   });
 
-  // Start the render loop exactly once (animate() self-schedules; a second start would double the loop).
-  if (!window.__loopStarted) { window.__loopStarted = true; requestAnimationFrame(animate); }
+  requestAnimationFrame(animate);
 }
+
+// =============================================================================
+// ===== VFX FIX LAYER: 텍스처·반사·그림자/AO·야간 조명·발광 창문 보정 =====
+// (UV 왜곡 제거 / 노멀·러프니스 맵 / 환경 반사 / 접지 AO / 밤 환경광 / 창문 Emissive)
+// =============================================================================
+const VFX = { aoMat: null };
+
+// ---- 월드좌표 기반 셰이더 패치: 높이 AO + 알베도 노이즈 + 범프 (체인 가능) ----
+function vfxPatch(m, o) {
+  if (!m || (m.userData && m.userData.vfx)) return;
+  m.userData = m.userData || {}; m.userData.vfx = 1;
+  o = Object.assign({ ao: false, aoMin: 0.5, aoH: 16, grain: 0, bump: 0, scale: 1 }, o || {});
+  const f = (v) => Number(v).toFixed(3);
+  const key = 'vfx' + [o.ao ? 1 : 0, o.aoMin, o.aoH, o.grain, o.bump, o.scale].join('_');
+  const prev = m.onBeforeCompile, prevStr = String(prev);
+  m.onBeforeCompile = function (sh, rr) {
+    if (prev) prev.call(m, sh, rr);
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vVfxW;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvVfxW = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+    let fs = sh.fragmentShader.replace('#include <common>', `#include <common>
+      varying vec3 vVfxW;
+      float vfxH(vec3 p){ p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
+      float vfxN(vec3 p){ vec3 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+        return mix(mix(mix(vfxH(i), vfxH(i + vec3(1,0,0)), f.x), mix(vfxH(i + vec3(0,1,0)), vfxH(i + vec3(1,1,0)), f.x), f.y),
+                   mix(mix(vfxH(i + vec3(0,0,1)), vfxH(i + vec3(1,0,1)), f.x), mix(vfxH(i + vec3(0,1,1)), vfxH(i + vec3(1,1,1)), f.x), f.y), f.z); }`);
+    let col = '';
+    if (o.grain > 0) col += `{ float _n = vfxN(vVfxW * ${f(o.scale)}) * 0.6 + vfxN(vVfxW * ${f(o.scale * 4.3)}) * 0.4; diffuseColor.rgb *= 1.0 + ${f(o.grain)} * (_n - 0.5) * 2.0; }\n`;
+    if (o.ao) col += `diffuseColor.rgb *= mix(${f(o.aoMin)}, 1.0, smoothstep(0.0, ${f(o.aoH)}, vVfxW.y));\n`;
+    if (col) fs = fs.replace('#include <color_fragment>', '#include <color_fragment>\n' + col);
+    if (o.bump > 0) {
+      fs = fs.replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+      {
+        float hh_ = vfxN(vVfxW * ${f(o.scale * 1.6)}) * 0.6 + vfxN(vVfxW * ${f(o.scale * 5.5)}) * 0.4;
+        vec3 dpx = dFdx(-vViewPosition), dpy = dFdy(-vViewPosition); float dhx = dFdx(hh_), dhy = dFdy(hh_);
+        vec3 r1 = cross(dpy, normal), r2 = cross(normal, dpx); float det = dot(dpx, r1) * faceDirection;
+        vec3 grad = sign(det) * (dhx * r1 + dhy * r2);
+        normal = normalize(abs(det) * normal - ${f(o.bump)} * grad);
+      }`);
+    }
+    sh.fragmentShader = fs;
+  };
+  m.customProgramCacheKey = function () { return prevStr + key; };
+  if (o.bump > 0) m.extensions = Object.assign({}, m.extensions, { derivatives: true });
+  m.needsUpdate = true;
+}
+function vfxMat(p, o) {
+  const m = new THREE.MeshStandardMaterial(p);
+  vfxPatch(m, Object.assign({ ao: true, aoMin: 0.5, grain: 0.05, bump: 0.09, scale: 1 }, o || {}));
+  return m;
+}
+
+// ---- 창문 발광(Emissive) 맵: 창 칸마다 켜진 방/꺼진 방을 해시로 분배 ----
+function vfxMakeEmissive(cv, style) {
+  const S = cv.width, sp = NYC_FACADE_SPECS[style] || {}, bpt = sp.bpt || 4, fpt = sp.fpt || 4;
+  const src = cv.getContext('2d').getImageData(0, 0, S, S).data;
+  const out = document.createElement('canvas'); out.width = out.height = S;
+  const oc = out.getContext('2d'), od = oc.createImageData(S, S);
+  const cw = S / bpt, ch = S / fpt, fam = sp.fam;
+  const prob = fam === 'glass' ? 0.34 : (fam === 'brick' || fam === 'loft' ? 0.20 : 0.26);
+  const hash = (a, b) => { let v = (Math.imul(a + 17, 374761393) ^ Math.imul(b + 91, 668265263)) >>> 0; v = Math.imul(v ^ (v >>> 13), 1274126177) >>> 0; return ((v ^ (v >>> 16)) >>> 0) / 4294967295; };
+  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+    const i = (y * S + x) * 4, r = src[i], g = src[i + 1], b = src[i + 2], lum = 0.299 * r + 0.587 * g + 0.114 * b;
+    const cx = Math.floor(x / cw), cy = Math.floor(y / ch), fx = x / cw - cx, fy = y / ch - cy;
+    const inner = fx > 0.16 && fx < 0.84 && fy > 0.14 && fy < 0.86;
+    const glass = (b >= r - 4 && lum < 175) || (r > 235 && g > 200 && b < 215);
+    if (!(inner && glass)) continue;
+    const h = hash(cx, cy);
+    if (h > prob) continue;
+    const warm = hash(cy, cx + 7) < 0.7, k = 0.55 + 0.45 * hash(cx + 3, cy + 5);
+    od.data[i] = (warm ? 255 : 170) * k; od.data[i + 1] = (warm ? 196 : 206) * k; od.data[i + 2] = (warm ? 118 : 255) * k; od.data[i + 3] = 255;
+  }
+  oc.putImageData(od, 0, 0);
+  const t = new THREE.CanvasTexture(out); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = 4;
+  return t;
+}
+function vfxGlowValue() { const G = { night: 1.0, sunset: 0.45, cloudy: 0.12, day: 0.0 }, v = G[currentWeatherMode]; return v === undefined ? 0 : v; }
+function vfxApplyGlow() {
+  const v = vfxGlowValue();
+  for (const st in NYC_FACADE_MATS) { const m = NYC_FACADE_MATS[st]; if (m.emissiveMap) { m.emissiveIntensity = v * 1.15; } }
+  if (window.__winGlow) window.__winGlow.value = v;
+}
+// ---- 외벽 재질에 노멀/러프니스/메탈릭/발광 맵 연결 (낮음 제외 전 품질) ----
+function vfxAttachFacadePBR(m, style) {
+  if (!m || !m.map || !m.map.image) return;
+  let e = GFX2.savedPBR.get(m);
+  if (!e) {
+    const src = m.map.image, coarse = GFX_MOBILE, PS = Math.min(src.width, coarse ? 256 : 512);
+    let cv = src;
+    if (PS < src.width) { cv = document.createElement('canvas'); cv.width = cv.height = PS; cv.getContext('2d').drawImage(src, 0, 0, PS, PS); }
+    e = { maps: gfx2MakePBR(cv, style), rough: m.roughness, metal: m.metalness, emi: vfxMakeEmissive(cv, style) };
+    GFX2.savedPBR.set(m, e);
+  }
+  if (!e.emi) e.emi = vfxMakeEmissive(m.map.image, style);
+  gfx2AttachPBR(m, style);
+  m.emissiveMap = e.emi; m.emissive.setRGB(1, 1, 1); m.emissiveIntensity = vfxGlowValue() * 1.15; m.needsUpdate = true;
+}
+function vfxApplyQuality(q) {
+  for (const st in NYC_FACADE_MATS) {
+    const m = NYC_FACADE_MATS[st];
+    if (q === 'low') {
+      const e = GFX2.savedPBR.get(m);
+      m.normalMap = m.roughnessMap = m.metalnessMap = m.emissiveMap = null; m.emissive.setRGB(0, 0, 0);
+      if (e) { m.roughness = e.rough; m.metalness = e.metal; }
+      m.needsUpdate = true;
+    } else vfxAttachFacadePBR(m, st);
+  }
+  vfxApplyGlow();
+}
+
+// ---- 건물-지면 접지 AO: 외곽선 바깥쪽으로 번지는 어두운 띠 ----
+function vfxAoMat() {
+  if (!VFX.aoMat) VFX.aoMat = new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -8, polygonOffsetUnits: -8 });
+  return VFX.aoMat;
+}
+function vfxContactAO(ring, h, acc) {
+  const n = ring ? ring.length : 0; if (n < 3 || h < 6) return;
+  let ar = 0; for (let i = 0; i < n; i++) { const p = ring[i], q = ring[(i + 1) % n]; ar += p.x * q.z - q.x * p.z; }
+  const orient = ar >= 0 ? 1 : -1, W = h > 60 ? 5.0 : 3.4, A = h > 60 ? 0.66 : 0.5, Y = 0.52;
+  for (let i = 0; i < n; i++) {
+    const a = ring[i], b = ring[(i + 1) % n], dx = b.x - a.x, dz = b.z - a.z, len = Math.hypot(dx, dz); if (len < 1.5) continue;
+    const nx = (orient > 0 ? dz : -dz) / len * W, nz = (orient > 0 ? -dx : dx) / len * W, base = acc.pos.length / 3;
+    acc.pos.push(a.x, Y, a.z, b.x, Y, b.z, b.x + nx, Y, b.z + nz, a.x + nx, Y, a.z + nz);
+    acc.col.push(0.01, 0.015, 0.03, A, 0.01, 0.015, 0.03, A, 0.01, 0.015, 0.03, 0, 0.01, 0.015, 0.03, 0);
+    acc.idx.push(base, base + 2, base + 1, base, base + 3, base + 2, base, base + 1, base + 2, base, base + 2, base + 3);
+  }
+}
+function vfxMakeAoMesh(acc, c) {
+  if (!acc.pos.length) return;
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(acc.pos, 3));
+  g.setAttribute('color', new THREE.Float32BufferAttribute(acc.col, 4));
+  g.setIndex(new THREE.Uint32BufferAttribute(acc.idx, 1)); g.computeBoundingSphere();
+  const m = new THREE.Mesh(g, vfxAoMat()); m.name = 'VFX_ContactAO'; m.renderOrder = 2; scene.add(m);
+  if (c.texMeshes) c.texMeshes.push(m);
+}
+
+// ---- 월드 생성 후: 단색 재질(도로·인도·옥상·공원)에 미세 질감/범프 부여 ----
+function vfxPostPass() {
+  const seen = new Set();
+  scene.traverse(o => {
+    if (!o.isMesh || o === GFXS.mesh || o === GFX2.proxy2) return;
+    for (let p = o; p; p = p.parent) if (p === spideyGroup) return;
+    const m = o.material; if (!m || Array.isArray(m) || !m.isMeshStandardMaterial || seen.has(m)) return; seen.add(m);
+    if (m.map || m.transparent || (m.userData && m.userData.vfx)) return;
+    if (m.vertexColors) vfxPatch(m, { ao: true, aoMin: 0.5, grain: 0.05, bump: 0.09, scale: 1 });
+    else vfxPatch(m, { grain: 0.10, bump: 0.13, scale: 2 });
+  });
+}
+
+// ---- 환경 반사용 스카이라인(건물 실루엣 + 불 켜진 창): 유리창에 도시가 비치도록 ----
+function vfxSkylineMesh(mode) {
+  const W = 1024, H = 256, cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+  const g = cv.getContext('2d');
+  const P = { night: ['#070c18', 'rgba(255,205,130,0.95)', 'rgba(170,205,255,0.85)', 0.30],
+              sunset: ['#2b1a14', 'rgba(255,214,150,0.85)', 'rgba(255,170,110,0.7)', 0.18],
+              cloudy: ['#4d5966', 'rgba(220,230,240,0.35)', 'rgba(220,230,240,0.35)', 0.10],
+              day: ['#6f879c', 'rgba(235,246,255,0.8)', 'rgba(190,225,255,0.7)', 0.22] }[mode] || ['#070c18', 'rgba(255,205,130,.9)', 'rgba(170,205,255,.8)', 0.3];
+  let s = 12345; const rnd = () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; };
+  for (let x = 0; x < W;) {
+    const w = 14 + rnd() * 40, h = 40 + Math.pow(rnd(), 1.6) * 190;
+    g.fillStyle = P[0]; g.fillRect(x, H - h, w, h);
+    for (let wy = H - h + 6; wy < H - 4; wy += 7) for (let wx = x + 3; wx < x + w - 3; wx += 6) {
+      if (rnd() < P[3]) { g.fillStyle = rnd() < 0.7 ? P[1] : P[2]; g.fillRect(wx, wy, 3, 4); }
+    }
+    x += w + rnd() * 6;
+  }
+  const t = new THREE.CanvasTexture(cv); t.wrapS = THREE.RepeatWrapping;
+  const mat = new THREE.MeshBasicMaterial({ map: t, transparent: true, side: THREE.BackSide, depthTest: false, depthWrite: false, fog: false, toneMapped: false });
+  const mesh = new THREE.Mesh(new THREE.CylinderGeometry(900, 900, 520, 48, 1, true), mat);
+  mesh.position.y = 120; mesh.frustumCulled = false; mesh.renderOrder = 10;
+  return mesh;
+}
+
+// ---- 월드 비율(미터 기준) UV: 큰 면에서 창문 텍스처가 늘어지는 현상 방지 ----
+function vfxBoxUV(g, w, h, d) {
+  const uv = g.attributes.uv, TW = 8, TH = 7.2, sc = [[d, h], [d, h], [w, d], [w, d], [w, h], [w, h]];
+  for (let f = 0; f < 6; f++) for (let i = 0; i < 4; i++) { const k = f * 4 + i; uv.setXY(k, uv.getX(k) * sc[f][0] / TW, uv.getY(k) * sc[f][1] / TH); }
+  uv.needsUpdate = true; return g;
+}
+function vfxCylUV(g, r, h) {
+  const uv = g.attributes.uv;
+  for (let k = 0; k < uv.count; k++) uv.setXY(k, uv.getX(k) * 2 * Math.PI * r / 8, uv.getY(k) * h / 7.2);
+  uv.needsUpdate = true; return g;
+}
+
 window.onload = init;
 </script>
 
