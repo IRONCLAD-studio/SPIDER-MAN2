@@ -2240,7 +2240,7 @@ async function loadRealNYCBuildingFootprints() {
         vertexOffset += pos.count;
         buildingGeo.dispose();
 
-        const collider = { name: props.NAME || `NYC Building ${props.BIN || feature.id || added}`, ringXZ, minY: 0, maxY: heightY, rtYear: Number(props.CONSTRUCTION_YEAR) || 0 };
+        const collider = { name: props.NAME || `NYC Building ${props.BIN || feature.id || added}`, ringXZ, minY: 0, maxY: heightY };
         triangleColliders.push(collider);
         registerSpatialCollider(collider);
         mapBuildingFootprintsXZ.push({ ringXZ, isLandmark: heightY > 100 });
@@ -5455,7 +5455,7 @@ const GFX_PRESETS = {
   medium: { label: '보통 (권장)',            maxPR: 1.5, shadow: 2048, bShadow: true,  bloom: false, shR: 110 },
   high:   { label: '높음 (고화질 그림자+블룸)', maxPR: 1.5, shadow: 2048, bShadow: true,  bloom: true, loadR: 900, shR: 100 },
   ultra:  { label: '최고급 (울트라: 반사·빛줄기·시네마 후처리)', maxPR: 2.0, shadow: 4096, bShadow: true, bloom: true, ultra: true, loadR: 1200, shR: 150 },
-  cinema: { label: '시네마틱 (SSR·볼류메트릭·모션블러·AO·2단 그림자)', maxPR: 2.0, shadow: 4096, bShadow: true, bloom: true, ultra: true, cinema: true, loadR: 1200, shR: 150 }
+  cinema: { label: '시네마틱 (레이트레이싱 반사·그림자·볼류메트릭·모션블러·AO)', maxPR: 2.0, shadow: 4096, bShadow: true, bloom: true, ultra: true, cinema: true, loadR: 1200, shR: 150 }
 };
 const GFX_SKY = {
   day:    { top: 0x1f6fc9, exp: 0.85, star: 0.0, sun: 0xfff1c9, sunI: 1.0, expo: 1.10, bloom: 0.35 },
@@ -5643,15 +5643,33 @@ function gfxBloomInit() {
     uniforms: { tScene: { value: null }, tB1: { value: null }, tB2: { value: null }, strength: { value: 0.6 },
       ultra: { value: 0.0 }, sunUv: { value: new THREE.Vector2(0.5, 0.5) }, sunVis: { value: 0.0 }, aspect: { value: 1.0 }, time: { value: 0.0 },
       cinema: { value: 0.0 }, tG: { value: null }, tEnv: { value: null }, gfl: { value: 0.0 }, hasEnv: { value: 0.0 }, gsize: { value: new THREE.Vector2(1, 1) }, tanHalf: { value: 0.65 }, wet: { value: 0.0 }, fogK: { value: 0.0015 }, mbK: { value: 0.5 }, sunI: { value: 1.0 },
+      tRefl: { value: null }, hrtSize: { value: new THREE.Vector2(1, 1) }, hrtOn: { value: 0 }, hrtEnc: { value: 1 }, rtMaxDist: { value: 420 }, rtSteps: { value: 72 },
+      tRT: { value: null }, rtInfo: { value: new THREE.Vector4(0, 0, 512, 1 / 512) }, spPos: { value: new THREE.Vector3() }, winGlow: { value: 0 }, rtOn: { value: 0 },
       camWorld: { value: new THREE.Matrix4() }, prevVP: { value: new THREE.Matrix4() }, camPos: { value: new THREE.Vector3() }, fogCol: { value: new THREE.Color() }, sunDirW: { value: new THREE.Vector3(0, 1, 0) }, sunCol: { value: new THREE.Color() }, skyTop: { value: new THREE.Color() }, skyHor: { value: new THREE.Color() } },
     fragmentShader: `uniform sampler2D tScene, tB1, tB2; uniform float strength, ultra, sunVis, aspect, time; uniform vec2 sunUv; varying vec2 vUv;
       float hh(vec2 p){ return fract(sin(dot(p, vec2(12.9898,78.233))) * 43758.5453); }
       uniform sampler2D tG; uniform samplerCube tEnv; uniform vec2 gsize; uniform float cinema, tanHalf, wet, fogK, mbK, sunI, gfl, hasEnv;
       uniform mat4 camWorld, prevVP; uniform vec3 camPos, fogCol, sunDirW, sunCol, skyTop, skyHor;
+      uniform sampler2D tRT; uniform vec4 rtInfo; uniform vec3 spPos; uniform float winGlow, rtOn;
+      uniform sampler2D tRefl; uniform vec2 hrtSize; uniform float hrtOn, hrtEnc;
       vec3 rotv(vec3 v){ return camWorld[0].xyz * v.x + camWorld[1].xyz * v.y + camWorld[2].xyz * v.z; }
       float gDepth(vec2 u, out float rf){ vec4 g = texture2D(tG, u); if (gfl > 0.5) { rf = g.g; return g.r; } rf = g.b; return (g.r + g.g / 255.0) * 2600.0; }
       vec3 gNorm(vec2 u){ vec2 e = texture2D(tG, u).ba; vec3 n = vec3(e, 1.0 - abs(e.x) - abs(e.y)); if (n.z < 0.0) n.xy = (1.0 - abs(n.yx)) * vec2(n.x >= 0.0 ? 1.0 : -1.0, n.y >= 0.0 ? 1.0 : -1.0); return normalize(n); }
       vec2 proj(vec3 p){ return vec2(p.x / (-p.z) / (tanHalf * aspect), p.y / (-p.z) / tanHalf) * 0.5 + 0.5; }
+      ${RT_GLSL}
+      // 저해상도 반사 버퍼 → 풀해상도 업샘플. 4개의 이웃 텍셀을 '양선형 가중치 × 깊이 유사도'로 섞는다(Bilateral).
+      // 깊이가 다른 텍셀(다른 건물/하늘)의 반사가 모서리로 번지는 것을 막는다.
+      vec4 hrtSample(vec2 uv, float D){
+        vec2 tp = uv * hrtSize - 0.5; vec2 f = fract(tp); vec2 b = (floor(tp) + 0.5) / hrtSize; vec2 o = 1.0 / hrtSize;
+        vec4 acc = vec4(0.0); float ws = 0.0;
+        for (int j = 0; j < 2; j++) for (int i = 0; i < 2; i++) {
+          vec2 u2 = b + vec2(float(i), float(j)) * o; float r; float Ds = gDepth(u2, r);
+          float bw = (i == 0 ? 1.0 - f.x : f.x) * (j == 0 ? 1.0 - f.y : f.y);
+          float dw = exp(-abs(Ds - D) / max(D * 0.03, 0.3));
+          float w = bw * dw + 1e-4; acc += texture2D(tRefl, u2) * w; ws += w;
+        }
+        return acc / ws;
+      }
       vec3 vPos(vec2 u, float D){ vec2 n = u * 2.0 - 1.0; return vec3(n.x * tanHalf * aspect * D, n.y * tanHalf * D, -D); }
       float h3(vec3 p){ p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
       float n3(vec3 p){ vec3 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
@@ -5700,49 +5718,23 @@ function gfxBloomInit() {
           c *= 1.0 - 0.42 * wet * ground;
           float refl = max(rf, wetG);
           // --- SSR (화면공간 레이마칭 + 하늘 폴백) ---
-          if (refl > 0.03) {
+          if (hrtOn > 0.5) {
+            // 하이브리드 RT 결과(사전곱 RGBA): C' = C·(1-A) + P
+            vec4 hr = hrtSample(uv, D); c = c * (1.0 - hr.a) + hr.rgb / hrtEnc;
+          } else if (refl > 0.03) {
             vec3 V = normalize(vp); vec3 Rv = reflect(V, nV);
             float fres = 0.04 + 0.96 * pow(1.0 - clamp(dot(nV, -V), 0.0, 1.0), 5.0);
-            vec3 hitCol = vec3(0.0); float hit = 0.0;
-            // 반사 레이: 선형 스텝 + 교차 검출 + 이분 탐색 정제 + 두께/뒷면 거부 (줄무늬·유령 반사 방지)
-            if (Rv.z < 0.5) {
-              float stepL = max(0.8, D * 0.012); vec3 p = vp, pp = vp; float pd = -1.0;
-              p += Rv * stepL * hh(gl_FragCoord.xy * 0.731);   // 고정 지터(시간 변화 없음 → 깜빡임 없음)
-              for (int i = 0; i < 40; i++) {
-                pp = p; p += Rv * stepL; stepL *= 1.06; if (p.z > -0.3) break;
-                vec2 su = proj(p);
-                if (su.x < 0.0 || su.x > 1.0 || su.y < 0.0 || su.y > 1.0) break;
-                float tr; float Ds = gDepth(su, tr); float diff = (-p.z) - Ds;
-                if (tr < -0.5) continue;   // 스파이더맨 본체는 반사에서 제외
-                if (diff > 0.0 && pd <= 0.0 && Ds < 2150.0) {
-                  vec3 ra = pp, rb = p;
-                  for (int j = 0; j < 6; j++) { vec3 rm = (ra + rb) * 0.5; float tq; float dm = (-rm.z) - gDepth(proj(rm), tq); if (dm > 0.0) rb = rm; else ra = rm; }
-                  vec2 hs = proj(rb); float tq2; float Dh = gDepth(hs, tq2); float dd = (-rb.z) - Dh;
-                  float thick = clamp(Dh * 0.02, 0.35, 3.0);
-                  bool ok = abs(dd) < thick && tq2 >= -0.5 && hs.x > 0.0 && hs.x < 1.0 && hs.y > 0.0 && hs.y < 1.0;
-                  if (ok && gfl > 0.5) { vec3 nh = gNorm(hs); if (dot(nh, Rv) > 0.12) ok = false; }   // 뒷면 히트 거부
-                  if (ok) {
-                    float edge = smoothstep(0.0, 0.14, min(min(hs.x, 1.0 - hs.x), min(hs.y, 1.0 - hs.y)));
-                    float br = ground > 0.5 ? (1.0 - pud) * 0.006 : 0.0015;
-                    hitCol = (texture2D(tScene, hs).rgb * 2.0 + texture2D(tScene, hs + vec2(br, 0.0)).rgb + texture2D(tScene, hs - vec2(br, 0.0)).rgb) * 0.25;
-                    hitCol = min(hitCol, vec3(3.0));
-                    hit = edge * (1.0 - smoothstep(0.55, 1.0, float(i) / 40.0)) * (1.0 - smoothstep(0.2, 0.5, Rv.z));
-                    break;
-                  }
-                }
-                pd = diff;
-              }
-            }
             vec3 RW = normalize(rotv(Rv));
             float sh = clamp(RW.y, 0.0, 1.0);
             vec3 skyC = mix(skyHor, skyTop, pow(sh, 0.55)) * 0.85;
             skyC += sunCol * pow(max(dot(RW, sunDirW), 0.0), 500.0) * sunI * 3.0;
             if (RW.y < 0.0) skyC = skyHor * 0.35;
             if (hasEnv > 0.5) { skyC = textureCube(tEnv, RW).rgb; if (RW.y < 0.0) skyC *= 0.5; }
-            vec3 rc = mix(skyC, hitCol, hit);
-            float disc = max(max(abs(Dl - D), abs(Dr - D)), max(abs(Du - D), abs(Dd - D))) / max(D, 1.0);
+            vec3 rc = skyC;
+            // 월드공간 레이트레이싱: 화면 밖·카메라 뒤 건물, 그림자, 야간 창문 불빛, 캐릭터까지 반사
+            if (rtOn > 0.5) rc = min(rtTrace(wp + nW * 0.5, RW, skyC), vec3(6.0));
             float w = clamp(refl * mix(0.5, 1.0, fres) * 1.15, 0.0, 0.92);
-            w *= (1.0 - smoothstep(0.015, 0.05, disc)) * (1.0 - smoothstep(260.0, 650.0, D));   // 깊이 불연속(건물 모서리)·원거리 글리치 억제
+            if (gfl < 0.5) { float disc = max(max(abs(Dl - D), abs(Dr - D)), max(abs(Du - D), abs(Dd - D))) / max(D, 1.0); w *= 1.0 - smoothstep(0.015, 0.05, disc); }
             c = mix(c, rc, w);
           }
         }
@@ -5839,7 +5831,7 @@ function gfxRenderBloom() {
     u.sunUv.value.set(sp.x * 0.5 + 0.5, sp.y * 0.5 + 0.5);
     u.sunVis.value = (sp.z < 1 && GFX.sunI > 0) ? Math.max(0, 1 - Math.max(Math.abs(sp.x), Math.abs(sp.y)) * 0.55) * Math.min(1, GFX.sunI) : 0;
   }
-  if (GFX_PRESETS[GFX.quality].cinema) gfx2Prep(u, W, H); else u.cinema.value = 0;
+  if (GFX_PRESETS[GFX.quality].cinema) { gfx2Prep(u, W, H); try { hrtRender(u, W, H); } catch (e) { u.hrtOn.value = 0; console.warn('HRT', e); } } else u.cinema.value = 0;
   gfxPass(GFXB.mComp, null);
 }
 function gfxSetBloom(on) {
@@ -6075,7 +6067,7 @@ function gfx2GMat(refl, orm, rs) {
 function gfx2ReflOf(o) {
   if (o.userData.gfxR !== undefined) return o.userData.gfxR;
   const n = o.name || ''; let r = 0.0;
-  if (n.indexOf('Facade_Windows') >= 0) r = 0.55; else if (n.indexOf('OSM_Buildings_Generic_Facade_Details') === 0) r = 0.38;
+  if (n.indexOf('OpenStreetMap_Manhattan_Buildings') === 0) r = 0.14; else if (n.indexOf('Facade_Windows') >= 0) r = 0.55; else if (n.indexOf('OSM_Buildings_Generic_Facade_Details') === 0) r = 0.38;
   else if (n.indexOf('NYC_Detail_Chunk') === 0) r = 0.30; else if (n.indexOf('Empire_State') >= 0) r = 0.2;
   o.userData.gfxR = r; return r;
 }
@@ -6116,6 +6108,7 @@ function gfx2Prep(u, W, H) {
   camera.updateMatrixWorld();
   GFX2.cur.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
   if (!GFX2.havePrev) { GFX2.prev.copy(GFX2.cur); GFX2.havePrev = true; }
+  try { rtUpdate(player.pos.x, player.pos.z); u.tRT.value = RT.target ? RT.target.texture : null; u.rtOn.value = RT.ready ? 1 : 0; u.rtInfo.value.set(RT.cx, RT.cz, RT.size, 1 / RT.size); if (spideyGroup) u.spPos.value.copy(spideyGroup.position); u.winGlow.value = vfxGlowValue(); } catch (e) { u.rtOn.value = 0; console.warn('rt', e); }
   u.cinema.value = 1; u.tG.value = GFX2.gb.texture; u.gfl.value = gfx2Float() ? 1 : 0; u.tEnv.value = GFX.envTex || null; u.hasEnv.value = GFX.envTex ? 1 : 0; u.gsize.value.set(GFX2.gbW, GFX2.gbH);
   u.tanHalf.value = Math.tan(THREE.MathUtils.degToRad(camera.fov) * 0.5);
   u.camWorld.value.copy(camera.matrixWorld); u.camPos.value.copy(camera.position); u.prevVP.value.copy(GFX2.prev);
@@ -6158,7 +6151,7 @@ function gfx2Apply(on) {
     try { gfx2PatchConcrete(); } catch (e) { console.warn('concrete', e); }
     GFX2.lastMain = -1; GFX2.cx2 = 1e9;
   } else {
-    gfx2DetachPBR(); GFX2.conc.value = 0;
+    gfx2DetachPBR(); GFX2.conc.value = 0; try { hrtDispose(); } catch (e) {}
     if (GFX2.base > 0 && sunLight) sunLight.intensity = GFX2.base;
     if (GFX2.gb) { GFX2.gb.dispose(); GFX2.gb = null; GFX2.gbW = 0; }
     for (const m of GFX2.neon) if (m.material) m.material.emissiveIntensity = m.userData.neonBase || 0.32;
@@ -6208,9 +6201,7 @@ function animate() {
 
   drawMap();
   gfxUpdate();
-  if (window.RT) { try { RT.beforeRender(); } catch (e) { console.warn('RT before', e); } }
   if (GFXB.on) gfxRenderBloom(); else renderer.render(scene, camera);
-  if (window.RT) { try { RT.afterRender(); } catch (e) { console.warn('RT after', e); } }
 }
 
 function updateSpiderManRig(dt) {
@@ -7064,1277 +7055,390 @@ function vfxCylUV(g, r, h) {
   uv.needsUpdate = true; return g;
 }
 
-window.onload = init;
-</script>
-<script id="rt-module">
-/* =============================================================================
- * RT 모듈 (2차): WebGPU 컴퓨트 기반 소프트웨어 BVH 광선 추적 — 소프트 섀도 + AO + 반사 + 1~2바운스 GI
- *  - 하드웨어 RT(RT 코어/DXR/Vulkan RT)는 웹에 API가 없어 사용하지 않는다. 컴퓨트 셰이더로 직접 구현한 BVH 순회다.
- *  - 기존 Three.js r128 WebGL 렌더러는 그대로 두고, 별도 WebGPU 디바이스가 저해상도 컴퓨트로 결과를 계산 → 읽어와서 합성한다.
- *    합성: 섀도/AO = 곱셈 블렌딩, 반사/GI = 가산 블렌딩(프레넬·거칠기·알베도 가중은 컴퓨트에서 적용).
- *  - 반사는 SSR이 아니다: 화면 밖 건물도 BVH 광선으로 맞힌다. 단 RT 장면은 콜라이더 프리즘(+지면+캐릭터 캡슐)뿐이며
- *    창문/차량/간판 지오메트리는 없다. 창문·네온 발광은 벽 위치 해시로 만든 절차적 근사다.
- *  - GI는 1~2바운스 몬테카를로 근사(태양 직접광 + 발광). 하늘 앰비언트는 래스터가 이미 가지므로 이중 계산하지 않는다.
- * ========================================================================== */
 
-// ---------- BVH 빌더 (워커와 메인 스레드에서 공용; 외부 변수를 참조하지 않는다) ----------
-function rtBuildBVH(tris, meta) {
-  const n = (tris.length / 9) | 0;
-  const tmin = new Float32Array(n * 3), tmax = new Float32Array(n * 3), cen = new Float32Array(n * 3);
-  for (let i = 0; i < n; i++) {
-    const o = i * 9;
-    for (let a = 0; a < 3; a++) {
-      const p = tris[o + a], q = tris[o + 3 + a], r = tris[o + 6 + a];
-      tmin[i * 3 + a] = Math.min(p, q, r); tmax[i * 3 + a] = Math.max(p, q, r); cen[i * 3 + a] = (p + q + r) / 3;
-    }
-  }
-  const idx = new Uint32Array(n); for (let i = 0; i < n; i++) idx[i] = i;
-  const buf = new ArrayBuffer(Math.max(1, 2 * n) * 32);
-  const F = new Float32Array(buf), U = new Uint32Array(buf);
-  let nc = 0;
-  const NB = 12;
-  const bc = new Uint32Array(NB), bmn = new Float32Array(NB * 3), bmx = new Float32Array(NB * 3), lA = new Float32Array(NB);
-  function area(x0, y0, z0, x1, y1, z1) { const dx = x1 - x0, dy = y1 - y0, dz = z1 - z0; return 2 * (dx * dy + dy * dz + dz * dx); }
-  function build(s, e, depth) {
-    const ni = nc++;
-    let x0 = Infinity, y0 = Infinity, z0 = Infinity, x1 = -Infinity, y1 = -Infinity, z1 = -Infinity;
-    let cx0 = Infinity, cy0 = Infinity, cz0 = Infinity, cx1 = -Infinity, cy1 = -Infinity, cz1 = -Infinity;
-    for (let i = s; i < e; i++) {
-      const t = idx[i] * 3;
-      if (tmin[t] < x0) x0 = tmin[t]; if (tmin[t + 1] < y0) y0 = tmin[t + 1]; if (tmin[t + 2] < z0) z0 = tmin[t + 2];
-      if (tmax[t] > x1) x1 = tmax[t]; if (tmax[t + 1] > y1) y1 = tmax[t + 1]; if (tmax[t + 2] > z1) z1 = tmax[t + 2];
-      if (cen[t] < cx0) cx0 = cen[t]; if (cen[t + 1] < cy0) cy0 = cen[t + 1]; if (cen[t + 2] < cz0) cz0 = cen[t + 2];
-      if (cen[t] > cx1) cx1 = cen[t]; if (cen[t + 1] > cy1) cy1 = cen[t + 1]; if (cen[t + 2] > cz1) cz1 = cen[t + 2];
-    }
-    const o = ni * 8;
-    F[o] = x0 - 1e-4; F[o + 1] = y0 - 1e-4; F[o + 2] = z0 - 1e-4; F[o + 4] = x1 + 1e-4; F[o + 5] = y1 + 1e-4; F[o + 6] = z1 + 1e-4;
-    const cnt = e - s;
-    if (cnt <= 4 || depth >= 28) { U[o + 3] = s; U[o + 7] = cnt; return ni; }
-    const ex = cx1 - cx0, ey = cy1 - cy0, ez = cz1 - cz0;
-    let ax = 0, ext = ex, cmin = cx0; if (ey > ext) { ax = 1; ext = ey; cmin = cy0; } if (ez > ext) { ax = 2; ext = ez; cmin = cz0; }
-    let mid = (s + e) >> 1;
-    if (ext > 1e-6) {
-      bc.fill(0); bmn.fill(Infinity); bmx.fill(-Infinity);
-      for (let i = s; i < e; i++) {
-        const t = idx[i] * 3; let b = Math.floor((cen[t + ax] - cmin) / ext * NB); if (b >= NB) b = NB - 1; if (b < 0) b = 0;
-        bc[b]++;
-        for (let a = 0; a < 3; a++) { if (tmin[t + a] < bmn[b * 3 + a]) bmn[b * 3 + a] = tmin[t + a]; if (tmax[t + a] > bmx[b * 3 + a]) bmx[b * 3 + a] = tmax[t + a]; }
-      }
-      // 왼쪽 누적
-      let lx0 = Infinity, ly0 = Infinity, lz0 = Infinity, lx1 = -Infinity, ly1 = -Infinity, lz1 = -Infinity, lc = 0;
-      for (let b = 0; b < NB - 1; b++) {
-        if (bc[b] > 0) {
-          lc += bc[b];
-          lx0 = Math.min(lx0, bmn[b * 3]); ly0 = Math.min(ly0, bmn[b * 3 + 1]); lz0 = Math.min(lz0, bmn[b * 3 + 2]);
-          lx1 = Math.max(lx1, bmx[b * 3]); ly1 = Math.max(ly1, bmx[b * 3 + 1]); lz1 = Math.max(lz1, bmx[b * 3 + 2]);
-        }
-        lA[b] = lc > 0 ? area(lx0, ly0, lz0, lx1, ly1, lz1) * lc : Infinity;
-      }
-      let best = -1, bestCost = Infinity;
-      let rx0 = Infinity, ry0 = Infinity, rz0 = Infinity, rx1 = -Infinity, ry1 = -Infinity, rz1 = -Infinity, rc = 0;
-      let lcnt = new Uint32Array(NB); { let acc = 0; for (let b = 0; b < NB; b++) { acc += bc[b]; lcnt[b] = acc; } }
-      for (let b = NB - 2; b >= 0; b--) {
-        const bb = b + 1;
-        if (bc[bb] > 0) {
-          rc += bc[bb];
-          rx0 = Math.min(rx0, bmn[bb * 3]); ry0 = Math.min(ry0, bmn[bb * 3 + 1]); rz0 = Math.min(rz0, bmn[bb * 3 + 2]);
-          rx1 = Math.max(rx1, bmx[bb * 3]); ry1 = Math.max(ry1, bmx[bb * 3 + 1]); rz1 = Math.max(rz1, bmx[bb * 3 + 2]);
-        }
-        if (lcnt[b] > 0 && rc > 0) {
-          const cost = lA[b] + area(rx0, ry0, rz0, rx1, ry1, rz1) * rc;
-          if (cost < bestCost) { bestCost = cost; best = b; }
-        }
-      }
-      if (best >= 0) {
-        let i = s, j = e - 1;
-        while (i <= j) {
-          const t = idx[i] * 3; let b = Math.floor((cen[t + ax] - cmin) / ext * NB); if (b >= NB) b = NB - 1; if (b < 0) b = 0;
-          if (b <= best) i++; else { const tmp = idx[i]; idx[i] = idx[j]; idx[j] = tmp; j--; }
-        }
-        mid = i;
-      }
-    }
-    if (mid <= s || mid >= e) mid = (s + e) >> 1;
-    build(s, mid, depth + 1);              // 왼쪽 자식은 항상 ni+1
-    const right = build(mid, e, depth + 1);
-    U[o + 3] = right; U[o + 7] = 0;
-    return ni;
-  }
-  if (n > 0) build(0, n, 0);
-  const out = new Float32Array(Math.max(1, n) * 12), outU = new Uint32Array(out.buffer);
-  for (let i = 0; i < n; i++) {
-    const t = idx[i] * 9, o = i * 12;
-    if (meta) { outU[o + 3] = meta[idx[i] * 2]; outU[o + 7] = meta[idx[i] * 2 + 1]; }   // 삼각형별 재질 메타: v0.w=알베도RGB|재질ID<<24, e1.w=창문 점등률|시드<<8 (u32 그대로 저장)
-    const ax = tris[t], ay = tris[t + 1], az = tris[t + 2];
-    out[o] = ax; out[o + 1] = ay; out[o + 2] = az;
-    out[o + 4] = tris[t + 3] - ax; out[o + 5] = tris[t + 4] - ay; out[o + 6] = tris[t + 5] - az;
-    out[o + 8] = tris[t + 6] - ax; out[o + 9] = tris[t + 7] - ay; out[o + 10] = tris[t + 8] - az;
-  }
-  return { nodes: buf.slice(0, Math.max(1, nc) * 32), tris: out, nodeCount: nc, triCount: n };
+// =============================================================================
+// ===== RT: 월드공간 소프트웨어 레이트레이싱 (건물 하이트필드 + 레이 트레이스 반사/그림자) =====
+// WebGL에는 하드웨어 RT가 없으므로, 플레이어 주변 건물을 탑다운 높이맵(512m, 0.5m 해상도)으로
+// 래스터화해 두고 합성 셰이더에서 실제 광선을 월드 공간으로 쏜다. 화면 밖/카메라 뒤 건물도 반사된다.
+// =============================================================================
+const RT = { target: null, scene: null, cam: null, mesh: null, mat: null, cx: 1e9, cz: 1e9, size: 512, res: 1024, ready: false, nCol: -1, geo: null, wait: 0 };
+function rtInit() {
+  RT.target = new THREE.WebGLRenderTarget(RT.res, RT.res, { minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, format: THREE.RGBAFormat, type: THREE.UnsignedByteType, depthBuffer: true, stencilBuffer: false });
+  RT.target.texture.generateMipmaps = false;
+  RT.scene = new THREE.Scene();
+  const h = RT.size / 2; RT.cam = new THREE.OrthographicCamera(-h, h, h, -h, 1, 1400); RT.cam.up.set(0, 0, -1);
+  RT.mat = new THREE.ShaderMaterial({ side: THREE.DoubleSide, fog: false,
+    vertexShader: 'attribute float aId; varying float vY; varying float vId; void main(){ vec4 w = modelMatrix * vec4(position, 1.0); vY = w.y; vId = aId; gl_Position = projectionMatrix * viewMatrix * w; }',
+    fragmentShader: 'varying float vY; varying float vId; void main(){ float v = clamp(vY / 640.0, 0.0, 0.99999); float r = floor(v * 255.0) / 255.0; float g = fract(v * 255.0); gl_FragColor = vec4(r, g, vId, 1.0); }' });
 }
-
-// ---------- WGSL 컴퓨트 셰이더: BVH 순회 + 소프트 섀도 + AO + 반사 + 1~2바운스 GI + 시간적 누적 ----------
-// 스토리지 버퍼는 5개(nodes/tris/histIn/histOut/outPacked)만 쓴다 — WebGPU 기본 한도(maxStorageBuffersPerShaderStage=8) 이내.
-//  hist 버퍼: 3개 평면(0=섀도/AO/깊이/히트, 1=반사 RGB+가중치, 2=GI RGB+히트비율)을 평면 순서로 연달아 저장(각 W*H개 vec4)
-//  outPacked: 같은 3개 평면의 u32 패킹. 평면0=R그림자/G AO/B깊이/A히트, 평면1=반사 sqrt(rgb/1.5)+가중치, 평면2=GI sqrt(rgb/1.5)+히트비율
-//  tris 버퍼: 삼각형당 vec4<u32> 3개. xyz=v0/e1/e2(f32 비트), w: v0.w=알베도RGB|재질ID<<24, e1.w=창문 점등률|시드<<8
-const RT_WGSL = `
-struct Params {
-  invProj: mat4x4<f32>,
-  camWorld: mat4x4<f32>,
-  hist: mat4x4<f32>,
-  camPos: vec4<f32>,
-  sunDir: vec4<f32>,
-  capA: vec4<f32>,
-  capB: vec4<f32>,
-  dims: vec4<u32>,
-  cfg: vec4<f32>,
-  cfg2: vec4<f32>,
-  skyTop: vec4<f32>,
-  skyHor: vec4<f32>,
-  sunCol: vec4<f32>,
-  cfg3: vec4<f32>,
-  cfg4: vec4<f32>,
-  cfg5: vec4<f32>,
-  cfg6: vec4<f32>,
-};
-@group(0) @binding(0) var<uniform> P: Params;
-@group(0) @binding(1) var<storage, read> nodes: array<vec4<u32>>;
-@group(0) @binding(2) var<storage, read> tris: array<vec4<u32>>;
-@group(0) @binding(3) var<storage, read> histIn: array<vec4<f32>>;
-@group(0) @binding(4) var<storage, read_write> histOut: array<vec4<f32>>;
-@group(0) @binding(5) var<storage, read_write> outPacked: array<u32>;
-
-var<private> rngState: u32;
-fn pcg(v: u32) -> u32 {
-  let s = v * 747796405u + 2891336453u;
-  let w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u;
-  return (w >> 22u) ^ w;
-}
-fn rnd() -> f32 { rngState = pcg(rngState); return f32(rngState >> 8u) * (1.0 / 16777216.0); }
-fn h2(a: i32, b: i32, s: u32) -> f32 {
-  return f32(pcg((u32(a) * 73856093u) ^ (u32(b) * 19349663u) ^ (s * 83492791u) ^ 2654435769u) >> 8u) * (1.0 / 16777216.0);
-}
-fn vnoise(p: vec2<f32>) -> f32 {
-  let i = floor(p);
-  let f = p - i;
-  let u = f * f * (3.0 - 2.0 * f);
-  let ix = i32(i.x);
-  let iy = i32(i.y);
-  let a = h2(ix, iy, 11u);
-  let b = h2(ix + 1, iy, 11u);
-  let c = h2(ix, iy + 1, 11u);
-  let d = h2(ix + 1, iy + 1, 11u);
-  return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
-}
-
-fn safeInv(d: vec3<f32>) -> vec3<f32> {
-  let sg = select(vec3<f32>(1.0), vec3<f32>(-1.0), d < vec3<f32>(0.0));
-  return 1.0 / (max(abs(d), vec3<f32>(1e-7)) * sg);
-}
-fn boxHit(bmin: vec3<f32>, bmax: vec3<f32>, o: vec3<f32>, invD: vec3<f32>, tmax: f32) -> f32 {
-  let t0 = (bmin - o) * invD;
-  let t1 = (bmax - o) * invD;
-  let tmn = min(t0, t1);
-  let tmx = max(t0, t1);
-  let tn = max(max(tmn.x, tmn.y), max(tmn.z, 0.0));
-  let tf = min(min(tmx.x, tmx.y), min(tmx.z, tmax));
-  if (tn <= tf) { return tn; }
-  return 1e30;
-}
-fn tv(ti: u32, k: u32) -> vec3<f32> { return bitcast<vec3<f32>>(tris[ti * 3u + k].xyz); }
-fn intersectTri(o: vec3<f32>, d: vec3<f32>, ti: u32, tmax: f32) -> f32 {
-  let v0 = tv(ti, 0u);
-  let e1 = tv(ti, 1u);
-  let e2 = tv(ti, 2u);
-  let p = cross(d, e2);
-  let det = dot(e1, p);
-  if (abs(det) < 1e-9) { return -1.0; }
-  let inv = 1.0 / det;
-  let s = o - v0;
-  let u = dot(s, p) * inv;
-  if (u < 0.0 || u > 1.0) { return -1.0; }
-  let q = cross(s, e1);
-  let v = dot(d, q) * inv;
-  if (v < 0.0 || u + v > 1.0) { return -1.0; }
-  let t = dot(e2, q) * inv;
-  if (t > 0.001 && t < tmax) { return t; }
-  return -1.0;
-}
-
-struct BHit { t: f32, tri: u32 };
-fn traceBVH(o: vec3<f32>, d: vec3<f32>, tmax: f32) -> BHit {
-  var h: BHit;
-  h.t = tmax;
-  h.tri = 0xffffffffu;
-  let invD = safeInv(d);
-  var stack: array<u32, 32>;
-  var sp = 1u;
-  stack[0] = 0u;
-  loop {
-    if (sp == 0u) { break; }
-    sp = sp - 1u;
-    let ni = stack[sp];
-    let a = nodes[ni * 2u];
-    let b = nodes[ni * 2u + 1u];
-    let tn = boxHit(bitcast<vec3<f32>>(a.xyz), bitcast<vec3<f32>>(b.xyz), o, invD, h.t);
-    if (tn > h.t) { continue; }
-    if (b.w > 0u) {
-      for (var i = 0u; i < b.w; i = i + 1u) {
-        let tt = intersectTri(o, d, a.w + i, h.t);
-        if (tt > 0.0) { h.t = tt; h.tri = a.w + i; }
-      }
-    } else {
-      let l = ni + 1u;
-      let r = a.w;
-      let la = nodes[l * 2u]; let lb = nodes[l * 2u + 1u];
-      let ra = nodes[r * 2u]; let rb = nodes[r * 2u + 1u];
-      let tl = boxHit(bitcast<vec3<f32>>(la.xyz), bitcast<vec3<f32>>(lb.xyz), o, invD, h.t);
-      let tr = boxHit(bitcast<vec3<f32>>(ra.xyz), bitcast<vec3<f32>>(rb.xyz), o, invD, h.t);
-      if (sp < 30u) {
-        if (tl <= h.t && tr <= h.t) {
-          if (tl < tr) { stack[sp] = r; sp = sp + 1u; stack[sp] = l; sp = sp + 1u; }
-          else { stack[sp] = l; sp = sp + 1u; stack[sp] = r; sp = sp + 1u; }
-        } else if (tl <= h.t) { stack[sp] = l; sp = sp + 1u; }
-        else if (tr <= h.t) { stack[sp] = r; sp = sp + 1u; }
-      }
-    }
-  }
-  return h;
-}
-fn anyBVH(o: vec3<f32>, d: vec3<f32>, tmax: f32) -> bool {
-  let invD = safeInv(d);
-  var stack: array<u32, 32>;
-  var sp = 1u;
-  stack[0] = 0u;
-  loop {
-    if (sp == 0u) { break; }
-    sp = sp - 1u;
-    let ni = stack[sp];
-    let a = nodes[ni * 2u];
-    let b = nodes[ni * 2u + 1u];
-    let tn = boxHit(bitcast<vec3<f32>>(a.xyz), bitcast<vec3<f32>>(b.xyz), o, invD, tmax);
-    if (tn > tmax) { continue; }
-    if (b.w > 0u) {
-      for (var i = 0u; i < b.w; i = i + 1u) {
-        if (intersectTri(o, d, a.w + i, tmax) > 0.0) { return true; }
-      }
-    } else if (sp < 30u) {
-      stack[sp] = ni + 1u; sp = sp + 1u;
-      stack[sp] = a.w; sp = sp + 1u;
-    }
-  }
-  return false;
-}
-
-fn raySphere(o: vec3<f32>, d: vec3<f32>, c: vec3<f32>, r: f32) -> f32 {
-  let oc = o - c;
-  let b = dot(oc, d);
-  let cc = dot(oc, oc) - r * r;
-  let disc = b * b - cc;
-  if (disc < 0.0) { return -1.0; }
-  let s = sqrt(disc);
-  var t = -b - s;
-  if (t < 0.001) { t = -b + s; }
-  if (t < 0.001) { return -1.0; }
-  return t;
-}
-// 동적 오브젝트(캐릭터): 정적 BVH와 분리된 캡슐(구 3개)로 처리
-fn rayChar(o: vec3<f32>, d: vec3<f32>, tmax: f32) -> f32 {
-  if (P.capB.w < 0.5) { return -1.0; }
-  let r = P.capA.w;
-  var best = -1.0;
-  for (var k = 0u; k < 3u; k = k + 1u) {
-    let c = mix(P.capA.xyz, P.capB.xyz, f32(k) * 0.5);
-    let t = raySphere(o, d, c, r);
-    if (t > 0.0 && t < tmax && (best < 0.0 || t < best)) { best = t; }
-  }
-  return best;
-}
-
-// kind: 0=미스(하늘) 1=건물(BVH) 2=지면(도로) 3=캐릭터
-struct SHit { t: f32, n: vec3<f32>, kind: u32, tri: u32 };
-fn traceScene(o: vec3<f32>, d: vec3<f32>, tmax: f32) -> SHit {
-  var h: SHit;
-  h.t = tmax;
-  h.n = vec3<f32>(0.0, 1.0, 0.0);
-  h.kind = 0u;
-  h.tri = 0u;
-  if (P.dims.w > 0u) {
-    let r = traceBVH(o, d, tmax);
-    if (r.tri != 0xffffffffu) {
-      h.t = r.t; h.kind = 1u; h.tri = r.tri;
-      let e1 = tv(r.tri, 1u);
-      let e2 = tv(r.tri, 2u);
-      var nn = normalize(cross(e1, e2));
-      if (dot(nn, d) > 0.0) { nn = -nn; }
-      h.n = nn;
-    }
-  }
-  if (P.cfg2.w > 0.5 && d.y < -0.0001 && o.y > 0.0) {
-    let tg = -o.y / d.y;
-    if (tg < h.t) { h.t = tg; h.kind = 2u; h.n = vec3<f32>(0.0, 1.0, 0.0); }
-  }
-  let tc = rayChar(o, d, h.t);
-  if (tc > 0.0 && tc < h.t) {
-    h.t = tc; h.kind = 3u;
-    let hp = o + d * tc;
-    let ab = P.capB.xyz - P.capA.xyz;
-    let u = clamp(dot(hp - P.capA.xyz, ab) / max(dot(ab, ab), 1e-6), 0.0, 1.0);
-    h.n = normalize(hp - (P.capA.xyz + ab * u));
-  }
-  return h;
-}
-fn occluded(o: vec3<f32>, d: vec3<f32>, tmax: f32) -> bool {
-  if (P.dims.w > 0u) { if (anyBVH(o, d, tmax)) { return true; } }
-  return rayChar(o, d, tmax) > 0.0;
-}
-fn basis(n: vec3<f32>) -> mat3x3<f32> {
-  let s = select(1.0, -1.0, n.z < 0.0);
-  let a = -1.0 / (s + n.z);
-  let b = n.x * n.y * a;
-  let t = vec3<f32>(1.0 + s * n.x * n.x * a, s * b, -s * n.x);
-  let bt = vec3<f32>(b, s + n.y * n.y * a, -n.y);
-  return mat3x3<f32>(t, bt, n);
-}
-
-// ---------- 하늘/조명/재질 (GFX 하늘 셰이더의 그라디언트+태양 글로우를 근사; 구름·별은 생략) ----------
-fn skyCol(d: vec3<f32>) -> vec3<f32> {
-  let h = d.y;
-  let hor = P.skyHor.xyz;
-  var c = mix(hor, hor * 0.55, pow(max(-h, 0.0), 0.55));
-  if (h >= 0.0) { c = mix(hor, P.skyTop.xyz, pow(h, P.skyTop.w)); }
-  let s = max(dot(d, P.sunDir.xyz), 0.0);
-  let glow = pow(s, 700.0) * 3.0 + pow(s, 42.0) * 0.42 + pow(s, 8.0) * 0.16 + pow(s, 2.0) * 0.055;
-  return c + P.sunCol.xyz * glow * P.sunCol.w * smoothstep(-0.05, 0.08, h);
-}
-fn ambientAt(n: vec3<f32>) -> vec3<f32> {
-  let up = 0.5 + 0.5 * n.y;
-  let skyAvg = mix(P.skyHor.xyz, P.skyTop.xyz, 0.45);
-  return mix(P.skyHor.xyz * 0.35, skyAvg, up) * 0.9;
-}
-fn aces(x: vec3<f32>) -> vec3<f32> {
-  let v = x * P.cfg5.w;
-  return clamp((v * (2.51 * v + 0.03)) / (v * (2.43 * v + 0.59) + 0.14), vec3<f32>(0.0), vec3<f32>(1.0));
-}
-
-// 야간 창문/네온 발광(절차적): 벽 위치를 3.2m x 3.8m 격자로 나눠 해시로 점등 결정 — 지오메트리를 추가하지 않는다
-fn windowEmis(p: vec3<f32>, n: vec3<f32>, seed: u32, frac: f32, nightK: f32, neon: bool) -> vec3<f32> {
-  if (abs(n.y) > 0.5 || frac <= 0.0 || nightK <= 0.0) { return vec3<f32>(0.0); }
-  let tg = vec3<f32>(-n.z, 0.0, n.x) / max(length(vec2<f32>(n.x, n.z)), 1e-3);
-  var cs = 3.2;
-  var fl = 3.8;
-  if (neon) { cs = 5.0; fl = 6.0; }
-  let sx = dot(p, tg) / cs;
-  let fy = p.y / fl;
-  let cx = i32(floor(sx));
-  let cy = i32(floor(fy));
-  let lx = sx - floor(sx);
-  let ly = fy - floor(fy);
-  let inside = step(0.16, lx) * step(lx, 0.84) * step(0.22, ly) * step(ly, 0.82);
-  let r = h2(cx, cy, seed);
-  let r2 = h2(cx + 17, cy + 31, seed);
-  let lit = step(r, frac * nightK);
-  var col = mix(vec3<f32>(1.0, 0.72, 0.38), vec3<f32>(0.75, 0.88, 1.0), step(0.78, r2));
-  if (neon) {
-    col = select(select(vec3<f32>(1.0, 0.2, 0.5), vec3<f32>(0.2, 0.9, 1.0), r2 > 0.33), vec3<f32>(1.0, 0.65, 0.15), r2 > 0.66) * 1.6;
-  }
-  return col * (lit * inside * (0.7 + 0.8 * r2) * 1.5);
-}
-
-struct Surf { alb: vec3<f32>, mat: u32, rough: f32, f0: vec3<f32>, emD: vec3<f32>, emA: vec3<f32> };
-// 재질 ID: 0=콘크리트/석조 1=유리 커튼월 2=금속 3=도로 4=네온(발광 간판)
-fn surfAt(h: SHit, p: vec3<f32>) -> Surf {
-  var s: Surf;
-  s.alb = vec3<f32>(0.5);
-  s.mat = 0u;
-  s.rough = 0.8;
-  s.f0 = vec3<f32>(0.03);
-  s.emD = vec3<f32>(0.0);
-  s.emA = vec3<f32>(0.0);
-  let nightK = P.cfg5.y;
-  if (h.kind == 1u) {
-    let m0 = tris[h.tri * 3u].w;
-    let m1 = tris[h.tri * 3u + 1u].w;
-    let col = vec3<f32>(f32(m0 & 255u), f32((m0 >> 8u) & 255u), f32((m0 >> 16u) & 255u)) / 255.0;
-    s.mat = (m0 >> 24u) & 7u;
-    let frac = f32(m1 & 255u) / 255.0;
-    let seed = m1 >> 8u;
-    s.alb = col;
-    if (s.mat == 1u) {
-      s.alb = col * 0.35 + vec3<f32>(0.02, 0.035, 0.05); s.rough = 0.04; s.f0 = vec3<f32>(0.10);
-    } else if (s.mat == 2u) {
-      s.alb = col * 0.25; s.rough = 0.28; s.f0 = clamp(col * 0.9 + vec3<f32>(0.1), vec3<f32>(0.0), vec3<f32>(1.0)) * 0.9;
-    } else if (s.mat == 4u) {
-      s.alb = col * 0.5; s.rough = 0.6;
-    }
-    if (abs(h.n.y) < 0.5) {
-      s.emD = windowEmis(p, h.n, seed, frac, nightK, s.mat == 4u);
-      if (s.mat == 4u) { s.emA = vec3<f32>(1.0, 0.35, 0.6) * frac * nightK * 0.55; }
-      else { s.emA = vec3<f32>(1.0, 0.72, 0.38) * frac * nightK * 0.42; }
-    }
-  } else if (h.kind == 2u) {
-    let n1 = vnoise(p.xz * 0.18);
-    let n2 = vnoise(p.xz * 0.9 + vec2<f32>(7.3, 3.1));
-    let wm = clamp(P.cfg5.x * (0.45 + 0.9 * smoothstep(0.38, 0.72, n1 * 0.7 + n2 * 0.3)), 0.0, 1.0);   // 젖음 마스크(웅덩이 얼룩)
-    s.mat = 3u;
-    s.alb = vec3<f32>(0.20, 0.21, 0.23) * (1.0 - 0.45 * wm);
-    s.rough = mix(0.72, 0.05, wm);
-    s.f0 = vec3<f32>(0.04);
-  } else if (h.kind == 3u) {
-    s.alb = vec3<f32>(0.62, 0.08, 0.10);
-    s.rough = 0.6;
-  }
-  return s;
-}
-// 히트 지점의 출사 광(색): 태양 직접광(그림자 광선 1개) + 하늘 앰비언트 + 발광(창문/네온)
-fn lightAt(p: vec3<f32>, n: vec3<f32>, s: Surf, doShadow: bool) -> vec3<f32> {
-  let sun = P.sunDir.xyz;
-  let ndl = max(dot(n, sun), 0.0);
-  var vis = 1.0;
-  if (ndl > 0.0 && P.sunCol.w > 0.02 && sun.y > 0.02) {
-    if (doShadow) {
-      let tb = basis(sun);
-      let r1 = rnd();
-      let r2 = rnd();
-      let rad = P.sunDir.w * sqrt(r1);
-      let a = 6.2831853 * r2;
-      let ld = normalize(sun + tb[0] * (cos(a) * rad) + tb[1] * (sin(a) * rad));
-      if (occluded(p, ld, 1500.0)) { vis = 0.0; }
-    }
-  } else { vis = 0.0; }
-  let sunRad = P.sunCol.xyz * (P.sunCol.w * 1.7 * ndl * vis);
-  return s.alb * (sunRad + ambientAt(n)) + s.emD;
-}
-// GI용 출사 광: 앰비언트는 래스터가 이미 가지고 있으므로 제외(이중 계산 방지) — 태양 직접광(그림자 검사) + 평균 발광만
-fn giDirect(p: vec3<f32>, n: vec3<f32>, s: Surf) -> vec3<f32> {
-  let sun = P.sunDir.xyz;
-  let ndl = max(dot(n, sun), 0.0);
-  var sunRad = vec3<f32>(0.0);
-  if (ndl > 0.0 && P.sunCol.w > 0.02 && sun.y > 0.02) {
-    let tb = basis(sun);
-    let r1 = rnd();
-    let r2 = rnd();
-    let rad = P.sunDir.w * sqrt(r1);
-    let a = 6.2831853 * r2;
-    let ld = normalize(sun + tb[0] * (cos(a) * rad) + tb[1] * (sin(a) * rad));
-    if (!occluded(p, ld, 1500.0)) { sunRad = P.sunCol.xyz * (P.sunCol.w * 1.7 * ndl); }
-  }
-  return s.alb * sunRad + s.emA;
-}
-
-// 반사 경로: 최대 1~2회 거울 바운스. 마지막 바운스가 반사성 표면이면 하늘 근사 폴백(가림 검사 없음 — 근사임)
-fn reflPath(o0: vec3<f32>, d0: vec3<f32>, maxT: f32, bounces: u32, doSh: bool, t0: f32) -> vec3<f32> {
-  var thr = vec3<f32>(1.0);
-  var acc = vec3<f32>(0.0);
-  var o = o0;
-  var d = d0;
-  var trav = t0;
-  let fogD = P.skyHor.w;
-  for (var b = 0u; b < bounces; b = b + 1u) {
-    let h = traceScene(o, d, maxT);
-    if (h.kind == 0u) { acc = acc + thr * skyCol(d); break; }
-    let hp = o + d * h.t;
-    let s = surfAt(h, hp);
-    trav = trav + h.t;
-    var L = lightAt(hp + h.n * 0.05, h.n, s, doSh);
-    let fk = fogD * trav;
-    L = mix(P.skyHor.xyz, L, exp(-fk * fk));
-    let cs = clamp(dot(h.n, -d), 0.0, 1.0);
-    let Fw = (s.f0 + (vec3<f32>(1.0) - s.f0) * pow(1.0 - cs, 5.0)) * ((1.0 - s.rough) * (1.0 - s.rough));
-    let reflective = max(Fw.x, max(Fw.y, Fw.z)) > 0.04 && (s.mat == 1u || s.mat == 2u || s.mat == 3u);
-    if (!reflective) { acc = acc + thr * L; break; }
-    acc = acc + thr * L * (vec3<f32>(1.0) - Fw);
-    thr = thr * Fw;
-    let rd = reflect(d, h.n);
-    if (b + 1u < bounces) { o = hp + h.n * 0.05; d = rd; }
-    else { acc = acc + thr * skyCol(rd); break; }
-  }
-  return acc;
-}
-// GI 경로: 코사인 반구 샘플 → 히트의 태양 직접광+발광을 수집, 처리량에 알베도를 곱하며 최대 bounces회(1~2)
-fn giPath(p0: vec3<f32>, n0: vec3<f32>, bounces: u32, dist: f32) -> vec3<f32> {
-  var thr = vec3<f32>(1.0);
-  var acc = vec3<f32>(0.0);
-  var o = p0;
-  var nn = n0;
-  for (var b = 0u; b < bounces; b = b + 1u) {
-    let tb = basis(nn);
-    let r1 = rnd();
-    let r2 = rnd();
-    let rr = sqrt(r1);
-    let a2 = 6.2831853 * r2;
-    let ld = normalize(tb * vec3<f32>(rr * cos(a2), rr * sin(a2), sqrt(max(0.0, 1.0 - r1))));
-    let h = traceScene(o, ld, dist);
-    if (h.kind == 0u) { break; }
-    let hp = o + ld * h.t;
-    let s = surfAt(h, hp);
-    acc = acc + thr * giDirect(hp + h.n * 0.05, h.n, s);
-    thr = thr * s.alb;
-    o = hp + h.n * 0.05;
-    nn = h.n;
-  }
-  return acc;
-}
-fn enc3(v: vec3<f32>) -> u32 {
-  let c = sqrt(clamp(v * (1.0 / 1.5), vec3<f32>(0.0), vec3<f32>(1.0)));
-  return u32(c.x * 255.0 + 0.5) | (u32(c.y * 255.0 + 0.5) << 8u) | (u32(c.z * 255.0 + 0.5) << 16u);
-}
-
-@compute @workgroup_size(8, 8, 1)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-  let W = P.dims.x;
-  let H = P.dims.y;
-  if (gid.x >= W || gid.y >= H) { return; }
-  let idx = gid.y * W + gid.x;
-  let NP = W * H;
-  rngState = pcg(idx + P.dims.z * 9781u + 1u);
-  let ndc = vec2<f32>((f32(gid.x) + 0.5) / f32(W) * 2.0 - 1.0, (f32(gid.y) + 0.5) / f32(H) * 2.0 - 1.0);
-  let vp = P.invProj * vec4<f32>(ndc.x, ndc.y, 1.0, 1.0);
-  let dv = normalize(vp.xyz / vp.w);
-  let d = normalize((P.camWorld * vec4<f32>(dv, 0.0)).xyz);
-  let o = P.camPos.xyz;
-  let range = P.cfg2.x;
-
-  let ph = traceScene(o, d, range);
-  var hit = 0.0;
-  var depthN = 1.0;
-  if (ph.kind != 0u) { hit = 1.0; depthN = clamp(ph.t / range, 0.0, 1.0); }
-
-  // --- 1) 시간적 누적용 히스토리 수집(회전 보정 재투영 + 깊이/히트 일치 검사 + 쌍선형) — 3개 평면 동시 ---
-  var acc0 = vec4<f32>(0.0);
-  var acc1 = vec4<f32>(0.0);
-  var acc2 = vec4<f32>(0.0);
-  var wsum = 0.0;
-  if (P.cfg2.z > 0.5) {
-    let hp = P.hist * vec4<f32>(ndc.x, ndc.y, 1.0, 1.0);
-    if (hp.w > 0.0) {
-      let puv = (hp.xy / hp.w) * 0.5 + vec2<f32>(0.5, 0.5);
-      let fx = puv.x * f32(W) - 0.5;
-      let fy = puv.y * f32(H) - 0.5;
-      if (fx > -0.5 && fy > -0.5 && fx < f32(W) - 0.5 && fy < f32(H) - 0.5) {
-        let x0 = i32(floor(fx));
-        let y0 = i32(floor(fy));
-        let wx = fx - floor(fx);
-        let wy = fy - floor(fy);
-        let tolM = max(1.5, depthN * range * 0.08);
-        for (var j = 0; j < 4; j = j + 1) {
-          let ox = j & 1;
-          let oy = j >> 1u;
-          let xx = clamp(x0 + ox, 0, i32(W) - 1);
-          let yy = clamp(y0 + oy, 0, i32(H) - 1);
-          let hi = u32(yy) * W + u32(xx);
-          let hv = histIn[hi];
-          let w = select(1.0 - wx, wx, ox == 1) * select(1.0 - wy, wy, oy == 1);
-          let sameClass = (hv.w > 0.5) == (hit > 0.5);
-          if (sameClass && abs(hv.z - depthN) * range < tolM) {
-            acc0 = acc0 + hv * w; acc1 = acc1 + histIn[NP + hi] * w; acc2 = acc2 + histIn[2u * NP + hi] * w; wsum = wsum + w;
-          }
-        }
-      }
-    }
-  }
-  let histOK = wsum > 0.05;
-
-  var sh = 1.0;
-  var ao = 1.0;
-  var p = o;
-  var n = vec3<f32>(0.0, 1.0, 0.0);
-  if (ph.kind != 0u) {
-    n = ph.n;
-    p = o + d * ph.t + n * (0.04 + ph.t * 0.0006);
-
-    // --- 소프트 섀도: 태양 원뿔 안에서 샘플한 광선을 BVH로 추적 ---
-    let sun = P.sunDir.xyz;
-    let ndl = dot(n, sun);
-    let nS = u32(P.cfg.x);
-    if (nS > 0u && sun.y > 0.02 && ndl > 0.0) {
-      var cnt = nS;
-      if (ph.t > 350.0) { cnt = max(1u, nS / 2u); }
-      let tb = basis(sun);
-      var occ = 0.0;
-      for (var i = 0u; i < cnt; i = i + 1u) {
-        let r1 = rnd();
-        let r2 = rnd();
-        let rad = P.sunDir.w * sqrt(r1);
-        let a2 = 6.2831853 * r2;
-        let ld = normalize(sun + tb[0] * (cos(a2) * rad) + tb[1] * (sin(a2) * rad));
-        if (occluded(p, ld, 1500.0)) { occ = occ + 1.0; }
-      }
-      sh = 1.0 - occ / f32(cnt);
-      sh = mix(1.0, sh, smoothstep(0.0, 0.2, ndl));
-    }
-
-    // --- 레이 트레이싱 AO: 코사인 가중 반구 광선의 최근접 교차 거리 ---
-    let nA = u32(P.cfg.y);
-    if (nA > 0u && ph.t < P.cfg2.y) {
-      var cntA = nA;
-      if (ph.t > 120.0) { cntA = max(1u, nA / 2u); }
-      let tb2 = basis(n);
-      let maxd = P.cfg.z;
-      var occA = 0.0;
-      for (var i = 0u; i < cntA; i = i + 1u) {
-        let r1 = rnd();
-        let r2 = rnd();
-        let rr = sqrt(r1);
-        let a2 = 6.2831853 * r2;
-        let ld = normalize(tb2 * vec3<f32>(rr * cos(a2), rr * sin(a2), sqrt(max(0.0, 1.0 - r1))));
-        let rh = traceScene(p, ld, maxd);
-        if (rh.kind != 0u) { occA = occA + (1.0 - rh.t / maxd); }
-      }
-      ao = 1.0 - occA / f32(cntA);
-    }
-  }
-  var outV = vec4<f32>(sh, ao, depthN, hit);
-  if (histOK) { outV = mix(acc0 / wsum, outV, P.cfg.w); }
-
-  // --- 2) 반사 + GI (2차) ---
-  let reflOn = P.cfg3.x > 0.5;
-  let giOn = P.cfg4.x > 0.5;
-  var outR = vec4<f32>(0.0);
-  var outG = vec4<f32>(0.0);
-  if (hit > 0.5 && ph.kind != 3u && (reflOn || giOn)) {
-    let phase = (gid.x + gid.y + P.dims.z) & 1u;
-    if (P.cfg6.x > 0.5 && phase == 1u && histOK) {
-      // 예산 모드(AUTO): 체커보드의 절반 픽셀은 이번 프레임 2차 광선을 쏘지 않고 히스토리를 재사용
-      outR = acc1 / wsum;
-      outG = acc2 / wsum;
-    } else {
-      let pe = o + d * ph.t;
-      let ps = surfAt(ph, pe);
-      var newR = vec4<f32>(0.0);
-      var newG = vec4<f32>(0.0);
-      // 반사: 프레넬(Schlick) x 거칠기 가중 → 가중치가 낮은 픽셀(마른 콘크리트·마른 도로)은 광선을 쏘지 않는다 = 재질/젖음/거리 기반 적응 샘플링
-      if (reflOn && ph.t < P.cfg3.y) {
-        let cosv = clamp(dot(n, -d), 0.0, 1.0);
-        let F = ps.f0 + (vec3<f32>(1.0) - ps.f0) * pow(1.0 - cosv, 5.0);
-        let spec = (1.0 - ps.rough) * (1.0 - ps.rough);
-        let fade = 1.0 - smoothstep(0.6, 1.0, ph.t / P.cfg3.y);
-        let wv = F * spec * fade;
-        let wm = max(wv.x, max(wv.y, wv.z));
-        if (wm > 0.012) {
-          var nR = 1u;
-          if (P.cfg6.y > 0.5 && wm > 0.2 && ph.t < 150.0) { nR = 2u; }
-          var racc = vec3<f32>(0.0);
-          let rd0 = reflect(d, n);
-          for (var i = 0u; i < nR; i = i + 1u) {
-            var rd = rd0;
-            if (ps.rough > 0.03) {
-              let jr = ps.rough * ps.rough * 1.8;
-              rd = normalize(rd0 + jr * (vec3<f32>(rnd(), rnd(), rnd()) * 2.0 - vec3<f32>(1.0)));
-              if (dot(rd, n) < 0.02) { rd = rd0; }
-            }
-            racc = racc + reflPath(p, rd, P.cfg3.y, u32(P.cfg3.z), P.cfg3.w > 0.5, ph.t);
-          }
-          racc = racc / f32(nR);
-          newR = vec4<f32>(aces(racc) * wv, wm);
-        }
-      }
-      // GI: 지면/벽 모두 대상. 알베도 x (바운스 입사광 평균). 먼 픽셀은 샘플 1개로 줄인다
-      if (giOn && ph.t < P.cfg4.w && ph.kind != 3u) {
-        var nG = u32(P.cfg4.x);
-        if (ph.t > 150.0) { nG = 1u; }
-        var gacc = vec3<f32>(0.0);
-        for (var i = 0u; i < nG; i = i + 1u) { gacc = gacc + giPath(p, n, u32(P.cfg4.z), P.cfg4.y); }
-        gacc = gacc / f32(nG);
-        let fadeG = 1.0 - smoothstep(0.7, 1.0, ph.t / P.cfg4.w);
-        newG = vec4<f32>(aces(gacc * ps.alb) * fadeG, 1.0);
-      }
-      outR = newR;
-      outG = newG;
-      if (histOK) {
-        outR = mix(acc1 / wsum, newR, P.cfg6.w);
-        outG = mix(acc2 / wsum, newG, P.cfg6.w);
-      }
-    }
-  }
-  outR = clamp(outR, vec4<f32>(0.0), vec4<f32>(3.0));
-  outG = clamp(outG, vec4<f32>(0.0), vec4<f32>(3.0));
-
-  histOut[idx] = outV;
-  histOut[NP + idx] = outR;
-  histOut[2u * NP + idx] = outG;
-  let rr8 = u32(clamp(outV.x, 0.0, 1.0) * 255.0 + 0.5);
-  let gg8 = u32(clamp(outV.y, 0.0, 1.0) * 255.0 + 0.5);
-  let bb8 = u32(clamp(outV.z, 0.0, 1.0) * 255.0 + 0.5);
-  let aa8 = select(0u, 255u, outV.w > 0.5);
-  outPacked[idx] = rr8 | (gg8 << 8u) | (bb8 << 16u) | (aa8 << 24u);
-  if (reflOn) { outPacked[NP + idx] = enc3(outR.xyz) | (u32(clamp(outR.w, 0.0, 1.0) * 255.0 + 0.5) << 24u); }
-  if (giOn) { outPacked[2u * NP + idx] = enc3(outG.xyz) | (u32(clamp(outG.w, 0.0, 1.0) * 255.0 + 0.5) << 24u); }
-}
-`;
-
-// ---------- RT 상태/설정 ----------
-const RT_LEVEL_NAMES = ['OFF', 'LOW', 'MED', 'HIGH', 'ULTRA'];
-const RT_CONE = [0, 0.010, 0.022, 0.035, 0.050];      // 태양 원뿔 tan 반경(실제 태양은 ≈0.0047, 부드러운 반그림자를 위해 의도적으로 확대)
-const RT_AODIST = [0, 6, 10, 16, 24];                 // AO 광선 최대 거리(m)
-const RT_AORANGE = [0, 180, 260, 380, 500];           // AO를 계산하는 최대 시야 거리(m)
-const RT_REFL_RANGE = [0, 160, 260, 420, 650];        // 반사를 계산하는 최대 시야 거리(m)이자 반사 광선 최대 길이
-const RT_REFL_SHADOW = [0, 0, 1, 1, 1];               // 반사 히트 지점에서 태양 그림자 광선을 쏠지(LOW는 생략)
-const RT_GI_DIST = [0, 22, 36, 56, 80];               // GI 바운스 광선 최대 길이(m)
-const RT_GI_RANGE = [0, 110, 190, 290, 420];          // GI를 계산하는 최대 시야 거리(m)
-const RT_NIGHT_WET = 0.5;                             // 야간 노면 젖음 가정치(게임 래스터는 흐림에서만 젖음) — RT 반사 전용 연출 값
-const RT_RES = [0.25, 0.33, 0.5, 0.66, 0.75];
-const RT_PRESETS = {
-  low:    { shadowQ: 1, aoQ: 1, reflQ: 1, giQ: 1, samples: 3, res: 0.25, denoise: true, giSamples: 1, giBounces: 1, reflBounces: 1 },
-  medium: { shadowQ: 2, aoQ: 2, reflQ: 2, giQ: 2, samples: 4, res: 0.33, denoise: true, giSamples: 1, giBounces: 1, reflBounces: 1 },
-  high:   { shadowQ: 3, aoQ: 3, reflQ: 3, giQ: 3, samples: 6, res: 0.5,  denoise: true, giSamples: 2, giBounces: 1, reflBounces: 1 },
-  ultra:  { shadowQ: 4, aoQ: 4, reflQ: 4, giQ: 4, samples: 8, res: 0.66, denoise: true, giSamples: 2, giBounces: 2, reflBounces: 2 }
-};
-const RT_UBYTES = 416;                                // 유니폼 크기: 1차 304B + 2차 하늘/반사/GI/예산 파라미터 7 x vec4
-const RT = {
-  cfg: { mode: 'off', shadowQ: 2, aoQ: 2, reflQ: 2, giQ: 2, samples: 4, res: 0.33, denoise: true, giSamples: 1, giBounces: 1, reflBounces: 1, dbg: false, mask: false },
-  supported: null, status: '대기 중', reason: '', adapterName: '', hwRT: false,
-  device: null, pipeline: null, ready: false, initStarted: false, error: '',
-  worker: null, bvh: null, bvhCenter: [1e9, 1e9], bvhBusy: false, bvhId: 0, lastBuildT: 0, lastColCount: -1, lastBuildMs: 0,
-  gpuNodes: null, gpuTris: null, nodeCount: 0, triCount: 0,
-  W: 0, H: 0, hist: [null, null], packed: null, staging: [], stState: [], gen: 0, pp: 0, bg: [null, null],
-  ubuf: null, uab: new ArrayBuffer(RT_UBYTES), frame: 0,
-  tex: null, texData: null, texR: null, texRData: null, texG: null, texGData: null, comp: null, compAdd: null, quadMul: null, quadAdd: null, qScene: null, qCam: null,
-  prevSnap: null, shownSnap: null, shownFrame: -1, hasShown: false,
-  histM: null, compM: null, tmpR: null, maskMode: 0,
-  fps: 0, ft: 0, lastT: 0, lastStat: 0, lat: 0, dropped: 0, hitPct: 0, occPct: 0, rays: 0, shRays: 0, aoRays: 0,
-  reflFrames: 0, giFrames: 0, reflPct: 0, reflLum: 0, giLum: 0, reflRays: 0, giRays: 0, eff: { rq: 0, gq: 0, half: false, night: 0, wet: 0 },
-  auto: { res: 0.33, samples: 4, rq: 2, gq: 2, half: false, cool: 0, acc: 0, n: 0 },
-  shadowActive: false, wasShadowActive: false, memMB: 0, dbgEl: null, dbgT: 0
-};
-RT.uf = new Float32Array(RT.uab); RT.uu = new Uint32Array(RT.uab);
-const RT_NIGHT_K = { night: 1.0, sunset: 0.45, cloudy: 0.12, day: 0.0 };   // 창문 점등 정도(기존 vfxGlowValue와 같은 값)
-function rtNightK() { const v = RT_NIGHT_K[currentWeatherMode]; return v === undefined ? 0 : v; }
-
-// ---------- 재질 태깅: 콜라이더 → 삼각형별 재질 ID/알베도/창문 점등률 ----------
-// 콜라이더에는 재질 정보가 없다. 그래서 이름(랜드마크)·높이·건축연도(OSM CONSTRUCTION_YEAR)로 추정한다. 실제 텍스처/머티리얼에서 읽은 값이 아니라 휴리스틱이다.
-const RT_LANDMARK_RGB = [[/Empire State/i, 0xb9b09c], [/Flatiron/i, 0xb9a994], [/Woolworth/i, 0xb9ad96], [/Rockefeller/i, 0xb5a996], [/Grand Central/i, 0xd3c5a8], [/Patrick/i, 0xd8d6ce], [/Guggenheim/i, 0xe8e5dc], [/Metropolitan/i, 0xd1c5ae]];
-function rtColMeta(col) {
-  if (col._rtm) return col._rtm;
-  const name = col.name || '', top = col.maxY || 0, year = col.rtYear || 0;
-  const hs = Math.abs(Math.sin((col.centX || 0) * 12.9898 + (col.centZ || 0) * 78.233) * 43758.5453) % 1;
-  let mat = 0, rgb = 0x8a8f96, win = 0.30;
-  if (/World Trade/i.test(name)) { mat = 1; rgb = 0x789bb6; win = 0.55; }
-  else if (/Chrysler/i.test(name)) { mat = 2; rgb = 0xb9c0c4; win = 0.40; }
-  else if (/Times/i.test(name)) { mat = 4; rgb = 0x2a3340; win = 0.70; }
-  else {
-    let lm = null; for (const e of RT_LANDMARK_RGB) if (e[0].test(name)) { lm = e[1]; break; }
-    if (lm !== null) { mat = 0; rgb = lm; win = 0.30; }
-    else if (top > 100) { if (year === 0 || year >= 1950) { mat = 1; rgb = 0x647b8d; win = 0.55; } else { mat = 0; rgb = 0x9b9284; win = 0.30; } }
-    else if (top > 45 && year >= 1960 && hs < 0.5) { mat = 1; rgb = 0x788895; win = 0.50; }
-    else { mat = 0; rgb = (year && year < 1940) ? 0x8b6f5a : 0x788895; win = (year && year < 1940) ? 0.25 : 0.30; }
-  }
-  col._rtm = { mat, rgb, win, seed: ((hs * 524287) | 0) & 0x7ffff };
-  return col._rtm;
-}
-function rtPack(rgb, mat) { return (((rgb & 0xff0000) >> 16) | (rgb & 0x00ff00) | ((rgb & 0x0000ff) << 16) | (mat << 24)) >>> 0; }   // r=bit0-7 g=8-15 b=16-23 (셰이더 디코드와 일치)
-function rtColTris(col) {
-  if (col._rtt !== undefined) return col._rtt;
-  const tr = gfxColTris(col); col._rtt = null; if (!tr) return null;
-  const n = (tr.length / 9) | 0, m = rtColMeta(col), meta = new Uint32Array(n * 2);
-  const wall = rtPack(m.rgb, m.mat), roof = rtPack(0x475569, 0), wb = (Math.round(m.win * 255) | (m.seed << 8)) >>> 0;
-  for (let i = 0; i < n; i++) {
-    const o = i * 9, flat = (tr[o + 1] === tr[o + 4] && tr[o + 4] === tr[o + 7]);      // 세 정점의 y가 같으면 지붕/바닥 삼각형
-    meta[i * 2] = flat ? roof : wall; meta[i * 2 + 1] = flat ? 0 : wb;
-  }
-  col._rtt = { tris: tr, meta };
-  return col._rtt;
-}
-
-function rtLoadCfg() { try { const s = JSON.parse(localStorage.getItem('rtCfg') || 'null'); if (s && typeof s === 'object') Object.assign(RT.cfg, s); } catch (e) {} RT.cfg.mask = false; rtSanitizeCfg(); }
-function rtSaveCfg() { try { localStorage.setItem('rtCfg', JSON.stringify(RT.cfg)); } catch (e) {} }
-function rtSanitizeCfg() { const c = RT.cfg, cl = (v, a, b, d) => (typeof v === 'number' && isFinite(v)) ? Math.max(a, Math.min(b, Math.round(v))) : d;
-  c.shadowQ = cl(c.shadowQ, 0, 4, 2); c.aoQ = cl(c.aoQ, 0, 4, 2); c.reflQ = cl(c.reflQ, 0, 4, 2); c.giQ = cl(c.giQ, 0, 4, 2);
-  c.giSamples = cl(c.giSamples, 1, 4, 1); c.giBounces = cl(c.giBounces, 1, 2, 1); c.reflBounces = cl(c.reflBounces, 1, 2, 1); c.samples = cl(c.samples, 1, 12, 4); }
-
-// ---------- 기능 감지 ----------
-async function rtDetect() {
-  if (RT.supported !== null) return RT.supported;
-  if (!window.isSecureContext) { RT.supported = false; RT.reason = '보안 컨텍스트(https/localhost)가 아니어서 WebGPU를 쓸 수 없음'; return false; }
-  if (!navigator.gpu) { RT.supported = false; RT.reason = '이 브라우저는 WebGPU(navigator.gpu)를 지원하지 않음'; return false; }
-  try {
-    const ad = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
-    if (!ad) { RT.supported = false; RT.reason = 'WebGPU 어댑터를 얻지 못함(GPU/드라이버 미지원 또는 차단)'; return false; }
-    let info = ad.info || null;
-    if (!info && ad.requestAdapterInfo) { try { info = await ad.requestAdapterInfo(); } catch (e) {} }
-    RT.adapterName = info ? ([info.vendor, info.architecture, info.description || info.device].filter(Boolean).join(' ') || 'unknown') : 'unknown';
-    RT.adapter = ad; RT.supported = true; return true;
-  } catch (e) { RT.supported = false; RT.reason = 'WebGPU 초기화 오류: ' + (e && e.message || e); return false; }
-}
-
-// ---------- WebGPU 디바이스/파이프라인 ----------
-async function rtInitGPU() {
-  if (RT.ready || RT.initStarted) return;
-  RT.initStarted = true; RT.status = 'WebGPU 초기화 중…'; rtRefreshUI();
-  try {
-    if (!(await rtDetect())) { RT.status = '미지원: ' + RT.reason; RT.initStarted = false; RT.failed = true; rtRefreshUI(); return; }
-    const device = await RT.adapter.requestDevice();
-    RT.device = device;
-    device.lost.then((inf) => { RT.error = '디바이스 손실: ' + inf.message; RT.ready = false; RT.status = RT.error; rtRefreshUI(); });
-    device.addEventListener && device.addEventListener('uncapturederror', (ev) => { RT.error = 'GPU 오류: ' + (ev.error && ev.error.message || ''); });
-    const mod = device.createShaderModule({ code: RT_WGSL });
-    if (mod.getCompilationInfo) {
-      const ci = await mod.getCompilationInfo();
-      const errs = ci.messages.filter(m => m.type === 'error');
-      if (errs.length) throw new Error('WGSL 컴파일 실패: ' + errs.slice(0, 3).map(m => m.lineNum + ':' + m.message).join(' | '));
-    }
-    device.pushErrorScope('validation');
-    RT.pipeline = device.createComputePipeline({ layout: 'auto', compute: { module: mod, entryPoint: 'main' } });
-    const verr = await device.popErrorScope();
-    if (verr) throw new Error('파이프라인 검증 실패: ' + verr.message);
-    RT.ubuf = device.createBuffer({ size: RT_UBYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-    RT.ready = true; RT.status = '준비됨(소프트웨어 BVH 컴퓨트 RT)';
-    rtEnsureScene();
-  } catch (e) {
-    RT.error = String(e && e.message || e); RT.status = '초기화 실패: ' + RT.error; RT.ready = false; RT.initStarted = false; RT.failed = true;
-    console.warn('[RT]', e);
-  }
-  rtRefreshUI();
-}
-
-// ---------- 합성 패스 (WebGL): ① 곱셈(섀도·AO) ② 가산(반사 + GI) ----------
-const RT_VS = 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }';
-const RT_REPROJ_GLSL = `vec4 hp = uM * vec4(vUv * 2.0 - 1.0, 1.0, 1.0);
-        if (hp.w <= 0.0) discard;
-        vec2 uv = hp.xy / hp.w * 0.5 + 0.5;
-        if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) discard;`;
-function rtEnsureScene() {
-  if (RT.qScene) return;
-  RT.qScene = new THREE.Scene();
-  RT.qCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
-  RT.histM = new THREE.Matrix4(); RT.compM = new THREE.Matrix4(); RT.tmpR = new THREE.Matrix4();
-  RT.comp = new THREE.ShaderMaterial({
-    depthTest: false, depthWrite: false, transparent: false,
-    blending: THREE.CustomBlending, blendEquation: THREE.AddEquation, blendSrc: THREE.DstColorFactor, blendDst: THREE.ZeroFactor,
-    uniforms: { tRT: { value: null }, uM: { value: new THREE.Matrix4() }, uTexel: { value: new THREE.Vector2(1, 1) },
-      uShadowStr: { value: 0.5 }, uAoStr: { value: 0.6 }, uDenoise: { value: 1 }, uMode: { value: 0 } },
-    vertexShader: RT_VS,
-    fragmentShader: `uniform sampler2D tRT; uniform mat4 uM; uniform vec2 uTexel; uniform float uShadowStr, uAoStr, uDenoise, uMode; varying vec2 vUv;
-      void main(){
-        ${RT_REPROJ_GLSL}
-        vec4 c = texture2D(tRT, uv);
-        if (uDenoise > 0.5) {
-          vec4 acc = c * 4.0; float ws = 4.0;
-          for (int j = -1; j <= 1; j++) for (int i = -1; i <= 1; i++) {
-            if (i == 0 && j == 0) continue;
-            vec4 s = texture2D(tRT, uv + vec2(float(i), float(j)) * uTexel);
-            float w = (abs(s.b - c.b) < 0.02 && abs(s.a - c.a) < 0.5) ? 1.0 : 0.0;
-            acc += s * w; ws += w;
-          }
-          c = acc / ws;
-        }
-        if (uMode > 0.5) { gl_FragColor = vec4(c.r, c.g, c.a * 0.5, 1.0); return; }
-        float f = 1.0 - (1.0 - c.r) * uShadowStr - (1.0 - c.g) * uAoStr;
-        f = mix(1.0, clamp(f, 0.2, 1.0), step(0.5, c.a));
-        gl_FragColor = vec4(vec3(f), 1.0);
-      }`
-  });
-  // 가산 합성: 컴퓨트가 이미 "프레넬·거칠기·알베도 가중"을 곱해 둔 반사 RGB와 GI RGB를 래스터 결과에 더한다(One, One).
-  // 반사 가중치(재질별 F0/프레넬)는 컴퓨트에서 주 히트의 재질로 계산하므로 WebGL 쪽은 재질을 몰라도 된다.
-  RT.compAdd = new THREE.ShaderMaterial({
-    depthTest: false, depthWrite: false, transparent: false,
-    blending: THREE.CustomBlending, blendEquation: THREE.AddEquation, blendSrc: THREE.OneFactor, blendDst: THREE.OneFactor,
-    blendEquationAlpha: THREE.AddEquation, blendSrcAlpha: THREE.ZeroFactor, blendDstAlpha: THREE.OneFactor,
-    uniforms: { tRT: { value: null }, tRefl: { value: null }, tGI: { value: null }, uM: { value: new THREE.Matrix4() }, uTexel: { value: new THREE.Vector2(1, 1) },
-      uDenoise: { value: 1 }, uMode: { value: 0 }, uReflStr: { value: 1 }, uGiStr: { value: 0.9 }, uUseR: { value: 0 }, uUseG: { value: 0 } },
-    vertexShader: RT_VS,
-    fragmentShader: `uniform sampler2D tRT, tRefl, tGI; uniform mat4 uM; uniform vec2 uTexel; uniform float uDenoise, uMode, uReflStr, uGiStr, uUseR, uUseG; varying vec2 vUv;
-      vec3 dec(vec4 t){ return t.rgb * t.rgb * 1.5; }
-      void main(){
-        ${RT_REPROJ_GLSL}
-        vec4 c = texture2D(tRT, uv);
-        if (c.a < 0.5) { if (uMode > 0.5) { gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); return; } discard; }
-        vec3 rv = dec(texture2D(tRefl, uv)) , gv = dec(texture2D(tGI, uv));
-        if (uDenoise > 0.5) {
-          vec3 ra = rv * 4.0, ga = gv * 4.0; float ws = 4.0;
-          for (int j = -1; j <= 1; j++) for (int i = -1; i <= 1; i++) {
-            if (i == 0 && j == 0) continue;
-            vec2 o = uv + vec2(float(i), float(j)) * uTexel;
-            vec4 s = texture2D(tRT, o);
-            float w = (abs(s.b - c.b) < 0.02 && abs(s.a - c.a) < 0.5) ? 1.0 : 0.0;
-            ra += dec(texture2D(tRefl, o)) * w; ga += dec(texture2D(tGI, o)) * w; ws += w;
-          }
-          rv = ra / ws; gv = ga / ws;
-        }
-        if (uMode > 1.5 && uMode < 2.5) { gl_FragColor = vec4(rv * 2.0, 1.0); return; }
-        if (uMode > 2.5) { gl_FragColor = vec4(gv * 4.0, 1.0); return; }
-        gl_FragColor = vec4(rv * uReflStr * uUseR + gv * uGiStr * uUseG, 1.0);
-      }`
-  });
-  RT.quadMul = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), RT.comp); RT.quadMul.frustumCulled = false; RT.qScene.add(RT.quadMul);
-  RT.quadAdd = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), RT.compAdd); RT.quadAdd.frustumCulled = false; RT.qScene.add(RT.quadAdd);
-}
-
-// ---------- 버퍼/텍스처 크기 관리 ----------
-function rtWantRes() { return RT.cfg.mode === 'auto' ? RT.auto.res : RT.cfg.res; }
-function rtWantSamples() { return RT.cfg.mode === 'auto' ? RT.auto.samples : RT.cfg.samples; }
-function rtMkTex(data, W, H) {
-  const t = new THREE.DataTexture(data, W, H, THREE.RGBAFormat, THREE.UnsignedByteType);
-  t.minFilter = t.magFilter = THREE.LinearFilter; t.generateMipmaps = false; t.flipY = false; t.needsUpdate = true; return t;
-}
-function rtResize() {
-  const sc = rtWantRes();
-  let W = Math.max(96, Math.round(window.innerWidth * sc)), H = Math.max(96, Math.round(window.innerHeight * sc));
-  const cap = 1000000; if (W * H > cap) { const k = Math.sqrt(cap / (W * H)); W = Math.round(W * k); H = Math.round(H * k); }
-  if (W === RT.W && H === RT.H && RT.packed) return;
-  const dev = RT.device; RT.gen++;
-  for (const b of [RT.hist[0], RT.hist[1], RT.packed, ...RT.staging]) { try { b && b.destroy(); } catch (e) {} }
-  RT.W = W; RT.H = H; const n = W * H;
-  RT.hist[0] = dev.createBuffer({ size: n * 16 * 3, usage: GPUBufferUsage.STORAGE });      // 3개 평면(섀도/AO · 반사 · GI) x vec4
-  RT.hist[1] = dev.createBuffer({ size: n * 16 * 3, usage: GPUBufferUsage.STORAGE });
-  RT.packed = dev.createBuffer({ size: n * 4 * 3, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
-  RT.staging = []; RT.stState = [];
-  for (let i = 0; i < 3; i++) { RT.staging.push(dev.createBuffer({ size: n * 4 * 3, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST })); RT.stState.push(0); }
-  RT.texData = new Uint8Array(n * 4); RT.texRData = new Uint8Array(n * 4); RT.texGData = new Uint8Array(n * 4);
-  for (let i = 3; i < n * 4; i += 4) RT.texData[i] = 0;
-  for (const t of [RT.tex, RT.texR, RT.texG]) if (t) t.dispose();
-  RT.tex = rtMkTex(RT.texData, W, H); RT.texR = rtMkTex(RT.texRData, W, H); RT.texG = rtMkTex(RT.texGData, W, H);
-  RT.comp.uniforms.tRT.value = RT.tex; RT.comp.uniforms.uTexel.value.set(1 / W, 1 / H);
-  const ua = RT.compAdd.uniforms; ua.tRT.value = RT.tex; ua.tRefl.value = RT.texR; ua.tGI.value = RT.texG; ua.uTexel.value.set(1 / W, 1 / H);
-  RT.prevSnap = null; RT.hasShown = false; RT.shownSnap = null; RT.bg = [null, null]; RT.reflFrames = 0; RT.giFrames = 0;
-  rtRebindGroups();
-  RT.memMB = (RT.nodeCount * 32 + RT.triCount * 48 + n * (16 * 3 * 2 + 12 + 12 * 3 + 12)) / 1048576;
-}
-function rtRebindGroups() {
-  if (!RT.device || !RT.pipeline || !RT.packed || !RT.gpuNodes) return;
-  const lay = RT.pipeline.getBindGroupLayout(0);
-  for (let k = 0; k < 2; k++) {
-    RT.bg[k] = RT.device.createBindGroup({ layout: lay, entries: [
-      { binding: 0, resource: { buffer: RT.ubuf } }, { binding: 1, resource: { buffer: RT.gpuNodes } }, { binding: 2, resource: { buffer: RT.gpuTris } },
-      { binding: 3, resource: { buffer: RT.hist[k] } }, { binding: 4, resource: { buffer: RT.hist[1 - k] } }, { binding: 5, resource: { buffer: RT.packed } } ] });
-  }
-}
-
-// ---------- 정적 지오메트리 수집 + BVH (워커) — 삼각형별 재질 메타 포함 ----------
-const RT_TRI_CAP = 80000;
-function rtGather(px, pz, R) {
-  const gx = Math.floor(px / SPATIAL_CELL), gz = Math.floor(pz / SPATIAL_CELL), rc = Math.ceil(R / SPATIAL_CELL);
-  const seen = new Set(), cands = [];
-  for (let ox = -rc; ox <= rc; ox++) for (let oz = -rc; oz <= rc; oz++) {
+function rtRebuild(px, pz) {
+  const gx = Math.floor(px / SPATIAL_CELL), gz = Math.floor(pz / SPATIAL_CELL), N = Math.ceil(RT.size / 2 / SPATIAL_CELL) + 1, seen = new Set(), parts = []; let total = 0;
+  const R = RT.size / 2 + 20;
+  for (let ox = -N; ox <= N; ox++) for (let oz = -N; oz <= N; oz++) {
     const list = spatialColliderGrid.get((gx + ox) + ',' + (gz + oz)); if (!list) continue;
     for (const c of list) {
       if (seen.has(c)) continue; seen.add(c);
       if (!c.maxY || c.maxY - (c.minY || 0) < 5) continue;
-      cands.push({ c, d: Math.hypot(c.centX - px, c.centZ - pz) * (c.name ? 0.4 : 1) });   // 이름 있는 랜드마크 우선
+      if (Math.abs(c.centX - px) > R || Math.abs(c.centZ - pz) > R) continue;
+      const tr = gfxColTris(c); if (!tr) continue;
+      const id = (((Math.floor(c.centX * 3) * 73856093) ^ (Math.floor(c.centZ * 3) * 19349663)) >>> 0) % 251 + 1;
+      parts.push(tr, id / 255); total += tr.length;
     }
   }
-  const rn = 10;                                                                        // 먼 랜드마크(월스트리트·ESB 등) 우선 포함
-  for (let ox = -rn; ox <= rn; ox++) for (let oz = -rn; oz <= rn; oz++) {
-    if (Math.abs(ox) <= rc && Math.abs(oz) <= rc) continue;
-    const list = spatialColliderGrid.get((gx + ox) + ',' + (gz + oz)); if (!list) continue;
-    for (const c of list) { if (!c.name || seen.has(c) || !c.maxY || c.maxY - (c.minY || 0) < 5) continue; seen.add(c); cands.push({ c, d: Math.hypot(c.centX - px, c.centZ - pz) * 0.4 }); }
-  }
-  cands.sort((a, b) => a.d - b.d);
-  const parts = []; let total = 0;
-  for (const k of cands) {
-    const tr = rtColTris(k.c); if (!tr) continue;
-    if ((total + tr.tris.length) / 9 > RT_TRI_CAP) break;
-    parts.push(tr); total += tr.tris.length;
-  }
-  const out = new Float32Array(total), meta = new Uint32Array(total / 9 * 2); let o = 0, mo = 0;
-  for (const p of parts) { out.set(p.tris, o); o += p.tris.length; meta.set(p.meta, mo); mo += p.meta.length; }
-  return { tris: out, meta };
+  const pos = new Float32Array(total), ids = new Float32Array(total / 3); let o = 0;
+  for (let i = 0; i < parts.length; i += 2) { const tr = parts[i]; pos.set(tr, o); ids.fill(parts[i + 1], o / 3, (o + tr.length) / 3); o += tr.length; }
+  if (RT.mesh) { RT.scene.remove(RT.mesh); RT.geo.dispose(); }
+  RT.geo = new THREE.BufferGeometry(); RT.geo.setAttribute('position', new THREE.BufferAttribute(pos, 3)); RT.geo.setAttribute('aId', new THREE.BufferAttribute(ids, 1));
+  RT.mesh = new THREE.Mesh(RT.geo, RT.mat); RT.mesh.frustumCulled = false; RT.scene.add(RT.mesh);
+  RT.cx = px; RT.cz = pz; RT.nCol = triangleColliders.length;
+  RT.cam.position.set(px, 800, pz); RT.cam.lookAt(px, 0, pz); RT.cam.updateMatrixWorld(true);
+  const old = renderer.getRenderTarget(), cc = new THREE.Color(); renderer.getClearColor(cc); const ca = renderer.getClearAlpha();
+  const sa = renderer.shadowMap.autoUpdate; renderer.shadowMap.autoUpdate = false;
+  renderer.setRenderTarget(RT.target); renderer.setClearColor(0x000000, 0); renderer.clear(true, true, false);
+  renderer.render(RT.scene, RT.cam);
+  renderer.setRenderTarget(old); renderer.setClearColor(cc, ca); renderer.shadowMap.autoUpdate = sa;
+  RT.ready = total > 0;
 }
-function rtStartBuild(force) {
-  if (RT.bvhBusy || !RT.ready) return;
-  const px = player.pos.x, pz = player.pos.z, now = performance.now();
-  const moved = Math.hypot(px - RT.bvhCenter[0], pz - RT.bvhCenter[1]);
-  const cc = (typeof triangleColliders !== 'undefined') ? triangleColliders.length : 0;
-  const stale = moved > 70 || (cc !== RT.lastColCount && now - RT.lastBuildT > 6000);
-  if (!force && !stale) return;
-  RT.bvhBusy = true; RT.lastBuildT = now; RT.lastColCount = cc;
-  const g = rtGather(px, pz, 400), tris = g.tris, meta = g.meta, id = ++RT.bvhId, cx = px, cz = pz;
-  const done = (r) => {
-    RT.bvhBusy = false; if (!RT.ready) return;
-    RT.lastBuildMs = r.ms || 0; RT.bvhCenter = [cx, cz];
-    const dev = RT.device;
-    const nb = dev.createBuffer({ size: Math.max(32, r.nodes.byteLength), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
-    dev.queue.writeBuffer(nb, 0, r.nodes);
-    const tb = dev.createBuffer({ size: Math.max(48, r.tris.byteLength), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
-    dev.queue.writeBuffer(tb, 0, r.tris);
-    const on = RT.gpuNodes, ot = RT.gpuTris;
-    RT.gpuNodes = nb; RT.gpuTris = tb; RT.nodeCount = r.nodeCount; RT.triCount = r.triCount;
-    rtRebindGroups();
-    setTimeout(() => { try { on && on.destroy(); ot && ot.destroy(); } catch (e) {} }, 500);
-  };
-  if (tris.length < 9) { done({ nodes: new ArrayBuffer(32), tris: new Float32Array(12), nodeCount: 0, triCount: 0, ms: 0 }); return; }
-  try {
-    if (!RT.worker) {
-      const code = rtBuildBVH.toString() + ';self.onmessage=function(e){var t=performance.now();var r=rtBuildBVH(e.data.tris,e.data.meta);r.ms=performance.now()-t;r.id=e.data.id;self.postMessage(r,[r.nodes,r.tris.buffer]);};';
-      RT.worker = new Worker(URL.createObjectURL(new Blob([code], { type: 'text/javascript' })));
-    }
-    RT.worker.onmessage = (e) => { if (e.data.id === id) done(e.data); else RT.bvhBusy = false; };
-    RT.worker.onerror = () => { RT.worker = null; RT.bvhBusy = false; };
-    RT.worker.postMessage({ tris, meta, id }, [tris.buffer, meta.buffer]);
-  } catch (e) {                                                                          // 워커를 못 쓰면 메인 스레드에서 1회 빌드
-    setTimeout(() => { const t = performance.now(); const r = rtBuildBVH(tris, meta); r.ms = performance.now() - t; done(r); }, 0);
-  }
+function rtUpdate(px, pz) {
+  if (!RT.target) rtInit();
+  if (RT.wait-- > 0) return;
+  if (Math.hypot(px - RT.cx, pz - RT.cz) > 55 || (triangleColliders.length !== RT.nCol && Math.hypot(px - RT.cx, pz - RT.cz) > 8) || RT.cx > 1e8) { rtRebuild(px, pz); RT.wait = 20; }
 }
+const RT_GLSL = `
+      uniform float rtMaxDist, rtSteps;   // 최대 광선 거리(m) / 스텝 예산 (동적 품질에서 조절)
+      float rtH(vec2 xz, out float id){
+        vec2 uv = vec2((xz.x - rtInfo.x) * rtInfo.w + 0.5, 0.5 - (xz.y - rtInfo.y) * rtInfo.w);
+        if (uv.x < 0.003 || uv.x > 0.997 || uv.y < 0.003 || uv.y > 0.997) { id = 0.0; return -1.0; }
+        vec4 t = texture2D(tRT, uv); id = t.b;
+        return t.a > 0.5 ? (t.r + t.g / 255.0) * 640.0 : 0.0;
+      }
+      float rtShadow(vec3 p, vec3 L){
+        float t = 1.0;
+        for (int i = 0; i < 14; i++) {
+          vec3 q = p + L * t; float id; float h = rtH(q.xz, id);
+          if (h < 0.0 || q.y > 520.0) return 1.0;
+          if (q.y < h) return 0.0;
+          t += 1.5 + t * 0.35;
+        }
+        return 1.0;
+      }
+      float rtSph(vec3 o, vec3 d, vec3 c, float r){ vec3 oc = o - c; float b = dot(oc, d); float cc = dot(oc, oc) - r * r; float ds = b * b - cc; if (ds < 0.0) return -1.0; float t = -b - sqrt(ds); return t > 0.0 ? t : -1.0; }
+      vec3 rtAlb(float id){
+        float b = floor(id * 255.0 + 0.5), h = fract(b * 0.618034), v = 0.8 + 0.4 * fract(b * 0.37);
+        vec3 c = h < 0.26 ? vec3(0.17, 0.28, 0.38) : (h < 0.50 ? vec3(0.42, 0.25, 0.20) : (h < 0.76 ? vec3(0.50, 0.48, 0.44) : vec3(0.32, 0.34, 0.38)));
+        return c * v;
+      }
+      vec3 rtLight(vec3 hp, vec3 n, vec3 alb, vec3 emis, float dist){
+        float ndl = max(dot(n, sunDirW), 0.0);
+        float sh = ndl > 0.0 ? rtShadow(hp + n * 0.7, sunDirW) : 0.0;
+        vec3 amb = mix(skyHor * 0.55, skyTop * 0.75, clamp(n.y * 0.5 + 0.5, 0.0, 1.0));
+        vec3 c = alb * (amb * 1.4 + sunCol * sunI * ndl * sh * 0.9) + emis;
+        float f = 1.0 - exp(-dist * (fogK * 1.6 + 0.0004));
+        return mix(c, fogCol * 0.55, f);
+      }
+      vec3 rtTrace(vec3 o, vec3 d, vec3 skyC){
+        float tMax = rtMaxDist;
+        if (d.y < -1e-4) tMax = min(tMax, -o.y / d.y);
+        if (d.y > 1e-4) tMax = min(tMax, (520.0 - o.y) / d.y);
+        float t = 0.8, tp = 0.8, hitT = -1.0, id = 0.0; bool left = false;
+        float h0 = rtH(o.xz + d.xz * t, id); bool was = (o + d * t).y < h0 && h0 >= 0.0;
+        for (int i = 0; i < 72; i++) {
+          if (float(i) >= rtSteps) break;
+          vec3 p = o + d * t; float h = rtH(p.xz, id);
+          if (h < 0.0) { left = true; break; }
+          bool ins = p.y < h;
+          if (ins && !was) {
+            float a = tp, b = t;
+            for (int j = 0; j < 6; j++) { float m = (a + b) * 0.5; vec3 q = o + d * m; float hi; if (q.y < rtH(q.xz, hi)) b = m; else a = m; }
+            hitT = b; break;
+          }
+          was = ins; tp = t; t += 1.2 + t * 0.035; if (t > tMax) break;
+        }
+        float tg = (d.y < -1e-4) ? -o.y / d.y : 1e9;
+        bool ground = hitT < 0.0 && !left && tg <= tMax + 0.05 && tg > 0.0;
+        float best = hitT >= 0.0 ? hitT : (ground ? tg : 1e9);
+        // 스파이더맨(구 3개로 근사) 레이 교차
+        float ts = -1.0; vec3 sc = vec3(0.0); vec3 sCen = vec3(0.0);
+        vec3 c0 = spPos + vec3(0.0, 1.55, 0.0), c1 = spPos + vec3(0.0, 1.15, 0.0), c2 = spPos + vec3(0.0, 0.58, 0.0);
+        float t0 = rtSph(o, d, c0, 0.17), t1 = rtSph(o, d, c1, 0.30), t2 = rtSph(o, d, c2, 0.25);
+        if (t0 > 0.0) { ts = t0; sCen = c0; sc = vec3(0.65, 0.08, 0.08); }
+        if (t1 > 0.0 && (ts < 0.0 || t1 < ts)) { ts = t1; sCen = c1; sc = vec3(0.65, 0.08, 0.08); }
+        if (t2 > 0.0 && (ts < 0.0 || t2 < ts)) { ts = t2; sCen = c2; sc = vec3(0.10, 0.18, 0.62); }
+        if (ts > 0.0 && ts < best) { vec3 hp = o + d * ts; vec3 n = normalize(hp - sCen); return rtLight(hp, n, sc, vec3(0.0), ts); }
+        if (hitT >= 0.0) {
+          vec3 hp = o + d * hitT; float hid; float hh0 = rtH(hp.xz, hid); float e = 0.8, i1, i2, i3, i4;
+          vec3 n = vec3(0.0, 1.0, 0.0); vec3 emis = vec3(0.0); vec3 alb = rtAlb(hid);
+          if (hh0 - hp.y > 0.4) {
+            float gx = rtH(hp.xz + vec2(e, 0.0), i1) - rtH(hp.xz - vec2(e, 0.0), i2);
+            float gz = rtH(hp.xz + vec2(0.0, e), i3) - rtH(hp.xz - vec2(0.0, e), i4);
+            vec2 g = vec2(gx, gz); if (length(g) < 0.01) g = d.xz;
+            n = normalize(vec3(-g.x, 0.0, -g.y));
+            float fu = dot(hp.xz, vec2(-n.z, n.x)) / 3.0, fy = hp.y / 3.5; vec2 cid = floor(vec2(fu, fy)), f = fract(vec2(fu, fy));
+            float win = step(0.2, f.x) * step(f.x, 0.8) * step(0.28, f.y) * step(f.y, 0.82);
+            float r = hh(cid + floor(hp.xz * 0.01));
+            vec3 glass = mix(vec3(0.07, 0.10, 0.13), vec3(0.28, 0.38, 0.47), f.y * 0.8) * (0.8 + 0.5 * r);
+            emis = vec3(1.0, 0.78, 0.46) * step(0.72, r) * win * winGlow * (0.6 + 0.9 * hh(cid + 7.3));
+            alb = mix(alb, glass, win * 0.85);
+          }
+          return rtLight(hp, n, alb, emis, hitT);
+        }
+        if (ground) { vec3 hp = o + d * tg; return rtLight(hp, vec3(0.0, 1.0, 0.0), vec3(0.07, 0.075, 0.09), vec3(0.0), tg); }
+        return skyC;
+      }
+`;
 
-// ---------- 매 프레임 ----------
-function rtActive() { return RT.cfg.mode !== 'off' && RT.ready && RT.supported; }
-function rtReproj(out, snap) {
-  RT.tmpR.extractRotation(camera.matrixWorld);
-  out.copy(snap.P).multiply(snap.Rv).multiply(RT.tmpR).multiply(camera.projectionMatrixInverse);
-}
-RT.beforeRender = function () {
-  if (RT.cfg.mode !== 'off' && !RT.initStarted && !RT.failed) rtInitGPU();
-  const want = rtActive() && RT.hasShown && RT.cfg.shadowQ > 0 && RT.triCount > 0 && GFX.sunI > 0.05;
-  RT.shadowActive = !!want;
-  if (want) { sunLight.castShadow = false; if (typeof GFX2 !== 'undefined' && GFX2.sun2) GFX2.sun2.castShadow = false; }   // RT 그림자가 대체
-  else if (RT.wasShadowActive) { try { gfxApplyShadows(); } catch (e) {} }
-  RT.wasShadowActive = want;
-};
-// 이번 프레임에 실제로 쓸 반사/GI 품질 — AUTO면 예산 관리자가 낮춘 값, 입력광이 없으면 GI 생략
-function rtEff() {
-  const c = RT.cfg, A = RT.auto, auto = c.mode === 'auto', sd = GFX.sunDir, night = rtNightK();
-  let rq = auto ? Math.min(c.reflQ, A.rq) : c.reflQ, gq = auto ? Math.min(c.giQ, A.gq) : c.giQ;
-  const sunOk = GFX.sunI > 0.05 && sd.y > 0.02;
-  if (!(sunOk || night > 0.03)) gq = 0;                                  // 태양도 창문 발광도 없으면 바운스할 빛이 없다
-  const wet = Math.max(typeof GFX2 !== 'undefined' ? (GFX2.wet || 0) : 0, currentWeatherMode === 'night' ? RT_NIGHT_WET : 0);
-  RT.eff = { rq: rq | 0, gq: gq | 0, half: auto && A.half, night, wet };
-  return RT.eff;
-}
-RT.afterRender = function () {
-  const now = performance.now();
-  if (RT.lastT) { const dt = now - RT.lastT; if (dt < 500) { RT.ft += (dt - RT.ft) * 0.08; RT.fps = 1000 / Math.max(RT.ft, 0.1); } }
-  RT.lastT = now;
-  if (RT.dbgEl && RT.cfg.dbg && now - RT.dbgT > 250) { RT.dbgT = now; rtRenderDebug(); }
-  if (!rtActive() || document.hidden) return;
-  rtEnsureScene(); rtResize(); rtStartBuild(false);
-  if (!RT.gpuNodes) return;
-  rtEff(); rtAutoTune();
 
-  // 합성(가장 최근에 도착한 결과를 회전 보정해 적용한다)
-  if (RT.hasShown && RT.shownSnap) {
-    const sn = RT.shownSnap, mm = RT.maskMode;
-    rtReproj(RT.compM, sn);
-    const sI = GFX.sunI, qS = RT.cfg.shadowQ > 0 ? 1 : 0, qA = RT.cfg.aoQ > 0 ? 1 : 0;
-    const useR = sn.rq > 0 && sn.planes >= 2 && RT.reflFrames > 0, useG = sn.gq > 0 && sn.planes >= 3 && RT.giFrames > 0;
-    const ac = renderer.autoClear; renderer.autoClear = false; renderer.setRenderTarget(null);
-    if (mm <= 1) {                                                         // ① 곱셈: 섀도 + AO
-      const u = RT.comp.uniforms; u.uM.value.copy(RT.compM); u.uDenoise.value = RT.cfg.denoise ? 1 : 0; u.uMode.value = mm === 1 ? 1 : 0;
-      u.uShadowStr.value = (sI > 0.05 ? Math.min(0.85, 0.3 + 0.2 * sI) : 0) * qS;
-      u.uAoStr.value = (currentWeatherMode === 'night' ? 0.5 : 0.65) * qA;
-      RT.comp.blending = mm === 1 ? THREE.NoBlending : THREE.CustomBlending;
-      RT.quadMul.visible = true; RT.quadAdd.visible = false; renderer.render(RT.qScene, RT.qCam);
-    }
-    if ((mm === 0 && (useR || useG)) || mm >= 2) {                         // ② 가산: 반사(프레넬 가중 반사 RGB) + GI(간접광 RGB)
-      const u = RT.compAdd.uniforms; u.uM.value.copy(RT.compM); u.uDenoise.value = RT.cfg.denoise ? 1 : 0; u.uMode.value = mm;
-      u.uUseR.value = useR ? 1 : 0; u.uUseG.value = useG ? 1 : 0;
-      RT.compAdd.blending = mm >= 2 ? THREE.NoBlending : THREE.CustomBlending;
-      RT.quadMul.visible = false; RT.quadAdd.visible = true; renderer.render(RT.qScene, RT.qCam);
-    }
-    renderer.autoClear = ac;
-  }
-  rtDispatch();
+// =============================================================================
+// ===== HRT: 하이브리드 레이트레이싱 반사 (Selective Hybrid Ray Tracing) =====
+//
+//  [아키텍처 개요]  (시네마틱 품질에서만 동작 / 반사 가능한 픽셀에만 광선 발사)
+//
+//   G-buffer(깊이·법선·반사율)
+//        │
+//        ▼
+//   ① 반사 패스 (50~75% 해상도)  ── 반사율 ≤ 0.03 인 픽셀은 즉시 종료 (Selective)
+//        │   1단계: 화면공간 레이마칭(SSR)  → 화면 안에 보이는 물체는 '정확한 실제 색'으로
+//        │   2단계: 월드공간 하이트필드 RT   → SSR이 놓친 경우에만 호출(화면 밖/카메라 뒤 건물, 그림자, 창문 불빛)
+//        │   3단계: 환경 큐브맵(하늘)        → 둘 다 놓치면 하늘 반사
+//        │   ※ 반사 광선은 표면에서 단 1회만 발사(Bounce = 1). 2차 반사는 추적하지 않는다.
+//        │   ※ 최대 추적 거리(Max Ray Distance)로 광선 길이를 제한한다.
+//        ▼
+//   ② 시간적 디노이저 (Temporal Accumulation)
+//        │   카메라 재투영으로 이전 프레임 결과를 가져와 섞고, 3x3 이웃의 분산(평균±γσ)으로
+//        │   클리핑해서 고스팅을 억제한다. 정지 시에는 매 프레임 레이 방향을 미세하게 흔들어(글로시 지터)
+//        │   누적 → 부드럽고 정확한 반사로 '수렴'한다.
+//        ▼
+//   ③ 합성 셰이더에서 깊이 인식 양선형 업샘플(Bilateral Upsample) 후 화면에 블렌딩
+//
+//  [동적 품질]  카메라가 움직이면: 50% 해상도 · 적은 스텝 · 짧은 거리 · 지터 없음(선명/안정, 빠른 갱신)
+//               카메라가 멈추면: 잠깐 대기 후 75% 해상도 · 많은 스텝 · 긴 거리 · 글로시 지터 누적(고해상도 수렴)
+//  [성능 방어]  프레임 시간 EMA가 길어지면 스텝·해상도를 자동으로 더 줄인다.
+// =============================================================================
+const HRT = {
+  enabled: true,
+  scaleMove: 0.5, scaleStill: (typeof GFX_MOBILE !== 'undefined' && GFX_MOBILE) ? 0.6 : 0.75,
+  settleFrames: 10,            // 정지 후 이 프레임이 지나면 '수렴 모드' 진입
+  maxAccum: 64,                // 수렴 프레임 상한(알파 하한 = 1/maxAccum 근처)
+  scale: 0.5, w: 0, h: 0, cur: null, hist: [null, null], ri: 0,
+  mRefl: null, mTemp: null, hdr: false, reset: true,
+  still: 0, motion: 0, frame: 0, lastT: 0, dtEma: 16.7, perf: 1,
+  prevPos: new THREE.Vector3(), prevFwd: new THREE.Vector3(0, 0, -1), fwd: new THREE.Vector3(),
+  mode: 'move', stats: {}
 };
-// ---------- 프레임 예산 관리(AUTO): 프레임 시간이 초과되면 비용이 큰 순서(반/반 체커보드 → 해상도 → 샘플 → GI → 반사)로 낮추고, 여유가 생기면 역순으로 복구 ----------
-function rtAutoTune() {
-  if (RT.cfg.mode !== 'auto') return;
-  const A = RT.auto, c = RT.cfg; if (A.cool > 0) { A.cool--; return; }
-  A.acc += RT.ft; A.n++;
-  if (A.n < 60) return;
-  const avg = A.acc / A.n; A.acc = 0; A.n = 0;
-  if (avg > 24 || RT.lat > 120) {
-    if (!A.half && (c.reflQ > 0 || c.giQ > 0)) A.half = true;
-    else if (A.res > 0.26) A.res = Math.max(0.25, A.res - 0.04);
-    else if (A.samples > 2) A.samples--;
-    else if (A.gq > 0) A.gq--;
-    else if (A.rq > 1) A.rq--;
-    A.cool = 90;
-  } else if (avg < 15.5) {
-    if (A.rq < c.reflQ) A.rq++;
-    else if (A.gq < c.giQ) A.gq++;
-    else if (A.samples < 6) A.samples++;
-    else if (A.res < 0.5) A.res = Math.min(0.5, A.res + 0.04);
-    else if (A.half) A.half = false;
-    A.cool = 240;
-  }
-}
-function rtDispatch() {
-  const dev = RT.device, bg = RT.bg[RT.pp]; if (!bg) return;
-  let slot = -1; for (let i = 0; i < RT.staging.length; i++) if (RT.stState[i] === 0) { slot = i; break; }
-  if (slot < 0) { RT.dropped++; return; }
-  const c = RT.cfg, U = RT.uf, UU = RT.uu, E = RT.eff;
-  camera.updateMatrixWorld();
-  camera.projectionMatrixInverse.toArray(U, 0); camera.matrixWorld.toArray(U, 16);
-  if (RT.prevSnap) { rtReproj(RT.histM, RT.prevSnap); RT.histM.toArray(U, 32); } else RT.histM.identity().toArray(U, 32);
-  const me = camera.matrixWorld.elements; U[48] = me[12]; U[49] = me[13]; U[50] = me[14]; U[51] = 1;
-  const sd = GFX.sunDir; U[52] = sd.x; U[53] = sd.y; U[54] = sd.z; U[55] = RT_CONE[c.shadowQ];
-  const pp = player.pos; U[56] = pp.x; U[57] = pp.y + 0.35; U[58] = pp.z; U[59] = 0.35;
-  U[60] = pp.x; U[61] = pp.y + 1.45; U[62] = pp.z; U[63] = (isPOVMode || isSpectator) ? 0 : 1;
-  const S = rtWantSamples();
-  let sh = 0, ao = 0;
-  if (c.shadowQ > 0 && c.aoQ > 0) { sh = Math.max(1, Math.round(S / 3)); ao = Math.max(1, S - sh); }
-  else if (c.shadowQ > 0) sh = S; else if (c.aoQ > 0) ao = S;
-  RT.shRays = sh; RT.aoRays = ao;
-  UU[64] = RT.W; UU[65] = RT.H; UU[66] = (RT.frame++) >>> 0; UU[67] = RT.nodeCount;
-  U[68] = sh; U[69] = ao; U[70] = RT_AODIST[c.aoQ] || 1; U[71] = c.denoise ? 0.25 : 1.0;
-  U[72] = 900; U[73] = RT_AORANGE[c.aoQ] || 0; U[74] = (c.denoise && RT.prevSnap) ? 1 : 0; U[75] = 1;
-  // 2차: 하늘(GFX 하늘 셰이더 유니폼을 그대로 읽는다) / 반사 / GI / 날씨·예산
-  const P0 = GFX_SKY[currentWeatherMode] || GFX_SKY.night, su = GFX.sky && GFX.sky.material && GFX.sky.material.uniforms;
-  const top = su ? su.topColor.value : (RT._c1 || (RT._c1 = new THREE.Color())).setHex(P0.top);
-  const sc = su ? su.sunColor.value : (RT._c2 || (RT._c2 = new THREE.Color())).setHex(P0.sun);
-  const hor = scene.fog.color;
-  U[76] = top.r; U[77] = top.g; U[78] = top.b; U[79] = su ? su.exponent.value : P0.exp;
-  U[80] = hor.r; U[81] = hor.g; U[82] = hor.b; U[83] = scene.fog.density || 0;
-  U[84] = sc.r; U[85] = sc.g; U[86] = sc.b; U[87] = GFX.sunI;
-  const rq = E.rq, gq = E.gq;
-  U[88] = rq > 0 ? 1 : 0; U[89] = RT_REFL_RANGE[rq] || 0; U[90] = Math.max(1, Math.min(2, c.reflBounces | 0)); U[91] = RT_REFL_SHADOW[rq] || 0;
-  U[92] = gq > 0 ? Math.max(1, Math.min(4, c.giSamples | 0)) : 0; U[93] = RT_GI_DIST[gq] || 0; U[94] = Math.max(1, Math.min(2, c.giBounces | 0)); U[95] = RT_GI_RANGE[gq] || 0;
-  U[96] = E.wet; U[97] = E.night; U[98] = 0; U[99] = renderer.toneMappingExposure || 1;
-  U[100] = E.half ? 1 : 0; U[101] = rq >= 4 ? 1 : 0; U[102] = 0; U[103] = c.denoise ? 0.35 : 1.0;
-  dev.queue.writeBuffer(RT.ubuf, 0, RT.uab);
-  const planes = gq > 0 ? 3 : (rq > 0 ? 2 : 1);
-  const enc = dev.createCommandEncoder(), pass = enc.beginComputePass();
-  pass.setPipeline(RT.pipeline); pass.setBindGroup(0, bg);
-  (pass.dispatchWorkgroups || pass.dispatch).call(pass, Math.ceil(RT.W / 8), Math.ceil(RT.H / 8));
-  pass.end();
-  const nPx = RT.W * RT.H;
-  enc.copyBufferToBuffer(RT.packed, 0, RT.staging[slot], 0, nPx * 4 * planes);
-  dev.queue.submit([enc.finish()]);
-  const snap = { P: camera.projectionMatrix.clone(), Rv: new THREE.Matrix4().extractRotation(camera.matrixWorld).invert(), id: RT.frame, rq, gq, planes };
-  RT.prevSnap = snap; RT.pp = 1 - RT.pp;
-  const gen = RT.gen, t0 = performance.now(), st = RT.staging[slot];
-  RT.stState[slot] = 1;
-  RT.reflRays = rq > 0 ? nPx * (E.half ? 0.5 : 1) * 0.35 : 0;                // 대략치: 가중치가 낮은 픽셀(마른 콘크리트/도로)은 반사 광선을 쏘지 않으므로 ≈35%만 반사 광선
-  RT.giRays = gq > 0 ? nPx * (E.half ? 0.5 : 1) * Math.max(1, c.giSamples | 0) * Math.max(1, c.giBounces | 0) * 2 : 0;   // 바운스당 (경로 광선 + 그림자 광선)
-  RT.rays = nPx * (1 + sh + ao) + RT.reflRays * 2 + RT.giRays;
-  st.mapAsync(GPUMapMode.READ).then(() => {
-    if (gen !== RT.gen) return;
-    const src = new Uint8Array(st.getMappedRange());
-    if (snap.id > RT.shownFrame) {
-      RT.texData.set(src.subarray(0, nPx * 4)); RT.tex.needsUpdate = true;
-      if (planes >= 2) { RT.texRData.set(src.subarray(nPx * 4, nPx * 8)); RT.texR.needsUpdate = true; RT.reflFrames++; }
-      if (planes >= 3) { RT.texGData.set(src.subarray(nPx * 8, nPx * 12)); RT.texG.needsUpdate = true; RT.giFrames++; }
-      RT.shownFrame = snap.id; RT.shownSnap = snap; RT.hasShown = true;
-      RT.lat += ((performance.now() - t0) - RT.lat) * 0.1;
-      if (performance.now() - RT.lastStat > 400) {                // 실제 동작 증거: 히트/차폐/반사/GI 비율 샘플링
-        RT.lastStat = performance.now();
-        let h = 0, o = 0, n = 0, rp = 0, rl = 0, gl = 0;
-        for (let i = 0; i < nPx * 4; i += 28) {
-          n++;
-          if (src[i + 3] > 127) {
-            h++; if (src[i] < 235) o++;
-            if (planes >= 2) { const a = src[nPx * 4 + i + 3]; if (a > 8) rp++; const q = (src[nPx * 4 + i] + src[nPx * 4 + i + 1] + src[nPx * 4 + i + 2]) / 765; rl += q * q * 1.5; }
-            if (planes >= 3) { const q = (src[nPx * 8 + i] + src[nPx * 8 + i + 1] + src[nPx * 8 + i + 2]) / 765; gl += q * q * 1.5; }
+// 반사/템포럴 패스가 공유하는 GLSL 유틸 (G-buffer 디코딩, 뷰공간 복원, 투영)
+const HRT_COMMON = `
+  float hh(vec2 p){ return fract(sin(dot(p, vec2(12.9898,78.233))) * 43758.5453); }
+  vec3 rotv(vec3 v){ return camWorld[0].xyz * v.x + camWorld[1].xyz * v.y + camWorld[2].xyz * v.z; }
+  // G-buffer: float 모드 = (깊이, 반사율, 법선 옥타헤드럴 xy) / 8bit 모드 = (깊이 상위, 깊이 하위, 반사율)
+  float gDepth(vec2 u, out float rf){ vec4 g = texture2D(tG, u); if (gfl > 0.5) { rf = g.g; return g.r; } rf = g.b; return (g.r + g.g / 255.0) * 2600.0; }
+  vec3 gNorm(vec2 u){ vec2 e = texture2D(tG, u).ba; vec3 n = vec3(e, 1.0 - abs(e.x) - abs(e.y)); if (n.z < 0.0) n.xy = (1.0 - abs(n.yx)) * vec2(n.x >= 0.0 ? 1.0 : -1.0, n.y >= 0.0 ? 1.0 : -1.0); return normalize(n); }
+  // 뷰공간 점 → 화면 UV (핀홀 카메라: x' = x / (-z) / (tan(fov/2) * aspect))
+  vec2 proj(vec3 p){ return vec2(p.x / (-p.z) / (tanHalf * aspect), p.y / (-p.z) / tanHalf) * 0.5 + 0.5; }
+  // 화면 UV + 선형 깊이 → 뷰공간 위치 (proj의 역변환)
+  vec3 vPos(vec2 u, float D){ vec2 n = u * 2.0 - 1.0; return vec3(n.x * tanHalf * aspect * D, n.y * tanHalf * D, -D); }
+`;
+const HRT_VS = 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }';
+
+function hrtBuildMaterials(u) {
+  const reflFS = `
+    uniform sampler2D tScene, tG, tRT; uniform samplerCube tEnv;
+    uniform vec2 gsize; uniform float tanHalf, aspect, gfl, hasEnv, wet, fogK, sunI, winGlow, rtOn;
+    uniform float hrtFrame, hrtSteps, hrtMaxDist, hrtRough, hrtEnc, hrtMaxL;
+    uniform mat4 camWorld; uniform vec3 camPos, fogCol, sunDirW, sunCol, skyTop, skyHor, spPos; uniform vec4 rtInfo;
+    varying vec2 vUv;
+    ${HRT_COMMON}
+    ${RT_GLSL}
+    float h3(vec3 p){ p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
+    float n3(vec3 p){ vec3 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+      return mix(mix(mix(h3(i), h3(i + vec3(1,0,0)), f.x), mix(h3(i + vec3(0,1,0)), h3(i + vec3(1,1,0)), f.x), f.y),
+                 mix(mix(h3(i + vec3(0,0,1)), h3(i + vec3(1,0,1)), f.x), mix(h3(i + vec3(0,1,1)), h3(i + vec3(1,1,1)), f.x), f.y), f.z); }
+    // Interleaved Gradient Noise: 화면 좌표 + 프레임 번호로 만든 저왜곡 노이즈 → 시간적 누적에 유리
+    float ign(vec2 p){ return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715)))); }
+    void main(){
+      vec2 uv = vUv; float rf; float D = gDepth(uv, rf);
+      if (D > 2150.0) { gl_FragColor = vec4(0.0); return; }                       // 하늘: 반사 없음
+      { float a1, a2, a3, a4; vec2 hx = vec2(0.5 / gsize.x, 0.0), hy = vec2(0.0, 0.5 / gsize.y);
+        gDepth(uv + hx + hy, a1); gDepth(uv - hx + hy, a2); gDepth(uv + hx - hy, a3); gDepth(uv - hx - hy, a4);
+        rf = (max(rf, 0.0) + max(a1, 0.0) + max(a2, 0.0) + max(a3, 0.0) + max(a4, 0.0)) / 5.0; }
+      vec3 vp = vPos(uv, D); vec3 wp = camPos + rotv(vp);
+      vec2 tx = vec2(1.0 / gsize.x, 0.0), ty = vec2(0.0, 1.0 / gsize.y); float r1;
+      float Dl = gDepth(uv - tx, r1), Dr = gDepth(uv + tx, r1), Du = gDepth(uv + ty, r1), Dd = gDepth(uv - ty, r1);
+      vec3 dx = abs(Dl - D) < abs(Dr - D) ? vp - vPos(uv - tx, Dl) : vPos(uv + tx, Dr) - vp;
+      vec3 dy = abs(Dd - D) < abs(Du - D) ? vp - vPos(uv - ty, Dd) : vPos(uv + ty, Du) - vp;
+      vec3 nV = normalize(cross(dx, dy)); if (dot(nV, vp) > 0.0) nV = -nV; if (gfl > 0.5) nV = gNorm(uv);
+      vec3 nW = normalize(rotv(nV));
+      // 젖은 노면(흐림 모드) — 합성 패스와 동일한 판정을 사용해 결과가 어긋나지 않게 한다
+      float ground = smoothstep(0.86, 0.96, nW.y) * (1.0 - smoothstep(1.2, 3.5, wp.y));
+      float pn = n3(vec3(wp.xz * 0.18, 1.0)) * 0.65 + n3(vec3(wp.xz * 0.75, 7.0)) * 0.35;
+      float pud = smoothstep(0.46, 0.62, pn);
+      float refl = max(rf, wet * ground * (0.30 + 0.70 * pud));
+      if (refl <= 0.03) { gl_FragColor = vec4(0.0); return; }                      // ★ Selective: 반사 불가 표면은 광선을 쏘지 않는다
+      vec3 V = normalize(vp); vec3 Rv = reflect(V, nV);                            // 거울 반사 방향 R = V - 2(V·N)N
+      float fres = 0.04 + 0.96 * pow(1.0 - clamp(dot(nV, -V), 0.0, 1.0), 5.0);     // Schlick 프레넬 근사
+      // --- 글로시 지터: 거칠기에 비례해 반사 방향을 조금씩 흔든다. 프레임마다 다른 방향을 누적하면
+      //     마이크로패싯 로브(부드러운 반사)로 수렴한다. hrtRough=0(이동 중)이면 완전한 거울 반사.
+      float rough = hrtRough * (ground > 0.5 ? (0.35 + 0.65 * (1.0 - pud)) : (1.0 - 0.8 * smoothstep(0.25, 0.6, rf)));
+      vec3 rn = vec3(ign(gl_FragCoord.xy + hrtFrame * 5.588), ign(gl_FragCoord.yx * 1.31 + hrtFrame * 3.17), ign(gl_FragCoord.xy * 0.77 + hrtFrame * 7.31)) - 0.5;
+      vec3 Rj = normalize(Rv + rn * 2.0 * rough); if (dot(Rj, nV) < 0.02) Rj = Rv;  // 로브가 표면 아래로 파고들지 않게
+      // --- 1단계: 화면공간 레이마칭 (선형 스텝 → 교차 검출 → 이분 탐색 정제 → 두께/뒷면 거부)
+      vec3 hitCol = vec3(0.0); float hit = 0.0;
+      if (Rj.z < 0.5) {                                                            // 카메라 쪽으로 오는 광선은 화면에 정보가 없다
+        float stepL = max(0.8, D * 0.012); vec3 p = vp, pp = vp; float pd = -1.0;
+        p += Rj * stepL * ign(gl_FragCoord.xy + hrtFrame * 2.71);                  // 스텝 시작 지터(밴딩 제거)
+        for (int i = 0; i < 40; i++) {
+          if (float(i) >= hrtSteps) break;                                         // 동적 스텝 예산
+          pp = p; p += Rj * stepL; stepL *= 1.06;                                   // 점점 커지는 스텝(근거리 정밀, 원거리 빠르게)
+          vec3 dd0 = p - vp; if (dot(dd0, dd0) > hrtMaxDist * hrtMaxDist || p.z > -0.3) break;   // ★ Max Ray Distance
+          vec2 su = proj(p); if (su.x < 0.0 || su.x > 1.0 || su.y < 0.0 || su.y > 1.0) break;
+          float tr; float Ds = gDepth(su, tr); float diff = (-p.z) - Ds;           // diff > 0 : 광선이 표면 뒤로 넘어감
+          if (tr < -0.5) continue;                                                 // 스파이더맨 본체는 반사 제외(분신 방지)
+          if (diff > 0.0 && pd <= 0.0 && Ds < 2150.0) {                            // 앞→뒤로 교차한 순간
+            vec3 ra = pp, rb = p;
+            for (int j = 0; j < 6; j++) { vec3 rm = (ra + rb) * 0.5; float tq; float dm = (-rm.z) - gDepth(proj(rm), tq); if (dm > 0.0) rb = rm; else ra = rm; }   // 이분 탐색
+            vec2 hs = proj(rb); float tq2; float Dh = gDepth(hs, tq2); float dz = (-rb.z) - Dh;
+            float thick = clamp(Dh * 0.02, 0.35, 3.0);                             // 깊이 비례 두께: 얇은 앞 물체 뒤로 새는 광선 거부
+            bool ok = abs(dz) < thick && tq2 >= -0.5 && hs.x > 0.0 && hs.x < 1.0 && hs.y > 0.0 && hs.y < 1.0;
+            if (ok && gfl > 0.5) { vec3 nh = gNorm(hs); if (dot(nh, Rj) > 0.12) ok = false; }   // 뒷면 히트 거부
+            if (ok) {
+              float edge = smoothstep(0.0, 0.14, min(min(hs.x, 1.0 - hs.x), min(hs.y, 1.0 - hs.y)));
+              float br = ground > 0.5 ? (1.0 - pud) * 0.006 : 0.0015;
+              hitCol = (texture2D(tScene, hs).rgb * 2.0 + texture2D(tScene, hs + vec2(br, 0.0)).rgb + texture2D(tScene, hs - vec2(br, 0.0)).rgb) * 0.25;
+              hitCol = min(hitCol, vec3(3.0));
+              hit = edge * (1.0 - smoothstep(0.55, 1.0, float(i) / 40.0)) * (1.0 - smoothstep(0.2, 0.5, Rj.z));
+              break;
+            }
+          }
+          pd = diff;
+        }
+      }
+      // --- 3단계(하늘) 준비
+      vec3 RW = normalize(rotv(Rj));
+      float shy = clamp(RW.y, 0.0, 1.0);
+      vec3 skyC = mix(skyHor, skyTop, pow(shy, 0.55)) * 0.85;
+      skyC += sunCol * pow(max(dot(RW, sunDirW), 0.0), 500.0) * sunI * 3.0;
+      if (RW.y < 0.0) skyC = skyHor * 0.35;
+      if (hasEnv > 0.5) { skyC = textureCube(tEnv, RW).rgb; if (RW.y < 0.0) skyC *= 0.5; }
+      // --- 2단계: SSR이 완전히 성공하지 못한 픽셀만 월드공간 RT 호출 (비싼 연산을 필요한 곳에만)
+      vec3 rc = skyC;
+      if (hit < 0.999 && rtOn > 0.5) rc = min(rtTrace(wp + nW * 0.5, RW, skyC), vec3(hrtMaxL));
+      rc = mix(rc, hitCol, hit);
+      float w = clamp(refl * mix(0.5, 1.0, fres) * 1.15, 0.0, 0.92);
+      if (gfl < 0.5) { float disc = max(max(abs(Dl - D), abs(Dr - D)), max(abs(Du - D), abs(Dd - D))) / max(D, 1.0); w *= 1.0 - smoothstep(0.015, 0.05, disc); }
+      w *= 1.0 - smoothstep(600.0, 1300.0, D);
+      // 사전곱(premultiplied) 저장: 반사 없는 이웃과 섞여도 색이 번지지 않는다. hrtEnc는 8비트 폴백용 스케일.
+      gl_FragColor = vec4(min(rc, vec3(hrtMaxL)) * w * hrtEnc, w);
+    }`;
+  HRT.mRefl = new THREE.ShaderMaterial({ depthTest: false, depthWrite: false, vertexShader: HRT_VS, fragmentShader: reflFS,
+    uniforms: { tScene: u.tScene, tG: u.tG, tRT: u.tRT, tEnv: u.tEnv, gsize: u.gsize, tanHalf: u.tanHalf, aspect: u.aspect, gfl: u.gfl, hasEnv: u.hasEnv,
+      wet: u.wet, fogK: u.fogK, sunI: u.sunI, winGlow: u.winGlow, rtOn: u.rtOn, rtInfo: u.rtInfo, spPos: u.spPos, camWorld: u.camWorld, camPos: u.camPos,
+      fogCol: u.fogCol, sunDirW: u.sunDirW, sunCol: u.sunCol, skyTop: u.skyTop, skyHor: u.skyHor,
+      rtMaxDist: { value: 420 }, rtSteps: { value: 72 }, hrtFrame: { value: 0 }, hrtSteps: { value: 32 }, hrtMaxDist: { value: 300 },
+      hrtRough: { value: 0 }, hrtEnc: { value: 1 }, hrtMaxL: { value: 6 } } });
+
+  // ---------- 시간적 디노이저 ----------
+  const tempFS = `
+    uniform sampler2D tCur, tHist, tG; uniform float tanHalf, aspect, gfl, hrtAlpha, hrtGamma, hrtReset;
+    uniform mat4 camWorld, prevVP; uniform vec3 camPos; uniform vec2 texel;
+    varying vec2 vUv;
+    ${HRT_COMMON}
+    void main(){
+      vec2 uv = vUv;
+      vec4 cur = texture2D(tCur, uv);
+      // (1) 3x3 이웃 통계: 평균 m1, 표준편차 sg  → 이웃이 허용하는 색 범위 [m1-γσ, m1+γσ]
+      vec4 m1 = vec4(0.0), m2 = vec4(0.0);
+      for (int j = -1; j <= 1; j++) for (int i = -1; i <= 1; i++) { vec4 s = texture2D(tCur, uv + vec2(float(i), float(j)) * texel); m1 += s; m2 += s * s; }
+      m1 /= 9.0; m2 /= 9.0; vec4 sg = sqrt(max(m2 - m1 * m1, 0.0));
+      float rf; float D = gDepth(uv, rf);
+      float a = 1.0; vec4 hist = cur;
+      if (D < 2150.0 && hrtReset < 0.5) {
+        // (2) 재투영: 현재 픽셀의 월드 좌표 → 이전 프레임 VP 행렬로 투영 → 이전 프레임 화면 UV
+        vec3 wp = camPos + rotv(vPos(uv, D));
+        vec4 pc = prevVP * vec4(wp, 1.0);
+        if (pc.w > 0.01) {
+          vec2 pu = pc.xy / pc.w * 0.5 + 0.5;
+          if (pu.x > 0.0 && pu.x < 1.0 && pu.y > 0.0 && pu.y < 1.0) {
+            hist = texture2D(tHist, pu);
+            // (3) 분산 클리핑: 이전 결과가 현재 이웃과 너무 다르면(고스트) 허용 범위로 끌어온다
+            hist = clamp(hist, m1 - sg * hrtGamma, m1 + sg * hrtGamma);
+            // (4) 이동량이 크면 과거 신뢰도를 낮춘다(반사는 표면과 다르게 움직이므로 재투영 오차가 큼)
+            float vlen = length((pu - uv) / texel);
+            a = max(hrtAlpha, clamp(vlen * 0.05, 0.0, 0.6));
           }
         }
-        RT.hitPct = 100 * h / Math.max(1, n); RT.occPct = 100 * o / Math.max(1, h);
-        RT.reflPct = 100 * rp / Math.max(1, h); RT.reflLum = rl / Math.max(1, h); RT.giLum = gl / Math.max(1, h);
       }
-    }
-    st.unmap(); RT.stState[slot] = 0;
-  }).catch(() => { if (gen === RT.gen) RT.stState[slot] = 0; });
+      gl_FragColor = mix(hist, cur, a);    // 지수 이동 평균(EMA): out = lerp(history, current, alpha)
+    }`;
+  HRT.mTemp = new THREE.ShaderMaterial({ depthTest: false, depthWrite: false, vertexShader: HRT_VS, fragmentShader: tempFS,
+    uniforms: { tCur: { value: null }, tHist: { value: null }, tG: u.tG, tanHalf: u.tanHalf, aspect: u.aspect, gfl: u.gfl, camWorld: u.camWorld, camPos: u.camPos,
+      prevVP: u.prevVP, texel: { value: new THREE.Vector2() }, hrtAlpha: { value: 1 }, hrtGamma: { value: 1 }, hrtReset: { value: 1 } } });
 }
 
-// ---------- 설정 UI ----------
-function rtApplyPreset(mode) {
-  RT.cfg.mode = mode; if (RT.supported !== false) RT.failed = false;
-  if (RT_PRESETS[mode]) Object.assign(RT.cfg, RT_PRESETS[mode]);
-  if (mode === 'auto') {
-    const p = RT_PRESETS[(typeof GFX_MOBILE !== 'undefined' && GFX_MOBILE) ? 'low' : 'medium'];
-    Object.assign(RT.cfg, { shadowQ: p.shadowQ, aoQ: p.aoQ, reflQ: p.reflQ, giQ: p.giQ, giSamples: p.giSamples, giBounces: p.giBounces, reflBounces: p.reflBounces, denoise: true });
-    Object.assign(RT.auto, { res: p.res, samples: p.samples, rq: p.reflQ, gq: p.giQ, half: false, cool: 0, acc: 0, n: 0 });
+function hrtAlloc(w, h) {
+  hrtDispose(true);
+  const ok = renderer.capabilities.isWebGL2 && (renderer.extensions.has('EXT_color_buffer_float') || renderer.extensions.has('EXT_color_buffer_half_float'));
+  HRT.hdr = !!ok;
+  const mk = (filter) => { const t = new THREE.WebGLRenderTarget(w, h, { minFilter: filter, magFilter: filter, format: THREE.RGBAFormat,
+    type: HRT.hdr ? THREE.HalfFloatType : THREE.UnsignedByteType, depthBuffer: false, stencilBuffer: false }); t.texture.generateMipmaps = false; return t; };
+  HRT.cur = mk(THREE.NearestFilter); HRT.hist[0] = mk(THREE.LinearFilter); HRT.hist[1] = mk(THREE.LinearFilter);
+  HRT.w = w; HRT.h = h; HRT.reset = true; HRT.ri = 0;
+}
+function hrtDispose(keepMat) {
+  for (const k of ['cur']) if (HRT[k]) { HRT[k].dispose(); HRT[k] = null; }
+  for (let i = 0; i < 2; i++) if (HRT.hist[i]) { HRT.hist[i].dispose(); HRT.hist[i] = null; }
+  HRT.w = HRT.h = 0;
+  if (!keepMat) { try { GFXB.mComp.uniforms.hrtOn.value = 0; } catch (e) {} }
+}
+
+// ---------- 동적 품질: 카메라 움직임 감지 → 이동/정지 모드 ----------
+function hrtDecide() {
+  const now = performance.now(), dt = HRT.lastT ? Math.min(100, now - HRT.lastT) : 16.7; HRT.lastT = now;
+  HRT.dtEma += (dt - HRT.dtEma) * 0.05;
+  // 성능 방어: 프레임 시간이 20ms(50fps)를 넘기 시작하면 예산을 점진적으로 줄여 최소 45%까지
+  HRT.perf = Math.min(1, Math.max(0.45, 1 - (HRT.dtEma - 20) / 30));
+  camera.getWorldDirection(HRT.fwd);
+  const dp = camera.position.distanceTo(HRT.prevPos), da = Math.acos(Math.min(1, Math.max(-1, HRT.fwd.dot(HRT.prevFwd))));
+  HRT.prevPos.copy(camera.position); HRT.prevFwd.copy(HRT.fwd);
+  const m = dp + da * 30.0;                       // 이동(m) + 회전(rad×30) 을 하나의 '움직임 크기'로 합산
+  HRT.motion = m;
+  if (m > 0.04) HRT.still = 0; else if (m < 0.012) HRT.still++;   // 히스테리시스: 미세 흔들림은 상태 유지
+  const converge = HRT.still >= HRT.settleFrames;
+  const P = HRT.perf, o = {};
+  if (converge) {                                  // 정지: 고해상도 수렴
+    const n = HRT.still - HRT.settleFrames;
+    o.mode = 'still'; o.scale = HRT.scaleStill * (P < 0.7 ? 0.85 : 1);
+    o.ssr = Math.round(40 * P); o.rt = Math.round(72 * P); o.dist = 420; o.rough = 0.14;
+    o.alpha = Math.max(1 / HRT.maxAccum, 1 / (n + 1)); o.gamma = 2.0;
+  } else {                                         // 이동: 저해상도 · 짧은 광선 · 거울 반사(노이즈 없음)
+    o.mode = 'move'; o.scale = HRT.scaleMove * (P < 0.7 ? 0.8 : 1);
+    o.ssr = Math.round(26 * P); o.rt = Math.round(40 * P); o.dist = 220; o.rough = 0.0;
+    o.alpha = HRT.still > 0 ? 0.30 : 0.50; o.gamma = 0.9;
   }
-  if (mode !== 'off') rtInitGPU();
-  rtSaveCfg(); rtRefreshUI();
+  HRT.mode = o.mode; HRT.stats = o; return o;
 }
-function rtSeg(el, labels, cur, onPick, disabled) {
-  el.innerHTML = '';
-  labels.forEach((lb, i) => {
-    const b = document.createElement('button'); b.className = 'rt-seg-btn' + (i === cur ? ' on' : ''); b.textContent = lb; b.disabled = !!disabled;
-    b.addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); if (!b.disabled) onPick(i); });
-    el.appendChild(b);
-  });
+
+// 합성 직전 호출: ① 반사 패스 → ② 템포럴 패스 → 합성 유니폼에 결과 연결
+function hrtRender(u, W, H) {
+  if (!HRT.enabled || !GFX2.gb) { u.hrtOn.value = 0; return; }
+  if (!HRT.mRefl) hrtBuildMaterials(u);
+  const o = hrtDecide();
+  const w = Math.max(8, Math.round(W * o.scale)), h = Math.max(8, Math.round(H * o.scale));
+  if (!HRT.cur || Math.abs(w - HRT.w) > 2 || Math.abs(h - HRT.h) > 2) { hrtAlloc(w, h); HRT.scale = o.scale; }
+  HRT.frame = (HRT.frame + 1) % 4096;
+  const ru = HRT.mRefl.uniforms;
+  ru.hrtFrame.value = HRT.frame; ru.hrtSteps.value = Math.max(8, o.ssr); ru.hrtMaxDist.value = o.dist; ru.hrtRough.value = o.rough;
+  ru.rtSteps.value = Math.max(16, o.rt); ru.rtMaxDist.value = o.dist * 1.0 + (o.mode === 'still' ? 0 : 0);
+  ru.hrtEnc.value = HRT.hdr ? 1 : 0.25; ru.hrtMaxL.value = HRT.hdr ? 6 : 4;
+  gfxPass(HRT.mRefl, HRT.cur);                                   // ① 반사 (저해상도)
+  const rd = HRT.hist[HRT.ri], wr = HRT.hist[1 - HRT.ri], tu = HRT.mTemp.uniforms;
+  tu.tCur.value = HRT.cur.texture; tu.tHist.value = rd.texture; tu.texel.value.set(1 / HRT.w, 1 / HRT.h);
+  tu.hrtAlpha.value = o.alpha; tu.hrtGamma.value = o.gamma; tu.hrtReset.value = HRT.reset ? 1 : 0;
+  gfxPass(HRT.mTemp, wr);                                        // ② 시간적 디노이즈 (결과는 다음 프레임의 히스토리가 된다)
+  HRT.ri = 1 - HRT.ri; HRT.reset = false;
+  u.tRefl.value = wr.texture; u.hrtSize.value.set(HRT.w, HRT.h); u.hrtEnc.value = HRT.hdr ? 1 : 0.25; u.hrtOn.value = 1;
 }
-function rtRefreshUI() {
-  const sup = document.getElementById('rt-support'); if (!sup) return;
-  const c = RT.cfg, off = c.mode === 'off';
-  let line;
-  if (RT.supported === false) line = '❌ WebGPU 사용 불가 — ' + RT.reason + '. RT는 비활성이며 기존 렌더링이 그대로 동작합니다.';
-  else if (RT.supported === true) line = '✅ WebGPU 사용 가능 (' + RT.adapterName + ') · 하드웨어 RT: ❌ 웹에 API 없음 · 소프트웨어 BVH 컴퓨트 RT: ' + (RT.ready ? '✅ 준비됨' : '대기/초기화') + (RT.error ? ' · ⚠ ' + RT.error : '');
-  else line = '지원 여부는 RT 모드를 선택하면 확인합니다. (하드웨어 RT는 웹 API가 없어 어떤 기기에서도 사용할 수 없습니다.)';
-  sup.textContent = line;
-  const modes = ['off', 'low', 'medium', 'high', 'ultra', 'auto'];
-  rtSeg(document.getElementById('rt-mode'), ['OFF', 'RT LOW', 'RT MEDIUM', 'RT HIGH', 'RT ULTRA', 'RT AUTO'], modes.indexOf(c.mode), (i) => rtApplyPreset(modes[i]), RT.supported === false);
-  const dis = off || RT.supported === false;
-  rtSeg(document.getElementById('rt-refl'), RT_LEVEL_NAMES, c.reflQ, (i) => { c.reflQ = i; if (c.mode === 'auto') RT.auto.rq = Math.max(RT.auto.rq, Math.min(i, 1)); rtSaveCfg(); rtRefreshUI(); }, dis);
-  rtSeg(document.getElementById('rt-gi'), RT_LEVEL_NAMES, c.giQ, (i) => { c.giQ = i; if (c.mode === 'auto') RT.auto.gq = Math.max(RT.auto.gq, Math.min(i, 1)); rtSaveCfg(); rtRefreshUI(); }, dis);
-  rtSeg(document.getElementById('rt-reflb'), ['1 바운스', '2 바운스'], (c.reflBounces | 0) === 2 ? 1 : 0, (i) => { c.reflBounces = i + 1; rtSaveCfg(); rtRefreshUI(); }, dis || c.reflQ === 0);
-  rtSeg(document.getElementById('rt-gib'), ['1 바운스', '2 바운스'], (c.giBounces | 0) === 2 ? 1 : 0, (i) => { c.giBounces = i + 1; rtSaveCfg(); rtRefreshUI(); }, dis || c.giQ === 0);
-  rtSeg(document.getElementById('rt-shadow'), RT_LEVEL_NAMES, c.shadowQ, (i) => { c.shadowQ = i; rtSaveCfg(); rtRefreshUI(); }, dis);
-  rtSeg(document.getElementById('rt-ao'), RT_LEVEL_NAMES, c.aoQ, (i) => { c.aoQ = i; rtSaveCfg(); rtRefreshUI(); }, dis);
-  rtSeg(document.getElementById('rt-den'), ['OFF', 'ON'], c.denoise ? 1 : 0, (i) => { c.denoise = !!i; rtSaveCfg(); rtRefreshUI(); }, dis);
-  rtSeg(document.getElementById('rt-res'), RT_RES.map(v => Math.round(v * 100) + '%'), RT_RES.indexOf(c.res), (i) => { c.res = RT_RES[i]; rtSaveCfg(); rtRefreshUI(); }, dis || c.mode === 'auto');
-  const sl = document.getElementById('rt-samples'), sv = document.getElementById('rt-samples-val');
-  if (sl) { sl.value = c.samples; sl.disabled = dis || c.mode === 'auto'; } if (sv) sv.textContent = c.mode === 'auto' ? ('AUTO ' + RT.auto.samples) : c.samples;
-  const gs = document.getElementById('rt-gis'), gv = document.getElementById('rt-gis-val');
-  if (gs) { gs.value = c.giSamples; gs.disabled = dis || c.giQ === 0; } if (gv) gv.textContent = c.giSamples;
-  const bd = document.getElementById('rt-dbg-btn'); if (bd) bd.textContent = 'RT 디버그 패널: ' + (c.dbg ? 'ON' : 'OFF');
-  const bm = document.getElementById('rt-mask-btn'); if (bm) bm.textContent = 'RT 버퍼 직접 보기(검증용): ' + ['OFF', '그림자/AO', '반사', 'GI'][RT.maskMode];
-  document.getElementById('rt-detail').style.opacity = dis ? 0.5 : 1;
-  if (RT.dbgEl) RT.dbgEl.style.display = c.dbg ? 'block' : 'none';
-}
-function rtRenderDebug() {
-  const c = RT.cfg, act = rtActive(), ok = act && RT.hasShown, E = RT.eff, sn = RT.shownSnap;
-  const q = c.mode === 'off' ? 'OFF' : c.mode.toUpperCase() + (c.mode !== 'auto' && RT_PRESETS[c.mode] && ['shadowQ', 'aoQ', 'reflQ', 'giQ', 'samples', 'res', 'giSamples', 'giBounces', 'reflBounces'].some(k => c[k] !== RT_PRESETS[c.mode][k]) ? ' (사용자 조정)' : '');
-  // "활성"은 실제로 반사/GI 평면이 GPU에서 읽혀 올라와 합성에 쓰이는 경우에만 표시한다
-  const reflAct = !!(ok && sn && sn.rq > 0 && sn.planes >= 2 && RT.reflFrames > 0);
-  const giAct = !!(ok && sn && sn.gq > 0 && sn.planes >= 3 && RT.giFrames > 0);
-  let reflTxt, giTxt;
-  if (reflAct) reflTxt = '활성 — 유리/금속/젖은 도로 · 범위 ' + RT_REFL_RANGE[sn.rq] + 'm · ' + (c.reflBounces | 0) + '바운스 · 반사 픽셀 ' + RT.reflPct.toFixed(0) + '% · 평균 휘도 ' + RT.reflLum.toFixed(3) + ' · 젖음 ' + E.wet.toFixed(2);
-  else reflTxt = c.mode === 'off' ? '비활성 (OFF)' : (c.reflQ === 0 ? '비활성 (품질 OFF)' : '대기/비활성 — ' + (RT.error || RT.reason || (ok ? '아직 결과 없음' : RT.status)));
-  if (giAct) giTxt = '활성 — ' + (c.giBounces | 0) + '바운스 · 샘플 ' + (c.giSamples | 0) + ' · 범위 ' + RT_GI_RANGE[sn.gq] + 'm · 평균 간접광 ' + RT.giLum.toFixed(3) + ' · 창문 발광 ' + E.night.toFixed(2);
-  else giTxt = c.mode === 'off' ? '비활성 (OFF)' : (c.giQ === 0 ? '비활성 (품질 OFF)' : (ok && E.gq === 0 ? '대기 — 입력광 없음(태양/창문 발광 없음)' : '대기/비활성 — ' + (RT.error || RT.reason || (ok ? '아직 결과 없음' : RT.status))));
-  const L = [
-    '[렌더링 백엔드] WebGL(Three.js r128) 래스터' + (act ? ' + WebGPU 컴퓨트 RT(보조)' : ''),
-    '[실제 RT 활성] ' + (ok ? '예 — 소프트웨어 BVH 컴퓨트' : (c.mode === 'off' ? '아니오 (OFF)' : '아니오 — ' + (RT.error || RT.reason || RT.status))),
-    '[GPU] WebGPU ' + (RT.supported ? '지원 · ' + RT.adapterName : (RT.supported === false ? '미지원' : '미확인')) + ' · 하드웨어 RT 없음',
-    '[FPS] ' + RT.fps.toFixed(0) + '  [프레임] ' + RT.ft.toFixed(1) + ' ms  [RT 지연] ' + RT.lat.toFixed(1) + ' ms',
-    '[Ray Samples] 그림자 ' + RT.shRays + ' + AO ' + RT.aoRays + ' /px · 해상도 ' + RT.W + '×' + RT.H + ' · 약 ' + (RT.rays / 1e6).toFixed(2) + 'M rays/frame(반사·GI는 추정치)',
-    '[Reflection] ' + reflTxt,
-    '[GI] ' + giTxt,
-    '[Shadow] ' + (RT.shadowActive ? 'RT 소프트 섀도 활성 (섀도맵 끔)' : (ok && c.shadowQ > 0 ? 'RT 계산 중(태양 없음/흐림 → 효과 0)' : '기존 섀도맵/없음')),
-    '[AO] ' + (ok && c.aoQ > 0 ? 'RT AO 활성 (반경 ' + RT_AODIST[c.aoQ] + 'm)' : '비활성'),
-    '[품질] ' + q + ' · S:' + RT_LEVEL_NAMES[c.shadowQ] + ' AO:' + RT_LEVEL_NAMES[c.aoQ] + ' R:' + RT_LEVEL_NAMES[c.reflQ] + ' GI:' + RT_LEVEL_NAMES[c.giQ] + ' 노이즈제거:' + (c.denoise ? 'ON' : 'OFF'),
-    '[예산] ' + (c.mode === 'auto' ? 'AUTO — 실효 R:' + RT_LEVEL_NAMES[E.rq] + ' GI:' + RT_LEVEL_NAMES[E.gq] + ' · 반/반 체커보드 ' + (E.half ? 'ON' : 'OFF') + ' · 해상도 ' + Math.round(RT.auto.res * 100) + '% · 샘플 ' + RT.auto.samples : '수동(고정)'),
-    '[BVH] 삼각형 ' + RT.triCount + ' · 노드 ' + RT.nodeCount + ' · 빌드 ' + RT.lastBuildMs.toFixed(0) + ' ms · GPU 메모리 약 ' + RT.memMB.toFixed(1) + ' MB',
-    '[검증] 화면 히트 ' + RT.hitPct.toFixed(0) + '% · 그 중 그림자 차폐 ' + RT.occPct.toFixed(0) + '% · 드롭 ' + RT.dropped
-  ];
-  RT.dbgEl.textContent = L.join('\n');
-}
-function rtInitUI() {
-  const st = document.createElement('style');
-  st.textContent = '.rt-seg{display:flex;flex-wrap:wrap;gap:4px;margin:4px 0 10px}.rt-seg-btn{flex:1 1 auto;min-width:54px;padding:7px 6px;border-radius:7px;border:1px solid #475569;background:#1e293b;color:#cbd5e1;font-size:11px;font-weight:800;cursor:pointer}.rt-seg-btn.on{background:#f59e0b;color:#1c1917;border-color:#fde68a}.rt-seg-btn:disabled{opacity:.45;cursor:default}.rt-row-label{font-size:11px;font-weight:800;color:#94a3b8;margin-top:6px}#rt-dbg{position:fixed;left:8px;bottom:8px;z-index:40;display:none;pointer-events:none;background:rgba(2,6,23,.82);color:#a7f3d0;font:10px/1.45 ui-monospace,Menlo,Consolas,monospace;padding:7px 9px;border-radius:8px;white-space:pre-wrap;max-width:min(92vw,520px)}';
-  document.head.appendChild(st);
-  const sec = document.createElement('div'); sec.className = 'settings-section'; sec.id = 'rt-section';
-  sec.innerHTML = '<span class="settings-label">🔦 레이 트레이싱 (RT) — 실험적 · WebGPU 컴퓨트</span>'
-    + '<div class="assist-desc" id="rt-support" style="margin-bottom:6px"></div><div class="rt-seg" id="rt-mode"></div>'
-    + '<div id="rt-detail">'
-    + '<div class="rt-row-label">Reflection Quality (유리·금속·젖은 도로 RT 반사)</div><div class="rt-seg" id="rt-refl"></div>'
-    + '<div class="rt-row-label">Reflection Bounces</div><div class="rt-seg" id="rt-reflb"></div>'
-    + '<div class="rt-row-label">Global Illumination Quality (RT 간접광)</div><div class="rt-seg" id="rt-gi"></div>'
-    + '<div class="rt-row-label">GI Bounces (최대 2 — 그 이상은 비용·지연으로 불가)</div><div class="rt-seg" id="rt-gib"></div>'
-    + '<div class="rt-row-label">GI Samples (픽셀당 경로 수): <span id="rt-gis-val"></span></div><input type="range" id="rt-gis" min="1" max="4" step="1" style="width:100%;margin:4px 0 10px">'
-    + '<div class="rt-row-label">Shadow Quality (RT 소프트 섀도)</div><div class="rt-seg" id="rt-shadow"></div>'
-    + '<div class="rt-row-label">Ambient Occlusion Quality (RT AO)</div><div class="rt-seg" id="rt-ao"></div>'
-    + '<div class="rt-row-label">Ray Samples (그림자/AO 픽셀당 광선 수): <span id="rt-samples-val"></span></div><input type="range" id="rt-samples" min="1" max="12" step="1" style="width:100%;margin:4px 0 10px">'
-    + '<div class="rt-row-label">Denoising (시간적 누적 + 공간 필터)</div><div class="rt-seg" id="rt-den"></div>'
-    + '<div class="rt-row-label">Render Resolution (RT 버퍼, 화면 대비)</div><div class="rt-seg" id="rt-res"></div></div>'
-    + '<button class="assist-toggle-btn" id="rt-dbg-btn"></button><button class="assist-toggle-btn" id="rt-mask-btn" style="margin-top:6px"></button>'
-    + '<div class="assist-desc">2차 구현: 건물 외형(콜라이더 프리즘, 재질은 이름·높이·건축연도로 추정)을 BVH로 만들어 GPU 컴퓨트에서 직접 광선을 쏴 소프트 섀도·AO·반사·1~2바운스 GI를 계산하고, 결과를 화면에 합성합니다(섀도/AO는 곱셈, 반사/GI는 가산). SSR이 아니라 BVH 광선이라 화면 밖 건물도 비치지만, 창문 지오메트리·차량·간판 네온은 RT 장면에 없고 창문/네온 발광은 절차적 근사입니다. 하드웨어 RT 코어는 사용하지 않습니다. WebGPU 미지원 기기에서는 자동으로 꺼지고 기존 렌더링이 유지됩니다.</div>';
-  const gfx = document.getElementById('btn-gfx-quality'); const anchor = gfx && gfx.closest('.settings-section');
-  if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(sec, anchor.nextSibling); else { const card = document.querySelector('.settings-card'); if (card) card.appendChild(sec); }
-  RT.dbgEl = document.createElement('div'); RT.dbgEl.id = 'rt-dbg'; document.body.appendChild(RT.dbgEl);
-  document.getElementById('rt-samples').addEventListener('input', (e) => { RT.cfg.samples = +e.target.value; rtSaveCfg(); rtRefreshUI(); });
-  document.getElementById('rt-gis').addEventListener('input', (e) => { RT.cfg.giSamples = +e.target.value; rtSaveCfg(); rtRefreshUI(); });
-  document.getElementById('rt-dbg-btn').addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); RT.cfg.dbg = !RT.cfg.dbg; rtSaveCfg(); rtRefreshUI(); if (RT.cfg.dbg) rtRenderDebug(); });
-  document.getElementById('rt-mask-btn').addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); RT.maskMode = (RT.maskMode + 1) % 4; rtRefreshUI(); });
-  rtLoadCfg(); if (RT.cfg.mode === 'auto') { rtApplyPreset('auto'); } else if (RT.cfg.mode !== 'off') { rtInitGPU(); }
-  rtRefreshUI();
-}
-// 콘솔 자가 점검: RT.selfTest()
-RT.selfTest = function () { return { active: rtActive(), shown: RT.hasShown, tris: RT.triCount, nodes: RT.nodeCount, hitPct: RT.hitPct, occPct: RT.occPct, reflActive: RT.reflFrames > 0 && !!(RT.shownSnap && RT.shownSnap.rq > 0), giActive: RT.giFrames > 0 && !!(RT.shownSnap && RT.shownSnap.gq > 0), reflPct: RT.reflPct, reflLum: RT.reflLum, giLum: RT.giLum, latencyMs: RT.lat, error: RT.error }; };
-window.RT = RT;
-if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', rtInitUI); else rtInitUI();
+window.HRT = HRT;   // 콘솔에서 HRT.enabled=false / HRT.scaleStill=0.6 등으로 즉시 조절 가능
+
+window.onload = init;
 </script>
 
 </body>
