@@ -5839,8 +5839,12 @@ function gfxRenderBloom() {
     u.sunUv.value.set(sp.x * 0.5 + 0.5, sp.y * 0.5 + 0.5);
     u.sunVis.value = (sp.z < 1 && GFX.sunI > 0) ? Math.max(0, 1 - Math.max(Math.abs(sp.x), Math.abs(sp.y)) * 0.55) * Math.min(1, GFX.sunI) : 0;
   }
-  if (GFX_PRESETS[GFX.quality].cinema) gfx2Prep(u, W, H); else u.cinema.value = 0;
-  if (GFX_PRESETS[GFX.quality].cinema) { gfx2Prep(u, W, H); try { hrtRender(u, W, H); } catch (e) { u.hrtOn.value = 0; console.warn('HRT', e); } } else u.cinema.value = 0;
+  if (GFX_PRESETS[GFX.quality].cinema) {
+    // G-buffer와 이전 프레임 VP 행렬은 프레임당 한 번만 갱신해야 한다.
+    // 중복 호출하면 prevVP가 현재 프레임으로 덮여 카메라 이동 재투영이 무효화된다.
+    gfx2Prep(u, W, H);
+    try { hrtRender(u, W, H); } catch (e) { u.hrtOn.value = 0; console.warn('HRT', e); }
+  } else { u.cinema.value = 0; u.hrtOn.value = 0; }
   gfxPass(GFXB.mComp, null);
 }
 function gfxSetBloom(on) {
