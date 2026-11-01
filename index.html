@@ -3597,11 +3597,11 @@ function buildOSMBuildingsFromEmbeddedData(onProgress, onDone) {
             float dist = length(cameraPosition - vWP);
             float fade = 1.0 - smoothstep(120.0, 430.0, dist);
             float r = h21(id + floor(vWP.xz*0.01));
-            float lit = step(0.72, r);
+            float lit = step(mix(0.72, 0.56, clamp((uWinGlow - 0.9) / 0.6, 0.0, 1.0)), r);
             vec3 glass = mix(vec3(0.07,0.10,0.13), vec3(0.28,0.38,0.47), f.y*0.8) * (0.8+0.5*r);
             float sill = step(f.y,0.28)*step(0.2,f.x)*step(f.x,0.8);
             vec3 col = diffuseColor.rgb;
-            glass = mix(glass, fogColor*1.25+vec3(0.03,0.05,0.08), pow(1.0-abs(dot(normalize(cameraPosition-vWP),wn)),3.0)*0.45); col = mix(col, glass, win*0.86*fade*uWinQ); vfxWin = win*fade*uWinQ; totalEmissiveRadiance += vec3(1.0,0.78,0.46)*lit*win*fade*uWinQ*uWinGlow*(0.6+0.9*h21(id+7.3));
+            glass = mix(glass, fogColor*1.25+vec3(0.03,0.05,0.08), pow(1.0-abs(dot(normalize(cameraPosition-vWP),wn)),3.0)*0.45); col = mix(col, glass, win*0.86*fade*uWinQ); vfxWin = win*fade*uWinQ; totalEmissiveRadiance += mix(vec3(1.0,0.78,0.46), vec3(0.78,0.9,1.0), step(0.82, h21(id+3.7)))*lit*win*fade*uWinQ*uWinGlow*(0.6+0.9*h21(id+7.3));
             col *= 1.0 - 0.18*sill*fade;
             diffuseColor.rgb = col;
           }
@@ -5606,7 +5606,7 @@ const GFX_SKY = {
   day:    { top: 0x1f6fc9, exp: 0.85, star: 0.0, sun: 0xfff1c9, sunI: 1.0, expo: 1.10, bloom: 0.35 },
   sunset: { top: 0xff982b, exp: 0.62, star: 0.0, sun: 0xffedc2, sunI: 2.35, expo: 1.18, bloom: 0.78 },
   cloudy: { top: 0x6b7c8e, exp: 0.60, star: 0.0, sun: 0xdde6ee, sunI: 0.0, expo: 1.10, bloom: 0.30 },
-  night:  { top: 0x01040c, exp: 0.65, star: 1.0, sun: 0x8aa6ee, sunI: 0.30, expo: 0.95, bloom: 0.75 }
+  night:  { top: 0x01040c, exp: 0.65, star: 1.0, sun: 0x8aa6ee, sunI: 0.30, expo: 0.95, bloom: 1.15 }
 };
 const GFX_MOBILE = !!(window.matchMedia && window.matchMedia('(pointer:coarse)').matches);
 const GFX = {
@@ -5688,7 +5688,7 @@ function gfxAfterWeather(mode) {
   try { vfxApplyGlow(); } catch (e) {}
   const P = GFX_SKY[mode] || GFX_SKY.night;
   if (renderer) renderer.toneMappingExposure = P.expo;
-  GFXB.strength = P.bloom; GFX.sunI = P.sunI; GFX.envKey = ''; if (renderer && GFX.quality !== 'low') setTimeout(() => { try { gfxBuildEnv(); } catch (e) { console.warn('env', e); } }, 50);
+  GFXB.strength = P.bloom; GFXB.thr = mode === 'night' ? 0.42 : 0.82; try { gfxSetBloom(gfxBloomWanted(GFX_PRESETS[GFX.quality])); } catch (e) {} GFX.sunI = P.sunI; GFX.envKey = ''; if (renderer && GFX.quality !== 'low') setTimeout(() => { try { gfxBuildEnv(); } catch (e) { console.warn('env', e); } }, 50);
   if (sunLight) GFX.sunDir.copy(sunLight.position).normalize();
   GFXS.dirty = true;
   if (!GFX.sky) return;
@@ -5771,7 +5771,7 @@ function gfxRebuildShadowProxy(px, pz) {
 }
 
 // ---------- 자체 구현 블룸 (UnrealBloom 대체, 외부 스크립트 불필요) ----------
-const GFXB = { on: false, strength: 0.6, W: 0, H: 0, rtScene: null, a1: null, b1: null, a2: null, b2: null,
+const GFXB = { on: false, thr: 0.82, strength: 0.6, W: 0, H: 0, rtScene: null, a1: null, b1: null, a2: null, b2: null,
   qScene: null, qCam: null, quad: null, mBright: null, mBlur: null, mComp: null };
 function gfxBloomInit() {
   GFXB.qScene = new THREE.Scene();
@@ -5993,7 +5993,7 @@ function gfxRenderBloom() {
   renderer.render(scene, camera);
   // 밝은 영역 추출 + 1/4 다운샘플
   GFXB.mBright.uniforms.tDiffuse.value = GFXB.rtScene.texture;
-  GFXB.mBright.uniforms.texel.value.set(1 / W, 1 / H);
+  GFXB.mBright.uniforms.texel.value.set(1 / W, 1 / H); GFXB.mBright.uniforms.thr.value = GFXB.thr;
   gfxPass(GFXB.mBright, GFXB.a1);
   // 1/4 해상도 가우시안 블러
   const bl = GFXB.mBlur.uniforms;
@@ -6001,7 +6001,7 @@ function gfxRenderBloom() {
   bl.tDiffuse.value = GFXB.b1.texture; bl.dir.value.set(0, 1 / GFXB.a1.height); gfxPass(GFXB.mBlur, GFXB.a1);
   // 1/8 해상도 넓은 번짐
   GFXB.mBright.uniforms.tDiffuse.value = GFXB.a1.texture; GFXB.mBright.uniforms.texel.value.set(0, 0); GFXB.mBright.uniforms.thr.value = 0.0;
-  gfxPass(GFXB.mBright, GFXB.a2); GFXB.mBright.uniforms.thr.value = 0.82;
+  gfxPass(GFXB.mBright, GFXB.a2); GFXB.mBright.uniforms.thr.value = GFXB.thr;
   bl.tDiffuse.value = GFXB.a2.texture; bl.dir.value.set(1 / GFXB.a2.width, 0); gfxPass(GFXB.mBlur, GFXB.b2);
   bl.tDiffuse.value = GFXB.b2.texture; bl.dir.value.set(0, 1 / GFXB.a2.height); gfxPass(GFXB.mBlur, GFXB.a2);
   // 합성 → 화면
@@ -6022,6 +6022,7 @@ function gfxRenderBloom() {
   } else { u.cinema.value = 0; u.hrtOn.value = 0; }
   gfxPass(GFXB.mComp, null);
 }
+function gfxBloomWanted(P) { return !!(P && (P.bloom || (currentWeatherMode === 'night' && GFX.quality !== 'low'))); }   // 밤: 창문 불빛 번짐용
 function gfxSetBloom(on) {
   GFXB.on = on;
   if (!on) gfxBloomDispose();
@@ -6076,7 +6077,7 @@ function gfxSetQuality(q) {
   const P = GFX_PRESETS[q];
   gfxApplyUser();
   if (q !== 'low') { try { GFX.envKey = ''; gfxBuildEnv(); } catch (e) { console.warn('env', e); } }
-  gfxApplyShadows(); gfxSetPR(Math.min(window.devicePixelRatio || 1, GFX_MOBILE ? Math.min(P.maxPR, 1.25) : P.maxPR)); gfxSetBloom(P.bloom); gfx2Apply(!!P.cinema); try { vfxApplyQuality(q); } catch (e) { console.warn('vfxq', e); }
+  gfxApplyShadows(); gfxSetPR(Math.min(window.devicePixelRatio || 1, GFX_MOBILE ? Math.min(P.maxPR, 1.25) : P.maxPR)); gfxSetBloom(gfxBloomWanted(P)); gfx2Apply(!!P.cinema); try { vfxApplyQuality(q); } catch (e) { console.warn('vfxq', e); }
   const b = document.getElementById('btn-gfx-quality');
   if (b) { b.innerText = '그래픽 품질: ' + P.label; b.classList.toggle('off', q === 'low'); }
   try { gfxSyncUserUI(); } catch (e) {}
@@ -7141,7 +7142,7 @@ function vfxMakeEmissive(cv, style) {
   const t = new THREE.CanvasTexture(out); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = 4;
   return t;
 }
-function vfxGlowValue() { const G = { night: 1.25, sunset: 0.45, cloudy: 0.12, day: 0.0 }, v = G[currentWeatherMode]; return v === undefined ? 0 : v; }
+function vfxGlowValue() { const G = { night: 1.8, sunset: 0.45, cloudy: 0.12, day: 0.0 }, v = G[currentWeatherMode]; return v === undefined ? 0 : v; }
 function vfxApplyGlow() {
   const v = vfxGlowValue();
   for (const st in NYC_FACADE_MATS) { const m = NYC_FACADE_MATS[st]; if (m.emissiveMap) { m.emissiveIntensity = v * 1.15; } }
