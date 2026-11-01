@@ -2708,7 +2708,7 @@ function addNYCExtraDetail(ring, h, btype, seed, acc, bi) {
   const box = (x,z,w,d,y0,y1,c,ct) => rbox(x,z,w,d,y0,y1,0,c,ct);
   const inside = (x,z) => { let r=false; for (let i=0,j=ring.length-1;i<ring.length;j=i++) { const a=ring[i], b=ring[j]; if (((a.z>z)!==(b.z>z)) && (x < (b.x-a.x)*(z-a.z)/(b.z-a.z)+a.x)) r=!r; } return r; };
   const hs = (n) => { let v = (Math.floor(seed*1000003) ^ Math.imul(n+11, 374761393)) >>> 0; v = Math.imul(v ^ (v>>>13), 1274126177) >>> 0; return ((v ^ (v>>>16)) >>> 0) % 1000 / 1000; };
-  const store = C(0x1b2a33), storeLit = C(0xffe0a0), frame = C(0x2b2b2b), fe = C(0x20272b), fe2 = C(0x3a4247);
+  const store = C(0x1b2a33), storeLit = C().setRGB(2.0,1.82,1.5), frame = C(0x2b2b2b), fe = C(0x20272b), fe2 = C(0x3a4247);
   const belt = C(0xcfc3ae), cornice = C(0xd9ceb8), corniceTop = C(0x8a8478);
   const awnings = [0x7f1d1d,0x14532d,0x1e3a8a,0x92400e,0x1f2937,0x831843,0xb45309].map(C);
   const signs = [0xef4444,0x22c55e,0xfacc15,0x38bdf8,0xf472b6].map(C);
@@ -2741,7 +2741,7 @@ function addNYCExtraDetail(ring, h, btype, seed, acc, bi) {
       const bays = Math.max(1, Math.min(6, Math.floor(len/4.5)));
       for (let i=0;i<bays;i++) {
         const t0=(i+0.08)/bays, t1=(i+0.92)/bays, r=hs(e*7+i);
-        quad([P(t0,0.3,0.2),P(t1,0.3,0.2),P(t1,3.4,0.2),P(t0,3.4,0.2)], r<0.4 ? storeLit : store);
+        quad([P(t0,0.3,0.2),P(t1,0.3,0.2),P(t1,3.4,0.2),P(t0,3.4,0.2)], storeLit);
         quad([P(t0-0.02,3.4,0.22),P(t1+0.02,3.4,0.22),P(t1+0.02,3.65,0.22),P(t0-0.02,3.65,0.22)], frame);
         if (r>0.45 && h<140) quad([P(t0,3.7,0.22),P(t1,3.7,0.22),P(t1,3.1,1.4),P(t0,3.1,1.4)], awnings[Math.floor(hs(e+i*3)*awnings.length)%awnings.length]);
       }
@@ -3052,19 +3052,6 @@ function nycPatchWinLight(m, style) {
         #ifdef USE_EMISSIVEMAP
         totalEmissiveRadiance *= litw;
         #endif
-        if (uNLK > 0.001) {
-          // 켜진 창 둘레의 외벽이 따뜻하게 물든다
-          vec2 dd = max(vec2(max(0.16 - wf.x, wf.x - 0.84), max(0.14 - wf.y, wf.y - 0.86)), 0.0) * uWM;
-          float dl = length(dd);
-          float halo = step(0.0001, dl) * (1.0 - smoothstep(0.0, 0.55, dl)) * litw * uWC.w;
-          totalEmissiveRadiance += ${NYC_WARM} * diffuseColor.rgb * halo * 1.1 * uNLK;
-          // 주변 창문·거리에서 온 빛 (지면 빛 지도) — 낮은 층일수록 강하다
-          vec2 guv = (vWLp.xz - uNLC) / uNLS + 0.5;
-          float ge = smoothstep(0.5, 0.36, length(guv - 0.5));
-          float gl = texture2D(tNLG, guv).r * ge * uNLK;
-          float ha = mix(1.0, 0.25, smoothstep(6.0, 90.0, vWLp.y));
-          totalEmissiveRadiance += ${NYC_WARM} * diffuseColor.rgb * gl * ha * 2.2;
-        }
       }`);
   };
   m.customProgramCacheKey = function () { return (prevKey ? prevKey.call(m) : '') + '|nycWL'; };
@@ -3094,6 +3081,7 @@ function nycPatchLitColor(m) {
   m.needsUpdate = true;
 }
 // 켜진 창 색 (따뜻한 백열/형광/TV 푸른빛) + 1.0 오프셋 인코딩
+function nycShopCol(r, bright) { const k = bright ? 1.0 : 0.82; return r < 0.55 ? [1 + 1.0 * k, 1 + 0.80 * k, 1 + 0.48 * k] : (r < 0.85 ? [1 + 1.0 * k, 1 + 0.92 * k, 1 + 0.74 * k] : [1 + 0.8 * k, 1 + 0.9 * k, 1 + 1.0 * k]); }
 function nycLitCol(r) { return r < 0.62 ? [2.0, 1.78, 1.45] : (r < 0.86 ? [1.96, 1.9, 1.7] : [1.62, 1.82, 2.0]); }
 
 const NYC_FACADE_MATS = {};
@@ -3266,22 +3254,21 @@ function nycStyledDetail(ring,h,btype,seed,acc,tacc,bi,lm){
       for (let i=0;i<bays;i++){
         const t0=(i+.09)/bays, t1=(i+.91)/bays, r=hs(e*7+i+30);
         if (r<.12) { quad([P(t0,.5,.2),P(t1,.5,.2),P(t1,gh-.9,.2),P(t0,gh-.9,.2)], mul(gate,.8), mul(gate,1.15)); for(let k=1;k<6;k++){ const y=.5+k*(gh-1.4)/6; quad([P(t0,y,.21),P(t1,y,.21),P(t1,y+.05,.21),P(t0,y+.05,.21)], mul(gate,.5)); } }
-        else if (r<.5) quad([P(t0,.55,.2),P(t1,.55,.2),P(t1,gh-.9,.2),P(t0,gh-.9,.2)], C(0xffc878), C(0xffeabf));
-        else quad([P(t0,.55,.2),P(t1,.55,.2),P(t1,gh-.9,.2),P(t0,gh-.9,.2)], C(0x16232b), C(0x3a5666));
+        else { const sc=nycShopCol(hs(e*3+i+60),false), sc2=nycShopCol(hs(e*3+i+60),true); quad([P(t0,.55,.2),P(t1,.55,.2),P(t1,gh-.9,.2),P(t0,gh-.9,.2)], C().setRGB(sc[0],sc[1],sc[2]), C().setRGB(sc2[0],sc2[1],sc2[2])); }
         if (len/bays>5.2) { const tm=(t0+t1)/2, mw=.03/len*20; quad([P(tm-mw*.5,.55,.22),P(tm+mw*.5,.55,.22),P(tm+mw*.5,gh-.9,.22),P(tm-mw*.5,gh-.9,.22)], frame); }
         if (hs(e+i*3+51)<.55) { const sg=signs[Math.floor(hs(e+i*3+50)*signs.length)%signs.length];
-        quad([P(t0,gh-.85,.24),P(t1,gh-.85,.24),P(t1,gh-.1,.24),P(t0,gh-.1,.24)], mul(sg,.85), sg); }
+        quad([P(t0,gh-.85,.24),P(t1,gh-.85,.24),P(t1,gh-.1,.24),P(t0,gh-.1,.24)], C().setRGB(1+sg.r*.8,1+sg.g*.8,1+sg.b*.8), C().setRGB(1+sg.r,1+sg.g,1+sg.b)); }
         if (r>.5 && r<.82 && h<140) { const ac=awnings[Math.floor(hs(e+i*3)*awnings.length)%awnings.length], cr=C(0xefe6d0), ns=4;
           for(let s=0;s<ns;s++){ const s0=t0+(t1-t0)*s/ns, s1=t0+(t1-t0)*(s+1)/ns, c=(s%2)?cr:ac; quad([P(s0,gh-.05,.26),P(s1,gh-.05,.26),P(s1,gh-.7,1.5),P(s0,gh-.7,1.5)], mul(c,.82), c); } }
       }
     } else if (lobby) {
       const lh=gT;
-      quad([P(.015,0,.2),P(.985,0,.2),P(.985,lh-.5,.2),P(.015,lh-.5,.2)], hs(e+70)<.6?C(0xffd9a0):C(0x2b3f4c), hs(e+70)<.6?C(0xfff0cf):C(0x7d9bb0));
+      quad([P(.015,0,.2),P(.985,0,.2),P(.985,lh-.5,.2),P(.015,lh-.5,.2)], C().setRGB(1.95,1.78,1.45), C().setRGB(2.0,1.92,1.75));
       const cols=Math.min(7,Math.max(2,Math.floor(len/4.5)));
       for (let i=0;i<=cols;i++){ const t=i/cols, w=.22/len; quad([P(t-w,0,.24),P(t+w,0,.24),P(t+w,lh-.5,.24),P(t-w,lh-.5,.24)], mul(trimC,.85), trimC); }
       quad([P(.02,lh-.35,2.2),P(.98,lh-.35,2.2),P(.98,lh+.05,2.2),P(.02,lh+.05,2.2)], C(0x2a2f33));
       quad([P(.02,lh+.05,2.2),P(.98,lh+.05,2.2),P(.98,lh+.05,.2),P(.02,lh+.05,.2)], C(0x58636a));
-      quad([P(.02,lh-.35,.2),P(.98,lh-.35,.2),P(.98,lh-.35,2.2),P(.02,lh-.35,2.2)], C(0xffe6b0));
+      quad([P(.02,lh-.35,.2),P(.98,lh-.35,.2),P(.98,lh-.35,2.2),P(.02,lh-.35,2.2)], C().setRGB(2.0,1.9,1.7));
     } else {
       // 플린스 + 현관 (주택/아파트)
       quad([P(0,0,.14),P(1,0,.14),P(1,stoop?1.1:.6,.14),P(0,stoop?1.1:.6,.14)], mul(baseC,.5), mul(baseC,.7));
@@ -3292,7 +3279,7 @@ function nycStyledDetail(ring,h,btype,seed,acc,tacc,bi,lm){
       if (stoop) { const ang=Math.atan2(dz,dx);
         for(let k=0;k<4;k++){ const reach=2.2-.4*k, w=1.8; const px=a.x+dx*tc+nx*(reach/2), pz=a.z+dz*tc+nz*(reach/2); rbox(px,pz,w,reach,0,.4*(k+1),ang,C(0x9d9a94),C(0xb6b3ac)); } }
       quad([P(tc-wm,y0,.17),P(tc+wm,y0,.17),P(tc+wm,y0+dh,.17),P(tc-wm,y0+dh,.17)], C(0x2a1d16), C(0x4a3225));
-      quad([P(tc-wm*.7,y0+dh,.18),P(tc+wm*.7,y0+dh,.18),P(tc+wm*.7,y0+dh+.5,.18),P(tc-wm*.7,y0+dh+.5,.18)], C(0xffd9a0), C(0xffecc8));
+      quad([P(tc-wm*.7,y0+dh,.18),P(tc+wm*.7,y0+dh,.18),P(tc+wm*.7,y0+dh+.5,.18),P(tc-wm*.7,y0+dh+.5,.18)], C().setRGB(2.0,1.85,1.6), C().setRGB(2.0,1.95,1.8));
       quad([P(tc-wm-.12/len*2,y0+dh+.5,.2),P(tc+wm+.12/len*2,y0+dh+.5,.2),P(tc+wm+.12/len*2,y0+dh+.8,.2),P(tc-wm-.12/len*2,y0+dh+.8,.2)], trimC);
     }
     // 브라운스톤 돌출 베이 윈도우
@@ -3515,7 +3502,7 @@ function buildNYCDetailLayer() {
     try { const old = scene.getObjectByName('Empire_State_Building_Real_Footprint'); buildDetailedEmpireState(esb, 381); if (old) { scene.remove(old); nycDisposeObject(old); } }
     catch (err) { console.error('ESB detail', err); }
   }
-  const mat = vfxMat({vertexColors:true, roughness:0.55, metalness:0.12, side:THREE.DoubleSide});
+  const mat = vfxMat({vertexColors:true, roughness:0.55, metalness:0.12, side:THREE.DoubleSide}); try { nycPatchLitColor(mat); } catch (e) { console.warn('nyc lit color', e); }
   const loadCell = (c) => {
     const acc = {positions:[], colors:[], indices:[]};
     const tacc = {}; const vfxAoAcc = {pos:[],col:[],idx:[]};
@@ -3722,20 +3709,7 @@ function buildOSMBuildingsFromEmbeddedData(onProgress, onDone) {
             vec3 col = diffuseColor.rgb;
             glass = mix(glass, fogColor*1.25+vec3(0.03,0.05,0.08), pow(1.0-abs(dot(normalize(cameraPosition-vWP),wn)),3.0)*0.45); col = mix(col, glass, win*0.86*fade*uWinQ); vfxWin = win*fade*uWinQ; totalEmissiveRadiance += mix(vec3(1.0,0.78,0.46), vec3(0.78,0.9,1.0), step(0.82, h21(id+3.7)))*lit*win*fade*uWinQ*uWinGlow*(0.6+0.9*h21(id+7.3));
             col *= 1.0 - 0.18*sill*fade;
-            // 켜진 창 둘레의 외벽 번짐
-            vec2 hd = max(vec2(max(0.2 - f.x, f.x - 0.8) * 3.0, max(0.28 - f.y, f.y - 0.82) * 3.5), 0.0);
-            float hdl = length(hd);
-            float halo = step(0.0001, hdl) * (1.0 - smoothstep(0.0, 0.5, hdl)) * lit * fade;
-            totalEmissiveRadiance += vec3(1.0,0.72,0.42) * col * halo * 1.1 * uNLK;
             diffuseColor.rgb = col;
-          }
-          // 주변 창문·거리에서 온 빛을 외벽이 받는다 (지면 빛 지도)
-          if (uNLK > 0.001 && abs(wn.y) < 0.5 && vWP.y > 0.3) {
-            vec2 guv = (vWP.xz - uNLC) / uNLS + 0.5;
-            float ge = smoothstep(0.5, 0.36, length(guv - 0.5));
-            float gl = texture2D(tNLG, guv).r * ge * uNLK;
-            float ha = mix(1.0, 0.25, smoothstep(6.0, 90.0, vWP.y));
-            totalEmissiveRadiance += vec3(1.0,0.72,0.42) * diffuseColor.rgb * gl * ha * 2.2;
           }
         }`)
         .replace('#include <roughnessmap_fragment>','#include <roughnessmap_fragment>\n roughnessFactor = mix(roughnessFactor, 0.12, vfxWin);')
@@ -6235,7 +6209,7 @@ function gfxInit() {
 // 플레이어 주변 건물의 외벽을 따라 3m 간격 창 열 × 층을 훑어 '켜진 창'(셰이더와 같은 해시)마다 아주 약한 빛을 바깥쪽 바닥 지도에 누적한다.
 // 높은 층일수록 지면에 닿는 빛이 약해지고(거리 감쇠), 이 지도를 도로·보도 위에 따뜻한 빛으로 덧그린다. 맵은 이동에 맞춰 갱신.
 const WGL = { size: 384, px: 512, cv: null, ctx: null, tex: null, mesh: null, spr: null, cx: 1e9, cz: 1e9, on: false, dirty: true,
-  K: 1.0, GAIN: 0.012, R: 18, OUT: 5, maxSplat: GFX_MOBILE ? 4500 : 10000 };
+  K: 1.0, GAIN: 0.012, R: 18, OUT: 5, maxSplat: GFX_MOBILE ? 5500 : 14000 };
 function wglInit() {
   if (WGL.mesh) return;
   const cv = document.createElement('canvas'); cv.width = cv.height = WGL.px; WGL.cv = cv; WGL.ctx = cv.getContext('2d');
@@ -6274,11 +6248,16 @@ function wglRebuild(cx, cz) {
       const nF = Math.min(60, Math.floor((b.maxY - (b.minY || 0)) / 3.5)); if (nF < 1) continue;
       const prof = b.winProf || nycBldProfile(b.centX, b.centZ, b.maxY, ''), pFrac = prof[0], pSeed = prof[1];
       const m = ring.length;
+      const hasShop = b.maxY >= 6 && NYC_RES_TYPES.indexOf(b.btypeHint || '') < 0 && nycHashN(Math.round(b.centX * 4), Math.round(b.centZ * 4), 5) < 0.78;
       for (let e = 0; e < m && n < WGL.maxSplat; e++) {
         const A = ring[e], B = ring[(e + 1) % m]; let dx = B.x - A.x, dz = B.z - A.z; const len = Math.hypot(dx, dz);
         if (len < 4 || len > 220) continue; dx /= len; dz /= len;
         let nx = -dz, nz = dx; if (nx * ((A.x + B.x) * 0.5 - b.centX) + nz * ((A.z + B.z) * 0.5 - b.centZ) < 0) { nx = -nx; nz = -nz; }   // 바깥쪽 법선
         const tx = -nz, tz = nx, cols = Math.floor(len / 3);
+        if (hasShop && len >= 4.5) {   // 상점 쇼윈도: 보도·도로를 따뜻하게 비춤
+          const sc = Math.max(1, Math.floor(len / 4.2));
+          for (let q = 0; q < sc && n < WGL.maxSplat; q++) { const t = (q + 0.5) * len / sc, X = A.x + dx * t + nx * 2.5, Z = A.z + dz * t + nz * 2.5, px = (X - cx) * k + P / 2, py = (Z - cz) * k + P / 2, r2 = 11 * k; ctx.globalAlpha = 0.07; ctx.drawImage(WGL.spr, px - r2, py - r2, r2 * 2, r2 * 2); n++; }
+        }
         for (let c = 0; c < cols; c++) {
           const t = (c + 0.5) * 3, X = A.x + dx * t, Z = A.z + dz * t, u = X * tx + Z * tz, id = Math.floor(u / 3);
           const jx = Math.floor(X * 0.01), jz = Math.floor(Z * 0.01);
