@@ -239,7 +239,7 @@ canvas { display: block; width: 100%; height: 100%; }
 <div id="settings-overlay">
   <div class="settings-card">
     <div class="settings-head">
-      <span>⚙️ 게임 환경 및 웹스윙 설정</span>
+      <span>⚙️ 게임 환경 설정 <small style="font-size:10px;color:#86efac;">v2 · 거리/그림자 조절 추가</small></span>
       <button class="settings-close" id="settings-close">닫기 ✕</button>
     </div>
     <div class="settings-section">
@@ -250,6 +250,24 @@ canvas { display: block; width: 100%; height: 100%; }
         <button class="weather-btn active" data-mode="night">🌙 밤 (Night)</button>
         <button class="weather-btn" data-mode="cloudy">☁️ 흐림 (Cloudy)</button>
       </div>
+    </div>
+    <div class="settings-section">
+      <span class="settings-label">🏙️ 디테일 · 청크 거리 (Detail &amp; Chunk Distance)</span>
+      <span class="settings-label" style="margin-bottom:2px;">건물 디테일 거리 <span id="gu-detail-val">700</span> m</span>
+      <input type="range" id="gu-detail" min="300" max="2000" step="50" value="700" style="width:100%;touch-action:none;">
+      <div class="assist-desc">플레이어 주변 몇 m까지 창문·외벽·장식 같은 세부 모델을 만들지 정합니다. 늘리면 멀리서도 건물이 정교하지만 FPS·메모리 부담이 커집니다.</div>
+      <span class="settings-label" style="margin:10px 0 2px;">청크 거리 (건물 표시 범위) <span id="gu-chunk-val">2300</span> m</span>
+      <input type="range" id="gu-chunk" min="800" max="2600" step="100" value="2300" style="width:100%;touch-action:none;">
+      <div class="assist-desc">멀리 있는 건물 덩어리(청크)를 어디까지 그릴지 정합니다. 줄이면 가볍고, 늘리면 먼 도시까지 보입니다.</div>
+    </div>
+    <div class="settings-section">
+      <span class="settings-label">🌑 그림자 (Shadows)</span>
+      <span class="settings-label" style="margin-bottom:2px;">그림자 거리 <span id="gu-shdist-val">600</span> m</span>
+      <input type="range" id="gu-shdist" min="60" max="600" step="10" value="600" style="width:100%;touch-action:none;">
+      <span class="settings-label" style="margin:10px 0 2px;">그림자 디테일 <span id="gu-shdet-val">높음 (4096)</span></span>
+      <input type="range" id="gu-shdet" min="1" max="4" step="1" value="3" style="width:100%;touch-action:none;">
+      <div class="assist-desc">그림자 거리: 플레이어 기준 그림자가 그려지는 반경(기본 = 최대 600m).<br>그림자 디테일: 그림자 해상도 1024 / 2048 / 4096 / 8192. 높을수록 경계가 선명하지만 무겁습니다(8192는 PC 전용). 그래픽 품질이 '낮음'이면 그림자가 꺼져 있습니다.</div>
+      <button class="assist-toggle-btn off" id="gu-reset" style="margin-top:8px;">디테일·청크·그림자 기본값으로 되돌리기</button>
     </div>
     <div class="settings-section">
       <span class="settings-label">📊 화면 정보 표시 (HUD Information)</span>
@@ -275,24 +293,6 @@ canvas { display: block; width: 100%; height: 100%; }
       <span class="settings-label">🎨 그래픽 품질 (Graphics)</span>
       <button class="assist-toggle-btn" id="btn-gfx-quality">그래픽 품질: 보통 (권장)</button>
       <div class="assist-desc">낮음: 그림자·블룸 없음, 해상도 1.0배 (가장 빠름)<br>보통: 하늘 돔 + 캐릭터·건물 그림자 + 필름 톤매핑<br>높음: 고해상도 그림자 + 블룸(빛 번짐). 모두 게임 파일 안에 내장되어 인터넷이 필요 없습니다. 어느 단계든 FPS가 떨어지면 해상도를 자동 조절합니다.</div>
-    </div>
-    <div class="settings-section">
-      <span class="settings-label">🏙️ 디테일 · 청크 거리 (Detail &amp; Chunk Distance)</span>
-      <span class="settings-label" style="margin-bottom:2px;">건물 디테일 거리 <span id="gu-detail-val">700</span> m</span>
-      <input type="range" id="gu-detail" min="300" max="2000" step="50" value="700" style="width:100%;touch-action:none;">
-      <div class="assist-desc">플레이어 주변 몇 m까지 창문·외벽·장식 같은 세부 모델을 만들지 정합니다. 늘리면 멀리서도 건물이 정교하지만 FPS·메모리 부담이 커집니다.</div>
-      <span class="settings-label" style="margin:10px 0 2px;">청크 거리 (건물 표시 범위) <span id="gu-chunk-val">2300</span> m</span>
-      <input type="range" id="gu-chunk" min="800" max="2600" step="100" value="2300" style="width:100%;touch-action:none;">
-      <div class="assist-desc">멀리 있는 건물 덩어리(청크)를 어디까지 그릴지 정합니다. 줄이면 가볍고, 늘리면 먼 도시까지 보입니다.</div>
-    </div>
-    <div class="settings-section">
-      <span class="settings-label">🌑 그림자 (Shadows)</span>
-      <span class="settings-label" style="margin-bottom:2px;">그림자 거리 <span id="gu-shdist-val">600</span> m</span>
-      <input type="range" id="gu-shdist" min="60" max="600" step="10" value="600" style="width:100%;touch-action:none;">
-      <span class="settings-label" style="margin:10px 0 2px;">그림자 디테일 <span id="gu-shdet-val">높음 (4096)</span></span>
-      <input type="range" id="gu-shdet" min="1" max="4" step="1" value="3" style="width:100%;touch-action:none;">
-      <div class="assist-desc">그림자 거리: 플레이어 기준 그림자가 그려지는 반경(기본 = 최대 600m).<br>그림자 디테일: 그림자 해상도 1024 / 2048 / 4096 / 8192. 높을수록 경계가 선명하지만 무겁습니다(8192는 PC 전용). 그래픽 품질이 '낮음'이면 그림자가 꺼져 있습니다.</div>
-      <button class="assist-toggle-btn off" id="gu-reset" style="margin-top:8px;">디테일·청크·그림자 기본값으로 되돌리기</button>
     </div>
     <div class="settings-section" style="margin-bottom:4px;">
       <span class="settings-label">🕸️ 웹스윙 어시스트 (Web-Swing Assist)</span>
