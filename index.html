@@ -276,6 +276,24 @@ canvas { display: block; width: 100%; height: 100%; }
       <button class="assist-toggle-btn" id="btn-gfx-quality">그래픽 품질: 보통 (권장)</button>
       <div class="assist-desc">낮음: 그림자·블룸 없음, 해상도 1.0배 (가장 빠름)<br>보통: 하늘 돔 + 캐릭터·건물 그림자 + 필름 톤매핑<br>높음: 고해상도 그림자 + 블룸(빛 번짐). 모두 게임 파일 안에 내장되어 인터넷이 필요 없습니다. 어느 단계든 FPS가 떨어지면 해상도를 자동 조절합니다.</div>
     </div>
+    <div class="settings-section">
+      <span class="settings-label">🏙️ 디테일 · 청크 거리 (Detail &amp; Chunk Distance)</span>
+      <span class="settings-label" style="margin-bottom:2px;">건물 디테일 거리 <span id="gu-detail-val">700</span> m</span>
+      <input type="range" id="gu-detail" min="300" max="2000" step="50" value="700" style="width:100%;touch-action:none;">
+      <div class="assist-desc">플레이어 주변 몇 m까지 창문·외벽·장식 같은 세부 모델을 만들지 정합니다. 늘리면 멀리서도 건물이 정교하지만 FPS·메모리 부담이 커집니다.</div>
+      <span class="settings-label" style="margin:10px 0 2px;">청크 거리 (건물 표시 범위) <span id="gu-chunk-val">2300</span> m</span>
+      <input type="range" id="gu-chunk" min="800" max="2600" step="100" value="2300" style="width:100%;touch-action:none;">
+      <div class="assist-desc">멀리 있는 건물 덩어리(청크)를 어디까지 그릴지 정합니다. 줄이면 가볍고, 늘리면 먼 도시까지 보입니다.</div>
+    </div>
+    <div class="settings-section">
+      <span class="settings-label">🌑 그림자 (Shadows)</span>
+      <span class="settings-label" style="margin-bottom:2px;">그림자 거리 <span id="gu-shdist-val">600</span> m</span>
+      <input type="range" id="gu-shdist" min="60" max="600" step="10" value="600" style="width:100%;touch-action:none;">
+      <span class="settings-label" style="margin:10px 0 2px;">그림자 디테일 <span id="gu-shdet-val">높음 (4096)</span></span>
+      <input type="range" id="gu-shdet" min="1" max="4" step="1" value="3" style="width:100%;touch-action:none;">
+      <div class="assist-desc">그림자 거리: 플레이어 기준 그림자가 그려지는 반경(기본 = 최대 600m).<br>그림자 디테일: 그림자 해상도 1024 / 2048 / 4096 / 8192. 높을수록 경계가 선명하지만 무겁습니다(8192는 PC 전용). 그래픽 품질이 '낮음'이면 그림자가 꺼져 있습니다.</div>
+      <button class="assist-toggle-btn off" id="gu-reset" style="margin-top:8px;">디테일·청크·그림자 기본값으로 되돌리기</button>
+    </div>
     <div class="settings-section" style="margin-bottom:4px;">
       <span class="settings-label">🕸️ 웹스윙 어시스트 (Web-Swing Assist)</span>
       <button class="assist-toggle-btn" id="btn-assist-toggle">웹스윙 어시스트: ON (쉬운 스윙 활성)</button>
@@ -3298,7 +3316,7 @@ function nycLiteSkip(cx, cz) {
   if (cz > 3300 && cz < 6000 && cx > -3300 && cx < -300) return false;   // 로어 맨해튼 박스
   return true;
 }
-const NYC_CHUNK = 250; let NYC_LOAD_R = 700, NYC_UNLOAD_R = 950;
+const NYC_CHUNK = 250; let NYC_LOAD_R = 700, NYC_UNLOAD_R = 950; let NYC_CHUNK_SCALE = 1;   // 설정의 청크 거리 슬라이더(2300m = 1.0)
 function splitMeshIntoChunks(orig, cell, maxD, out) {
   const geo = orig.geometry, pos = geo.attributes.position.array, idx = geo.index ? geo.index.array : null;
   if (!idx) return false;
@@ -3418,7 +3436,7 @@ function buildNYCDetailLayer() {
   setInterval(() => {
     if (!camera) return;
     const px = camera.position.x, pz = camera.position.z;
-    for (const s of staticChunks) { const d = Math.hypot(px-s.x, pz-s.z) - s.r; s.mesh.visible = d < s.maxD; }
+    for (const s of staticChunks) { const d = Math.hypot(px-s.x, pz-s.z) - s.r; s.mesh.visible = d < s.maxD * NYC_CHUNK_SCALE; }
     const want = [];
     for (const c of cells.values()) {
       const d = Math.hypot(px-((c.ix+0.5)*NYC_CHUNK-4500), pz-((c.iz+0.5)*NYC_CHUNK-8000));
@@ -4516,14 +4534,14 @@ function applyWeatherTheme(mode) {
     sunLight.position.set(120, 420, 100);
   } else {
     // night (기본)
-    scene.background.setHex(0x0f172a);
-    scene.fog.color.setHex(0x0f172a);
+    scene.background.setHex(0x03060d);
+    scene.fog.color.setHex(0x03060d);
     scene.fog.density = 0.00045;
-    hemiLightRef.color.setHex(0x5a74b0);
-    hemiLightRef.groundColor.setHex(0x0b1020);
-    hemiLightRef.intensity = 0.46;
+    hemiLightRef.color.setHex(0x2c3d68);
+    hemiLightRef.groundColor.setHex(0x04060c);
+    hemiLightRef.intensity = 0.18;
     sunLight.color.setHex(0x9bb8ff);           // 차가운 달빛
-    sunLight.intensity = 0.65;
+    sunLight.intensity = 0.26;
     sunLight.position.set(200, 450, 180);
   }
   document.querySelectorAll('.weather-btn').forEach(btn => {
@@ -5464,6 +5482,56 @@ const GFX_PRESETS = {
   ultra:  { label: '최고급 (울트라: 반사·빛줄기·시네마 후처리)', maxPR: 2.0, shadow: 4096, bShadow: true, bloom: true, ultra: true, loadR: 1200, shR: 230 },
   cinema: { label: '시네마틱 (SSR·볼류메트릭·모션블러·AO·2단 그림자)', maxPR: 2.0, shadow: 4096, bShadow: true, bloom: true, ultra: true, cinema: true, loadR: 1200, shR: 230 }
 };
+
+// ---------- 사용자 설정: 디테일 거리 · 청크 거리 · 그림자 거리/디테일 (localStorage 저장) ----------
+const GFXU_DEF = { detail: null, chunk: 2300, shDist: 600, shDetail: 3 };   // detail:null = 그래픽 품질 프리셋 값 사용 / 그림자 거리 기본 = 최대(600m)
+const GFXU = Object.assign({}, GFXU_DEF);
+try { const _s = JSON.parse(localStorage.getItem('gfxUser2') || 'null'); if (_s) for (const k in GFXU_DEF) if (_s[k] !== undefined) GFXU[k] = _s[k]; } catch (e) {}
+const GFX_SH_OFF = 600;                                  // 그림자 카메라를 태양 쪽으로 띄우는 거리(높은 건물 그림자 포함)
+const GFX_SH_SIZES = [1024, 2048, 4096, 8192], GFX_SH_NAMES = ['낮음 (1024)', '보통 (2048)', '높음 (4096)', '최고 (8192)'];
+function gfxUserSave() { try { localStorage.setItem('gfxUser2', JSON.stringify(GFXU)); } catch (e) {} }
+function gfxEffDetail() { const P = GFX_PRESETS[GFX.quality] || {}; return GFXU.detail != null ? GFXU.detail : (GFX_MOBILE ? 520 : (P.loadR || 700)); }
+function gfxApplyUser() {
+  NYC_LOAD_R = gfxEffDetail(); NYC_UNLOAD_R = NYC_LOAD_R + 250;
+  NYC_CHUNK_SCALE = GFXU.chunk / 2300;
+}
+function gfxShadowParams() {
+  const lv = Math.min(4, Math.max(1, Math.round(GFXU.shDetail) || 3));
+  const cap = GFX_MOBILE ? 4096 : Math.min(8192, (renderer && renderer.capabilities && renderer.capabilities.maxTextureSize) || 4096);
+  return { size: Math.min(GFX_SH_SIZES[lv - 1], cap), R: Math.max(40, Math.round(GFXU.shDist)) };
+}
+function gfxReapplyShadowParams() {
+  if (!sunLight || !sunLight.castShadow) return;
+  const { size, R } = gfxShadowParams(), s = sunLight.shadow, c = s.camera;
+  s.mapSize.set(size, size); GFX.shR = R;
+  c.near = 1; c.far = 1500; c.left = -R; c.right = R; c.top = R; c.bottom = -R; c.updateProjectionMatrix();
+  s.bias = -0.00036; s.normalBias = Math.max(0.25, (2 * R / size) * 1.6);   // 건물 자기 그림자(여드름) 방지: 텍셀 크기에 비례
+  gfxSoftRadius();
+  if (s.map) { s.map.dispose(); s.map = null; }
+  GFXS.dirty = true;
+}
+function gfxSyncUserUI() {
+  const set = (id, v, txt) => { const e = document.getElementById(id), t = document.getElementById(id + '-val'); if (e) e.value = v; if (t) t.textContent = txt; };
+  const d = Math.round(gfxEffDetail());
+  set('gu-detail', d, d); set('gu-chunk', GFXU.chunk, GFXU.chunk);
+  set('gu-shdist', GFXU.shDist, GFXU.shDist);
+  set('gu-shdet', GFXU.shDetail, GFX_SH_NAMES[Math.min(4, Math.max(1, Math.round(GFXU.shDetail))) - 1]);
+}
+function wireGfxUser() {
+  const $ = (id) => document.getElementById(id); if (!$('gu-detail')) return;
+  $('gu-detail').addEventListener('input', () => { GFXU.detail = +$('gu-detail').value; gfxApplyUser(); gfxSyncUserUI(); });
+  $('gu-chunk').addEventListener('input', () => { GFXU.chunk = +$('gu-chunk').value; gfxApplyUser(); gfxSyncUserUI(); });
+  $('gu-shdist').addEventListener('input', () => { GFXU.shDist = +$('gu-shdist').value; gfxSyncUserUI(); });
+  $('gu-shdet').addEventListener('input', () => { GFXU.shDetail = +$('gu-shdet').value; gfxSyncUserUI(); });
+  for (const id of ['gu-detail', 'gu-chunk']) $(id).addEventListener('change', gfxUserSave);
+  for (const id of ['gu-shdist', 'gu-shdet']) $(id).addEventListener('change', () => { gfxUserSave(); try { gfxReapplyShadowParams(); } catch (e) { console.warn('shadow', e); } });
+  $('gu-reset').addEventListener('pointerdown', (e) => {
+    e.preventDefault(); e.stopPropagation();
+    Object.assign(GFXU, GFXU_DEF); gfxUserSave(); gfxApplyUser(); try { gfxReapplyShadowParams(); } catch (_) {} gfxSyncUserUI();
+  });
+  gfxApplyUser(); gfxSyncUserUI();
+}
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', wireGfxUser); else wireGfxUser();
 // ---------- 고급 소프트 섀도(PCSS-lite): 접촉부는 선명, 멀수록 부드러운 반그림자 + 경사면 바이어스 ----------
 // 셰이더 컴파일을 실제로 테스트해 통과할 때만 적용(실패 시 기본 PCFSoft 유지)
 (function gfxPatchSoftShadow() {
@@ -5532,13 +5600,13 @@ const GFX_CLOUD = {
   day:    { lo: 0.55, hi: 0.76, a: 0.92, topFade: 1.0, dark: 0.00, lit: [1.00, 0.99, 0.96], shade: [0.60, 0.70, 0.86], rim: [1.00, 0.95, 0.82], wind: 0.0040 },
   sunset: { lo: 0.47, hi: 0.70, a: 0.88, topFade: 1.0, dark: 0.25, lit: [1.00, 0.70, 0.38], shade: [0.42, 0.17, 0.26], rim: [1.00, 0.62, 0.28], wind: 0.0030 },
   cloudy: { lo: 0.26, hi: 0.50, a: 0.98, topFade: 0.0, dark: 0.55, lit: [0.78, 0.82, 0.87], shade: [0.36, 0.41, 0.48], rim: [0.00, 0.00, 0.00], wind: 0.0060 },
-  night:  { lo: 0.54, hi: 0.76, a: 0.80, topFade: 1.0, dark: 0.20, lit: [0.20, 0.25, 0.42], shade: [0.025, 0.035, 0.08], rim: [0.45, 0.55, 0.85], wind: 0.0035 }
+  night:  { lo: 0.54, hi: 0.76, a: 0.80, topFade: 1.0, dark: 0.35, lit: [0.05, 0.065, 0.12], shade: [0.006, 0.009, 0.02], rim: [0.15, 0.20, 0.35], wind: 0.0035 }
 };
 const GFX_SKY = {
   day:    { top: 0x1f6fc9, exp: 0.85, star: 0.0, sun: 0xfff1c9, sunI: 1.0, expo: 1.10, bloom: 0.35 },
   sunset: { top: 0xff982b, exp: 0.62, star: 0.0, sun: 0xffedc2, sunI: 2.35, expo: 1.18, bloom: 0.78 },
   cloudy: { top: 0x6b7c8e, exp: 0.60, star: 0.0, sun: 0xdde6ee, sunI: 0.0, expo: 1.10, bloom: 0.30 },
-  night:  { top: 0x040a18, exp: 0.65, star: 1.0, sun: 0x9db8ff, sunI: 0.55, expo: 1.20, bloom: 0.75 }
+  night:  { top: 0x01040c, exp: 0.65, star: 1.0, sun: 0x8aa6ee, sunI: 0.30, expo: 0.95, bloom: 0.75 }
 };
 const GFX_MOBILE = !!(window.matchMedia && window.matchMedia('(pointer:coarse)').matches);
 const GFX = {
@@ -5640,7 +5708,7 @@ function gfxAfterWeather(mode) {
 // ---------- 건물 그림자 프록시 ----------
 // 6MB짜리 병합 건물 메시를 그림자 패스에 넣으면 매우 느리다. 대신 플레이어 주변(그림자가
 // 닿을 수 있는) 건물만 풋프린트 압출 형태의 저폴리 지오메트리로 모아 그림자 캐스터로 쓴다.
-const GFXS = { mesh: null, pos: null, attr: null, cap: 720000, cx: 1e9, cz: 1e9, dirty: true, wait: 0 };
+const GFXS = { mesh: null, pos: null, attr: null, cap: 2160000, cx: 1e9, cz: 1e9, dirty: true, wait: 0 };
 function gfxShadowInit() {
   GFXS.pos = new Float32Array(GFXS.cap);
   const g = new THREE.BufferGeometry();
@@ -5677,7 +5745,8 @@ function gfxRebuildShadowProxy(px, pz) {
   const seen = new Set(), cands = [];
   const d = GFX.sunDir, hl = Math.hypot(d.x, d.z), sy = Math.max(0.12, d.y);
   const ux = hl > 1e-4 ? -d.x / hl : 0, uz = hl > 1e-4 ? -d.z / hl : 0;   // 그림자가 드리우는 수평 방향
-  for (let ox = -3; ox <= 3; ox++) for (let oz = -3; oz <= 3; oz++) {
+  const NR = Math.min(8, Math.max(3, Math.ceil(((GFX.shR || 110) * 0.92 + 300) / SPATIAL_CELL)));   // 그림자 거리에 맞춰 탐색 범위 확대
+  for (let ox = -NR; ox <= NR; ox++) for (let oz = -NR; oz <= NR; oz++) {
     const list = spatialColliderGrid.get((gx + ox) + ',' + (gz + oz)); if (!list) continue;
     for (let i = 0; i < list.length; i++) {
       const c = list[i]; if (seen.has(c)) continue; seen.add(c);
@@ -5987,11 +6056,7 @@ function gfxApplyShadows() {
   if (!P.shadow) { renderer.shadowMap.enabled = false; sunLight.castShadow = false; }
   else {
     renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    sunLight.castShadow = true; { const _sh = GFX_MOBILE ? Math.min(P.shadow, 2048) : P.shadow; sunLight.shadow.mapSize.set(_sh, _sh); }
-    const c = sunLight.shadow.camera;
-    const R = Math.round((P.shR || 80) * (GFX_MOBILE ? 0.85 : 1)); GFX.shR = R; c.near = 1; c.far = 900; c.left = -R; c.right = R; c.top = R; c.bottom = -R; c.updateProjectionMatrix();
-    sunLight.shadow.bias = -0.0006; sunLight.shadow.normalBias = 0.25; gfxSoftRadius();   // 건물 자기 그림자(여드름) 방지
-    if (sunLight.shadow.map) { sunLight.shadow.map.dispose(); sunLight.shadow.map = null; }
+    sunLight.castShadow = true; gfxReapplyShadowParams();   // 거리·해상도는 설정(GFXU)에서 가져옴
   }
   if (GFXS.mesh) GFXS.mesh.visible = !!(P.shadow && P.bShadow);
   GFXS.dirty = true;
@@ -6009,11 +6074,12 @@ function gfxSetQuality(q) {
   GFX.quality = q;
   try { localStorage.setItem('gfxQuality', q); } catch (e) {}
   const P = GFX_PRESETS[q];
-  NYC_LOAD_R = GFX_MOBILE ? 520 : (P.loadR || 700); NYC_UNLOAD_R = NYC_LOAD_R + 250;
+  gfxApplyUser();
   if (q !== 'low') { try { GFX.envKey = ''; gfxBuildEnv(); } catch (e) { console.warn('env', e); } }
   gfxApplyShadows(); gfxSetPR(Math.min(window.devicePixelRatio || 1, GFX_MOBILE ? Math.min(P.maxPR, 1.25) : P.maxPR)); gfxSetBloom(P.bloom); gfx2Apply(!!P.cinema); try { vfxApplyQuality(q); } catch (e) { console.warn('vfxq', e); }
   const b = document.getElementById('btn-gfx-quality');
   if (b) { b.innerText = '그래픽 품질: ' + P.label; b.classList.toggle('off', q === 'low'); }
+  try { gfxSyncUserUI(); } catch (e) {}
 }
 function gfxInit() {
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -6057,10 +6123,10 @@ function gfxUpdate() {
       const cx = p.x * xx + p.z * xz, cy = p.x * yx + p.z * yz;
       const sx = Math.round(cx / tw) * tw - cx, sy = Math.round(cy / tw) * tw - cy;
       sunLight.target.position.set(p.x + xx * sx + yx * sy, yy * sy, p.z + xz * sx + yz * sy);
-      sunLight.position.set(sunLight.target.position.x + d.x * 350, sunLight.target.position.y + d.y * 350, sunLight.target.position.z + d.z * 350);
+      sunLight.position.set(sunLight.target.position.x + d.x * GFX_SH_OFF, sunLight.target.position.y + d.y * GFX_SH_OFF, sunLight.target.position.z + d.z * GFX_SH_OFF);
     }
     sunLight.target.updateMatrixWorld();
-    if (GFXS.mesh.visible && GFXS.wait-- <= 0 && (GFXS.dirty || Math.hypot(p.x - GFXS.cx, p.z - GFXS.cz) > 30)) {
+    if (GFXS.mesh.visible && GFXS.wait-- <= 0 && (GFXS.dirty || Math.hypot(p.x - GFXS.cx, p.z - GFXS.cz) > Math.max(30, (GFX.shR || 110) * 0.1))) {
       gfxRebuildShadowProxy(p.x, p.z); GFXS.wait = 20;
     }
   }
@@ -6299,7 +6365,7 @@ function gfx2Update() {
   if (GFX2.wait2-- <= 0 && Math.hypot(p.x - GFX2.cx2, p.z - GFX2.cz2) > 70) { gfx2RebuildProxy2(p.x, p.z); GFX2.wait2 = 40; }
   // 림라이트: 태양 반대편에서 들어오는 차가운 역광(실루엣 강조)
   const night = currentWeatherMode === 'night', cloudy = currentWeatherMode === 'cloudy';
-  const sunset = currentWeatherMode === 'sunset'; GFX2.rim.color.setHex(night ? 0x6f9bff : (cloudy ? 0xa9bfd6 : (sunset ? 0x9aa6ff : 0xbcd8ff))); GFX2.rim.intensity = night ? 0.7 : (cloudy ? 0.35 : (sunset ? 0.45 : 0.25));
+  const sunset = currentWeatherMode === 'sunset'; GFX2.rim.color.setHex(night ? 0x4a6fc0 : (cloudy ? 0xa9bfd6 : (sunset ? 0x9aa6ff : 0xbcd8ff))); GFX2.rim.intensity = night ? 0.28 : (cloudy ? 0.35 : (sunset ? 0.45 : 0.25));
   GFX2.rim.target.position.set(p.x, p.y, p.z); GFX2.rim.position.set(p.x - d.x * 200 + 40, p.y + 90, p.z - d.z * 200 + 40); GFX2.rim.target.updateMatrixWorld();
   // 네온 사인(타임스퀘어 전광판): 야간·노을·흐림에서 발광 강화 + 깜빡임
   if ((GFX2.neonScan++ % 120) === 0) { GFX2.neon.length = 0; scene.traverse(o => { if (o.isMesh && o.name === 'One_Times_Square_Facade_Display') { if (o.userData.neonBase === undefined) { o.userData.neonBase = o.material.emissiveIntensity; o.userData.ph = Math.random() * 6.28; } GFX2.neon.push(o); } }); }
@@ -6884,8 +6950,8 @@ function setMap(open) {
 
 function init() {
   scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x0f172a);
-  scene.fog = new THREE.FogExp2(0x0f172a, 0.00045);
+  scene.background = new THREE.Color(0x03060d);
+  scene.fog = new THREE.FogExp2(0x03060d, 0.00045);
   camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.2, 2600);
   renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
   renderer.setSize(window.innerWidth, window.innerHeight);
@@ -7075,7 +7141,7 @@ function vfxMakeEmissive(cv, style) {
   const t = new THREE.CanvasTexture(out); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = 4;
   return t;
 }
-function vfxGlowValue() { const G = { night: 1.0, sunset: 0.45, cloudy: 0.12, day: 0.0 }, v = G[currentWeatherMode]; return v === undefined ? 0 : v; }
+function vfxGlowValue() { const G = { night: 1.25, sunset: 0.45, cloudy: 0.12, day: 0.0 }, v = G[currentWeatherMode]; return v === undefined ? 0 : v; }
 function vfxApplyGlow() {
   const v = vfxGlowValue();
   for (const st in NYC_FACADE_MATS) { const m = NYC_FACADE_MATS[st]; if (m.emissiveMap) { m.emissiveIntensity = v * 1.15; } }
