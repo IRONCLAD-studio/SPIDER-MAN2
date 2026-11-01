@@ -3597,7 +3597,7 @@ function buildOSMBuildingsFromEmbeddedData(onProgress, onDone) {
             float dist = length(cameraPosition - vWP);
             float fade = 1.0 - smoothstep(120.0, 430.0, dist);
             float r = h21(id + floor(vWP.xz*0.01));
-            float lit = step(mix(0.72, 0.56, clamp((uWinGlow - 0.9) / 0.6, 0.0, 1.0)), r);
+            float lit = step(mix(0.72, 0.65, clamp((uWinGlow - 0.7) / 0.4, 0.0, 1.0)), r);
             vec3 glass = mix(vec3(0.07,0.10,0.13), vec3(0.28,0.38,0.47), f.y*0.8) * (0.8+0.5*r);
             float sill = step(f.y,0.28)*step(0.2,f.x)*step(f.x,0.8);
             vec3 col = diffuseColor.rgb;
@@ -4534,14 +4534,14 @@ function applyWeatherTheme(mode) {
     sunLight.position.set(120, 420, 100);
   } else {
     // night (기본)
-    scene.background.setHex(0x03060d);
-    scene.fog.color.setHex(0x03060d);
+    scene.background.setHex(0x060b18);
+    scene.fog.color.setHex(0x060b18);
     scene.fog.density = 0.00045;
-    hemiLightRef.color.setHex(0x2c3d68);
+    hemiLightRef.color.setHex(0x3a4f82);
     hemiLightRef.groundColor.setHex(0x04060c);
-    hemiLightRef.intensity = 0.18;
+    hemiLightRef.intensity = 0.30;
     sunLight.color.setHex(0x9bb8ff);           // 차가운 달빛
-    sunLight.intensity = 0.26;
+    sunLight.intensity = 0.40;
     sunLight.position.set(200, 450, 180);
   }
   document.querySelectorAll('.weather-btn').forEach(btn => {
@@ -5606,7 +5606,7 @@ const GFX_SKY = {
   day:    { top: 0x1f6fc9, exp: 0.85, star: 0.0, sun: 0xfff1c9, sunI: 1.0, expo: 1.10, bloom: 0.35 },
   sunset: { top: 0xff982b, exp: 0.62, star: 0.0, sun: 0xffedc2, sunI: 2.35, expo: 1.18, bloom: 0.78 },
   cloudy: { top: 0x6b7c8e, exp: 0.60, star: 0.0, sun: 0xdde6ee, sunI: 0.0, expo: 1.10, bloom: 0.30 },
-  night:  { top: 0x01040c, exp: 0.65, star: 1.0, sun: 0x8aa6ee, sunI: 0.30, expo: 0.95, bloom: 1.15 }
+  night:  { top: 0x01040c, exp: 0.65, star: 1.0, sun: 0x8aa6ee, sunI: 0.30, expo: 1.08, bloom: 1.6 }
 };
 const GFX_MOBILE = !!(window.matchMedia && window.matchMedia('(pointer:coarse)').matches);
 const GFX = {
@@ -5688,7 +5688,7 @@ function gfxAfterWeather(mode) {
   try { vfxApplyGlow(); } catch (e) {}
   const P = GFX_SKY[mode] || GFX_SKY.night;
   if (renderer) renderer.toneMappingExposure = P.expo;
-  GFXB.strength = P.bloom; GFXB.thr = mode === 'night' ? 0.42 : 0.82; try { gfxSetBloom(gfxBloomWanted(GFX_PRESETS[GFX.quality])); } catch (e) {} GFX.sunI = P.sunI; GFX.envKey = ''; if (renderer && GFX.quality !== 'low') setTimeout(() => { try { gfxBuildEnv(); } catch (e) { console.warn('env', e); } }, 50);
+  GFXB.strength = P.bloom; GFXB.thr = mode === 'night' ? 0.34 : 0.82; GFXB.sp1 = mode === 'night' ? 1.9 : 1; GFXB.sp2 = mode === 'night' ? 3.0 : 1; try { gfxSetBloom(gfxBloomWanted(GFX_PRESETS[GFX.quality])); } catch (e) {} GFX.sunI = P.sunI; GFX.envKey = ''; if (renderer && GFX.quality !== 'low') setTimeout(() => { try { gfxBuildEnv(); } catch (e) { console.warn('env', e); } }, 50);
   if (sunLight) GFX.sunDir.copy(sunLight.position).normalize();
   GFXS.dirty = true;
   if (!GFX.sky) return;
@@ -5771,7 +5771,7 @@ function gfxRebuildShadowProxy(px, pz) {
 }
 
 // ---------- 자체 구현 블룸 (UnrealBloom 대체, 외부 스크립트 불필요) ----------
-const GFXB = { on: false, thr: 0.82, strength: 0.6, W: 0, H: 0, rtScene: null, a1: null, b1: null, a2: null, b2: null,
+const GFXB = { on: false, thr: 0.82, sp1: 1, sp2: 1, strength: 0.6, W: 0, H: 0, rtScene: null, a1: null, b1: null, a2: null, b2: null,
   qScene: null, qCam: null, quad: null, mBright: null, mBlur: null, mComp: null };
 function gfxBloomInit() {
   GFXB.qScene = new THREE.Scene();
@@ -5997,13 +5997,13 @@ function gfxRenderBloom() {
   gfxPass(GFXB.mBright, GFXB.a1);
   // 1/4 해상도 가우시안 블러
   const bl = GFXB.mBlur.uniforms;
-  bl.tDiffuse.value = GFXB.a1.texture; bl.dir.value.set(1 / GFXB.a1.width, 0); gfxPass(GFXB.mBlur, GFXB.b1);
-  bl.tDiffuse.value = GFXB.b1.texture; bl.dir.value.set(0, 1 / GFXB.a1.height); gfxPass(GFXB.mBlur, GFXB.a1);
+  bl.tDiffuse.value = GFXB.a1.texture; bl.dir.value.set(GFXB.sp1 / GFXB.a1.width, 0); gfxPass(GFXB.mBlur, GFXB.b1);
+  bl.tDiffuse.value = GFXB.b1.texture; bl.dir.value.set(0, GFXB.sp1 / GFXB.a1.height); gfxPass(GFXB.mBlur, GFXB.a1);
   // 1/8 해상도 넓은 번짐
   GFXB.mBright.uniforms.tDiffuse.value = GFXB.a1.texture; GFXB.mBright.uniforms.texel.value.set(0, 0); GFXB.mBright.uniforms.thr.value = 0.0;
   gfxPass(GFXB.mBright, GFXB.a2); GFXB.mBright.uniforms.thr.value = GFXB.thr;
-  bl.tDiffuse.value = GFXB.a2.texture; bl.dir.value.set(1 / GFXB.a2.width, 0); gfxPass(GFXB.mBlur, GFXB.b2);
-  bl.tDiffuse.value = GFXB.b2.texture; bl.dir.value.set(0, 1 / GFXB.a2.height); gfxPass(GFXB.mBlur, GFXB.a2);
+  bl.tDiffuse.value = GFXB.a2.texture; bl.dir.value.set(GFXB.sp2 / GFXB.a2.width, 0); gfxPass(GFXB.mBlur, GFXB.b2);
+  bl.tDiffuse.value = GFXB.b2.texture; bl.dir.value.set(0, GFXB.sp2 / GFXB.a2.height); gfxPass(GFXB.mBlur, GFXB.a2);
   // 합성 → 화면
   const u = GFXB.mComp.uniforms;
   u.tScene.value = GFXB.rtScene.texture; u.tB1.value = GFXB.a1.texture; u.tB2.value = GFXB.a2.texture; u.strength.value = GFXB.strength;
@@ -6951,8 +6951,8 @@ function setMap(open) {
 
 function init() {
   scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x03060d);
-  scene.fog = new THREE.FogExp2(0x03060d, 0.00045);
+  scene.background = new THREE.Color(0x060b18);
+  scene.fog = new THREE.FogExp2(0x060b18, 0.00045);
   camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.2, 2600);
   renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
   renderer.setSize(window.innerWidth, window.innerHeight);
@@ -7125,7 +7125,7 @@ function vfxMakeEmissive(cv, style) {
   const out = document.createElement('canvas'); out.width = out.height = S;
   const oc = out.getContext('2d'), od = oc.createImageData(S, S);
   const cw = S / bpt, ch = S / fpt, fam = sp.fam;
-  const prob = fam === 'glass' ? 0.34 : (fam === 'brick' || fam === 'loft' ? 0.20 : 0.26);
+  const prob = fam === 'glass' ? 0.24 : (fam === 'brick' || fam === 'loft' ? 0.14 : 0.18);
   const hash = (a, b) => { let v = (Math.imul(a + 17, 374761393) ^ Math.imul(b + 91, 668265263)) >>> 0; v = Math.imul(v ^ (v >>> 13), 1274126177) >>> 0; return ((v ^ (v >>> 16)) >>> 0) / 4294967295; };
   for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
     const i = (y * S + x) * 4, r = src[i], g = src[i + 1], b = src[i + 2], lum = 0.299 * r + 0.587 * g + 0.114 * b;
@@ -7142,7 +7142,7 @@ function vfxMakeEmissive(cv, style) {
   const t = new THREE.CanvasTexture(out); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = 4;
   return t;
 }
-function vfxGlowValue() { const G = { night: 1.8, sunset: 0.45, cloudy: 0.12, day: 0.0 }, v = G[currentWeatherMode]; return v === undefined ? 0 : v; }
+function vfxGlowValue() { const G = { night: 1.15, sunset: 0.45, cloudy: 0.12, day: 0.0 }, v = G[currentWeatherMode]; return v === undefined ? 0 : v; }
 function vfxApplyGlow() {
   const v = vfxGlowValue();
   for (const st in NYC_FACADE_MATS) { const m = NYC_FACADE_MATS[st]; if (m.emissiveMap) { m.emissiveIntensity = v * 1.15; } }
