@@ -2490,10 +2490,11 @@ function getLandmarkFootprintMatches() {
   }
   return matches;
 }
-function addLandmarkWindowPanels(ring, height, style) {
+function addLandmarkWindowPanels(ring, height, style, btype) {
   // Batch facade windows into one mesh per landmark to avoid thousands of separate objects.
   const positions=[], colors=[], indices=[];
-  const baseColor=new THREE.Color(style.window), litColor=new THREE.Color(style.trim);
+  const baseColor=new THREE.Color(style.window), litColor=new THREE.Color();
+  const _lcx=ring.reduce((s,p)=>s+p.x,0)/ring.length, _lcz=ring.reduce((s,p)=>s+p.z,0)/ring.length, _lwp=nycBldProfile(_lcx,_lcz,height,btype||'yes');
   let quad=0;
   for(let e=0;e<ring.length;e++) {
     const a=ring[e], b=ring[(e+1)%ring.length];
@@ -2512,7 +2513,7 @@ function addLandmarkWindowPanels(ring, height, style) {
         const ux=dx/len*ww*0.5, uz=dz/len*ww*0.5;
         const vx=nx*0.03, vz=nz*0.03;
         const verts=[[px-ux,y,pz-uz],[px+ux,y,pz+uz],[px+ux,y+wh,pz+uz],[px-ux,y+wh,pz-uz]];
-        for(const v of verts){positions.push(v[0]+vx,v[1],v[2]+vz); const lit=((f*13+c*7+e*3)%11)<3; const col=lit?litColor:baseColor; colors.push(col.r,col.g,col.b);}
+        for(const v of verts){positions.push(v[0]+vx,v[1],v[2]+vz); const lit=nycHashN(e*131+c, f*7+_lwp[1], 17)<nycLitProb(_lwp[0],_lwp[1],f); if(lit){ const _l=nycLitCol(nycHashN(e*131+c, f*7+_lwp[1], 29)); litColor.setRGB(_l[0],_l[1],_l[2]); } const col=lit?litColor:baseColor; colors.push(col.r,col.g,col.b);}
         const k=quad*4; indices.push(k,k+1,k+2,k,k+2,k+3); quad++;
       }
     }
@@ -2521,7 +2522,8 @@ function addLandmarkWindowPanels(ring, height, style) {
   const g=new THREE.BufferGeometry();
   g.setAttribute('position',new THREE.Float32BufferAttribute(positions,3));
   g.setAttribute('color',new THREE.Float32BufferAttribute(colors,3)); g.setIndex(indices); g.computeVertexNormals();
-  const mesh=new THREE.Mesh(g,vfxMat({vertexColors:true,roughness:0.34,metalness:style.kind.includes('glass')||style.kind==='grid'?0.35:0.08,side:THREE.DoubleSide}));
+  const lmMat=vfxMat({vertexColors:true,roughness:0.34,metalness:style.kind.includes('glass')||style.kind==='grid'?0.35:0.08,side:THREE.DoubleSide}); try { nycPatchLitColor(lmMat); } catch (e) { console.warn('nyc lit color', e); }
+  const mesh=new THREE.Mesh(g,lmMat);
   mesh.name=`${style.name}_Facade_Windows`; scene.add(mesh);
 }
 function addLandmarkRoofSignature(ring, height, style) {
@@ -2607,6 +2609,8 @@ function appendGenericFacadePanels(ring, height, facadeType, seed, accum) {
   const cz=ring.reduce((sum,q)=>sum+q.z,0)/ring.length;
   const floors=Math.min(84,Math.max(1,Math.floor((height-2.2)/(height>70?3.45:2.9))));
   const floorStep=(height-2.2)/Math.max(1,floors);
+  const _wp=nycBldProfile(cx,cz,height,facadeType);
+  const _litAt=(e,c,f,g)=>{ const k=glassy?Math.floor(c/3):c; return nycHashN(e*131+k, f*7+_wp[1], 11+(g|0)) < nycLitProb(_wp[0],_wp[1],f); };
   let emitted=0;
   const maxPanels=glassy ? 260 : 96;
   const pushQuad=(verts, colors)=>{
@@ -2645,8 +2649,8 @@ function appendGenericFacadePanels(ring, height, facadeType, seed, accum) {
           const variation=((buildingVariant+e*19+c*7+f*11)%17)/100;
           const lower=new THREE.Color().setRGB(.075+variation,.19+variation,.29+variation);
           const upper=new THREE.Color().setRGB(.25+variation,.39+variation,.52+variation);
-          const lit=((buildingVariant+c*31+f*17+e*13)%23)<4;
-          if(lit){upper.offsetHSL(0,0,.10);lower.offsetHSL(0,0,.045);}
+          const lit=_litAt(e,c,f,0);
+          if(lit){ const lc=nycLitCol(nycHashN(e*131+Math.floor(c/3), f*7+_wp[1], 29)); upper.setRGB(lc[0],lc[1],lc[2]); lower.setRGB(lc[0],lc[1],lc[2]); }
           pushQuad(verts,[lower,lower,upper,upper]);
           // A restrained diagonal sky reflection across selected panes.
           if(((c*3+f*5+e+buildingVariant)%13)===0 && emitted<maxPanels){
@@ -2659,8 +2663,9 @@ function appendGenericFacadePanels(ring, height, facadeType, seed, accum) {
           }
         } else {
           const dark=new THREE.Color(seed>.5?0x303b43:0x45413b);
-          const lit=new THREE.Color(0xf1cf91);
-          const isLit=((buildingVariant+c*23+f*41+e*7)%19)<3;
+          const _lc=nycLitCol(nycHashN(e*131+c, f*7+_wp[1], 29));
+          const lit=new THREE.Color().setRGB(_lc[0],_lc[1],_lc[2]);
+          const isLit=_litAt(e,c,f,1);
           pushQuad(verts,[isLit?lit:dark,isLit?lit:dark,isLit?lit:dark,isLit?lit:dark]);
         }
       }
@@ -2988,6 +2993,109 @@ function nycDrawFacade(style,g,W,H){
     g.strokeStyle='rgba(120,120,115,.10)'; g.lineWidth=1.2; for(let i=0;i<9;i++){ g.beginPath(); g.moveTo(r()*W,0); g.bezierCurveTo(r()*W,H*.3,r()*W,H*.7,r()*W,H); g.stroke(); }
   }
 }
+
+// ============================================================================
+// 뉴욕 야경: 건물마다 켜진 창문 비율이 다르고, 켜진 창문 하나하나가 외벽·도로를 비춘다
+// ============================================================================
+function nycHashN(a, b, c) { let v = (Math.imul(a | 0, 374761393) ^ Math.imul(b | 0, 668265263) ^ Math.imul(c | 0, 2147483629)) >>> 0; v = Math.imul(v ^ (v >>> 13), 1274126177) >>> 0; return ((v ^ (v >>> 16)) >>> 0) / 4294967295; }
+function nycH21(a, b) { const v = Math.sin(a * 127.1 + b * 311.7) * 43758.5453; return v - Math.floor(v); }   // 셰이더 h21 과 동일
+const NYC_RES_TYPES = ['apartments', 'residential', 'house', 'terrace', 'semidetached_house', 'detached', 'dormitory'];
+const NYC_IND_TYPES = ['industrial', 'warehouse', 'garage', 'garages', 'service', 'shed'];
+// 건물 중심 좌표만으로 정해지는 [점등률, 시드] — 건물 본체/근접 디테일/지면 빛 지도가 모두 같은 값을 쓴다.
+// 실제 뉴욕의 밤: 빈 사무실·창고는 거의 꺼져 있고, 초고층 오피스는 층 단위로 대부분 켜져 있으며, 저층 주거는 드문드문 켜진다.
+function nycBldProfile(cx, cz, h, btype) {
+  const ix = Math.round(cx * 4), iz = Math.round(cz * 4);
+  const u = nycHashN(ix, iz, 1), v = nycHashN(ix, iz, 2), w = nycHashN(ix, iz, 3);
+  const resid = NYC_RES_TYPES.indexOf(btype) >= 0, ind = NYC_IND_TYPES.indexOf(btype) >= 0;
+  let f;
+  if (u < 0.10) f = 0.02 + 0.07 * v;                  // 사실상 불 꺼진 건물 (빈 건물·공사 중)
+  else if (ind) f = 0.03 + 0.14 * v;                  // 창고·공장
+  else if (h >= 120) f = 0.40 + 0.38 * v;             // 초고층 오피스
+  else if (h >= 60) f = 0.28 + 0.40 * v;
+  else if (h >= 25) f = 0.16 + 0.34 * v;
+  else f = resid ? (0.10 + 0.34 * v) : (0.08 + 0.30 * v);
+  return [Math.max(0.02, Math.min(0.9, f)), Math.floor(w * 64) + 1];
+}
+// 층마다 점등 편차(층 단위로 켜졌다 꺼짐) — 셰이더의 pl 계산과 동일
+function nycLitProb(frac, seed, floorIdx) { return Math.max(0, Math.min(0.92, frac * (0.35 + 1.3 * nycH21(floorIdx, seed * 1.7 + 3.1)))); }
+// 야간 광원 공용 유니폼 (지면 빛 지도를 벽면 셰이더도 읽는다)
+const NYC_LIGHT = { map: { value: null }, c: { value: new THREE.Vector2(1e9, 1e9) }, s: { value: 384 }, k: { value: 0 }, win: { value: 0 } };
+const NYC_WARM = 'vec3(1.0,0.72,0.42)';
+// 근접 외벽 텍스처 재질용: 건물별 점등 + 창 주변 벽 번짐 + 지면/이웃 창에서 오는 빛 받기
+function nycPatchWinLight(m, style) {
+  const sp = NYC_FACADE_SPECS[style] || {};
+  const cellsX = sp.bpt || 4, cellsY = sp.fpt || 4;
+  const group = sp.fam === 'glass' ? 3 : 1;
+  const hasWin = style === 'blank' ? 0 : 1;
+  const prevOBC = m.onBeforeCompile, prevKey = m.customProgramCacheKey;
+  m.onBeforeCompile = function (sh, rr) {
+    if (prevOBC) prevOBC.call(m, sh, rr);
+    sh.uniforms.uWC = { value: new THREE.Vector4(cellsX, cellsY, group, hasWin) };
+    sh.uniforms.uWM = { value: new THREE.Vector2(sp.bay || 3, sp.floor || 3.5) };
+    sh.uniforms.tNLG = NYC_LIGHT.map; sh.uniforms.uNLC = NYC_LIGHT.c; sh.uniforms.uNLS = NYC_LIGHT.s; sh.uniforms.uNLK = NYC_LIGHT.k;
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nattribute vec2 aWL; varying vec2 vWL; varying vec3 vWLp;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvWL = aWL; vWLp = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', `#include <common>
+      varying vec2 vWL; varying vec3 vWLp; uniform vec4 uWC; uniform vec2 uWM; uniform sampler2D tNLG; uniform vec2 uNLC; uniform float uNLS; uniform float uNLK;
+      float nwlH(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }`)
+      .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+      {
+        vec2 wc = vUv * uWC.xy;
+        vec2 gid = floor(wc), wf = fract(wc);
+        float gx = floor(gid.x / uWC.z);
+        float fr = vWL.x > 0.001 ? vWL.x : 0.28;
+        float fb = nwlH(vec2(gid.y, vWL.y * 1.7 + 3.1));
+        float pl = clamp(fr * (0.35 + 1.3 * fb), 0.0, 0.92);
+        float litw = step(nwlH(vec2(gx, gid.y) + vWL.y), pl);
+        #ifdef USE_EMISSIVEMAP
+        totalEmissiveRadiance *= litw;
+        #endif
+        if (uNLK > 0.001) {
+          // 켜진 창 둘레의 외벽이 따뜻하게 물든다
+          vec2 dd = max(vec2(max(0.16 - wf.x, wf.x - 0.84), max(0.14 - wf.y, wf.y - 0.86)), 0.0) * uWM;
+          float dl = length(dd);
+          float halo = step(0.0001, dl) * (1.0 - smoothstep(0.0, 0.55, dl)) * litw * uWC.w;
+          totalEmissiveRadiance += ${NYC_WARM} * diffuseColor.rgb * halo * 1.1 * uNLK;
+          // 주변 창문·거리에서 온 빛 (지면 빛 지도) — 낮은 층일수록 강하다
+          vec2 guv = (vWLp.xz - uNLC) / uNLS + 0.5;
+          float ge = smoothstep(0.5, 0.36, length(guv - 0.5));
+          float gl = texture2D(tNLG, guv).r * ge * uNLK;
+          float ha = mix(1.0, 0.25, smoothstep(6.0, 90.0, vWLp.y));
+          totalEmissiveRadiance += ${NYC_WARM} * diffuseColor.rgb * gl * ha * 2.2;
+        }
+      }`);
+  };
+  m.customProgramCacheKey = function () { return (prevKey ? prevKey.call(m) : '') + '|nycWL'; };
+  m.needsUpdate = true;
+}
+// 정점색이 1을 넘는 쿼드 = "켜진 창": 색-1 을 발광으로 쓴다 (패널 메시용)
+function nycPatchLitColor(m) {
+  if (!m || (m.userData && m.userData.nycLC)) return;
+  m.userData = m.userData || {}; m.userData.nycLC = 1; try { NYC_LIGHT.win.value = vfxGlowValue(); } catch (e) {}
+  const prevOBC = m.onBeforeCompile, prevKey = m.customProgramCacheKey;
+  m.onBeforeCompile = function (sh, rr) {
+    if (prevOBC) prevOBC.call(m, sh, rr);
+    sh.uniforms.uNLWin = NYC_LIGHT.win;
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nuniform float uNLWin;')
+      .replace('#include <color_fragment>', `#include <color_fragment>
+      #ifdef USE_COLOR
+      {
+        vec3 vcl_ = vColor.rgb;
+        float il_ = step(1.0005, max(vcl_.r, max(vcl_.g, vcl_.b)));
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.03, 0.04, 0.055), il_);
+        totalEmissiveRadiance += max(vcl_ - 1.0, 0.0) * il_ * uNLWin * 1.25;
+      }
+      #endif`);
+  };
+  m.customProgramCacheKey = function () { return (prevKey ? prevKey.call(m) : '') + '|nycLC'; };
+  m.needsUpdate = true;
+}
+// 켜진 창 색 (따뜻한 백열/형광/TV 푸른빛) + 1.0 오프셋 인코딩
+function nycLitCol(r) { return r < 0.62 ? [2.0, 1.78, 1.45] : (r < 0.86 ? [1.96, 1.9, 1.7] : [1.62, 1.82, 2.0]); }
+
 const NYC_FACADE_MATS = {};
 function nycFacadeMat(style){
   if (NYC_FACADE_MATS[style]) return NYC_FACADE_MATS[style];
@@ -3002,6 +3110,7 @@ function nycFacadeMat(style){
   NYC_FACADE_MATS[style]=m;
   try { vfxPatch(m,{ao:true,aoMin:0.5,aoH:16}); } catch(e) { console.warn('vfx ao',e); }
   try { if (typeof GFX !== 'undefined' && GFX.quality !== 'low') vfxAttachFacadePBR(m, style); } catch(e) { console.warn('vfx pbr',e); }
+  try { nycPatchWinLight(m, style); } catch(e) { console.warn('nyc window light',e); }
   return m;
 }
 
@@ -3055,8 +3164,9 @@ function nycStyledDetail(ring,h,btype,seed,acc,tacc,bi,lm){
   const tint=0.93+0.14*hs(5), shade=(k)=>{ const v=k*tint; return new THREE.Color(Math.min(1,v),Math.min(1,v),Math.min(1,v)); };
   const push=(p,c0,c1)=>{ if(!c1) c1=c0; const b=acc.positions.length/3, cs=[c0,c0,c1,c1]; for(let i=0;i<4;i++){ acc.positions.push(p[i][0],p[i][1],p[i][2]); acc.colors.push(cs[i].r,cs[i].g,cs[i].b); } acc.indices.push(b,b+1,b+2,b,b+2,b+3); };
   const quad=push;
-  const getT=(s)=>tacc[s]||(tacc[s]={pos:[],uv:[],col:[],idx:[]});
-  const tpush=(T,p,uv,c0,c1)=>{ const b=T.pos.length/3, cs=[c0,c0,c1,c1]; for(let i=0;i<4;i++){ T.pos.push(p[i][0],p[i][1],p[i][2]); T.uv.push(uv[i][0],uv[i][1]); T.col.push(cs[i].r,cs[i].g,cs[i].b); } T.idx.push(b,b+1,b+2,b,b+2,b+3); };
+  const _wlp=nycBldProfile(cx,cz,h,btype);
+  const getT=(s)=>tacc[s]||(tacc[s]={pos:[],uv:[],col:[],wl:[],idx:[]});
+  const tpush=(T,p,uv,c0,c1)=>{ const b=T.pos.length/3, cs=[c0,c0,c1,c1]; for(let i=0;i<4;i++){ T.pos.push(p[i][0],p[i][1],p[i][2]); T.wl.push(_wlp[0],_wlp[1]); T.uv.push(uv[i][0],uv[i][1]); T.col.push(cs[i].r,cs[i].g,cs[i].b); } T.idx.push(b,b+1,b+2,b,b+2,b+3); };
   const poly=(pts,c)=>{ const b=acc.positions.length/3; for(const p of pts){ acc.positions.push(p[0],p[1],p[2]); acc.colors.push(c.r,c.g,c.b); } for(let i=1;i<pts.length-1;i++) acc.indices.push(b,b+i,b+i+1); };
   const rbox=(x,z,w,d,y0,y1,ang,c,ct)=>{ const co=Math.cos(ang), si=Math.sin(ang); const K=[[-1,-1],[1,-1],[1,1],[-1,1]].map(k=>[x+k[0]*w/2*co-k[1]*d/2*si, z+k[0]*w/2*si+k[1]*d/2*co]);
     for(let i=0;i<4;i++){ const a=K[i], b=K[(i+1)%4]; push([[a[0],y0,a[1]],[b[0],y0,b[1]],[b[0],y1,b[1]],[a[0],y1,a[1]]], mul(c,i%2?0.82:1), c); }
@@ -3420,6 +3530,7 @@ function buildNYCDetailLayer() {
       tg.setAttribute('position', new THREE.Float32BufferAttribute(T.pos,3));
       tg.setAttribute('uv', new THREE.Float32BufferAttribute(T.uv,2));
       tg.setAttribute('color', new THREE.Float32BufferAttribute(T.col,3));
+      tg.setAttribute('aWL', new THREE.Float32BufferAttribute(T.wl,2));
       tg.setIndex(new THREE.Uint32BufferAttribute(T.idx,1)); tg.computeVertexNormals(); tg.computeBoundingSphere();
       const tm = new THREE.Mesh(tg, nycFacadeMat(st)); tm.name = 'NYC_Facade_' + st; scene.add(tm); c.texMeshes.push(tm);
     }
@@ -3461,7 +3572,7 @@ function buildOSMBuildingsFromEmbeddedData(onProgress, onDone) {
     push() { for (let i = 0; i < arguments.length; i++) { if (n >= a.length) { const b = new T(a.length * 2); b.set(a); a = b; } a[n++] = arguments[i]; } },
     get length() { return n; }, set length(v) { if (v === 0) { n = 0; a = new T(16); } },
     take() { return a.slice(0, n); } }; };
-  const mergedPositions = nycGrow(Float32Array), mergedNormals = nycGrow(Float32Array), mergedColors = nycGrow(Float32Array), mergedIndices = nycGrow(Uint32Array);
+  const mergedPositions = nycGrow(Float32Array), mergedNormals = nycGrow(Float32Array), mergedColors = nycGrow(Float32Array), mergedIndices = nycGrow(Uint32Array), mergedWL = nycGrow(Float32Array);
   const facadeDetails = {positions:[], colors:[], indices:[]};
   const tempColor = new THREE.Color();
   let vertexOffset = 0, added = 0, rejectedRoad = 0, rejectedBounds = 0;
@@ -3521,7 +3632,9 @@ function buildOSMBuildingsFromEmbeddedData(onProgress, onDone) {
 
     if (!landmarkStyle) { try { const _ci = nycClassify(ringXZ, h, btype, seed, bi, cx, cz, nycPolyArea(ringXZ), null); if (_ci) facade = NYC_FACADE_SPECS[_ci.style].base; } catch (e) {} }
     const baseCol = new THREE.Color(facade);
+    const winProf = nycBldProfile(cx, cz, h, btype);
     for (let i=0;i<pos.count;i++) {
+      mergedWL.push(winProf[0], winProf[1]);
       mergedPositions.push(pos.getX(i),pos.getY(i),pos.getZ(i));
       mergedNormals.push(nor.getX(i),nor.getY(i),nor.getZ(i));
       if (pos.getY(i) > h*0.96) tempColor.setHex(seed>0.82 ? 0x5e5c59 : 0x555b60);
@@ -3534,14 +3647,14 @@ function buildOSMBuildingsFromEmbeddedData(onProgress, onDone) {
     vertexOffset += pos.count;
     geo.dispose();
 
-    const collider={name:`OSM building ${bi+1}`,ringXZ,minY:0,maxY:h};
+    const collider={name:`OSM building ${bi+1}`,ringXZ,minY:0,maxY:h,winProf};
     triangleColliders.push(collider);
     registerSpatialCollider(collider);
     mapBuildingFootprintsXZ.push({ringXZ,isLandmark:h>100});
     // No height or every-Nth-building restriction: all buildings are targetable.
     addBuildingWebAnchors(ringXZ, h, landmarkStyle ? landmarkStyle.name : `OSM building ${bi+1}`);
     if (landmarkStyle) {
-      addLandmarkWindowPanels(ringXZ, h, landmarkStyle);
+      addLandmarkWindowPanels(ringXZ, h, landmarkStyle, btype);
       addLandmarkRoofSignature(ringXZ, h, landmarkStyle);
     } else {
       // Procedural facade detail follows each original OSM edge; footprint data stays untouched.
@@ -3558,7 +3671,8 @@ function buildOSMBuildingsFromEmbeddedData(onProgress, onDone) {
     fg.setAttribute('color', new THREE.Float32BufferAttribute(facadeDetails.colors, 3));
     fg.setIndex(facadeDetails.indices);
     fg.computeVertexNormals();
-    const fm = new THREE.Mesh(fg, vfxMat({vertexColors:true, roughness:0.48, metalness:0.12, side:THREE.DoubleSide}));
+    const fmMat = vfxMat({vertexColors:true, roughness:0.48, metalness:0.12, side:THREE.DoubleSide}); try { nycPatchLitColor(fmMat); } catch (e) { console.warn('nyc lit color', e); }
+    const fm = new THREE.Mesh(fg, fmMat);
     fm.name = 'OSM_Buildings_Generic_Facade_Details';
     scene.add(fm);
   }
@@ -3568,6 +3682,7 @@ function buildOSMBuildingsFromEmbeddedData(onProgress, onDone) {
     combined.setAttribute('position',new THREE.BufferAttribute(mergedPositions.take(),3));
     combined.setAttribute('normal',new THREE.BufferAttribute(mergedNormals.take(),3));
     combined.setAttribute('color',new THREE.BufferAttribute(mergedColors.take(),3));
+    combined.setAttribute('aWL',new THREE.BufferAttribute(mergedWL.take(),2));
     combined.setIndex(new THREE.BufferAttribute(mergedIndices.take(),1));
     combined.computeBoundingSphere();
     const baseMat=new THREE.MeshStandardMaterial({
@@ -3576,11 +3691,12 @@ function buildOSMBuildingsFromEmbeddedData(onProgress, onDone) {
     window.__baseWallMat = baseMat;
     baseMat.onBeforeCompile = (sh) => {
       sh.uniforms.uWinQ = window.__winQ = {value:1.0}; sh.uniforms.uWinGlow = window.__winGlow = {value: vfxGlowValue()};
+      sh.uniforms.tNLG = NYC_LIGHT.map; sh.uniforms.uNLC = NYC_LIGHT.c; sh.uniforms.uNLS = NYC_LIGHT.s; sh.uniforms.uNLK = NYC_LIGHT.k;
       sh.vertexShader = sh.vertexShader
-        .replace('#include <common>','#include <common>\nvarying vec3 vWP; varying vec3 vWN;')
-        .replace('#include <begin_vertex>','#include <begin_vertex>\nvWP=(modelMatrix*vec4(position,1.0)).xyz; vWN=normalize(mat3(modelMatrix)*normal);');
+        .replace('#include <common>','#include <common>\nvarying vec3 vWP; varying vec3 vWN; attribute vec2 aWL; varying vec2 vWL;')
+        .replace('#include <begin_vertex>','#include <begin_vertex>\nvWP=(modelMatrix*vec4(position,1.0)).xyz; vWN=normalize(mat3(modelMatrix)*normal); vWL=aWL;');
       sh.fragmentShader = sh.fragmentShader
-        .replace('#include <common>','#include <common>\nvarying vec3 vWP; varying vec3 vWN; uniform float uWinQ; uniform float uWinGlow; float vfxWin = 0.0;\nfloat h21(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}')
+        .replace('#include <common>','#include <common>\nvarying vec3 vWP; varying vec3 vWN; varying vec2 vWL; uniform float uWinQ; uniform float uWinGlow; uniform sampler2D tNLG; uniform vec2 uNLC; uniform float uNLS; uniform float uNLK; float vfxWin = 0.0;\nfloat h21(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}')
         .replace('#include <color_fragment>',`#include <color_fragment>
         {
           vec3 wn = normalize(vWN);
@@ -3596,14 +3712,30 @@ function buildOSMBuildingsFromEmbeddedData(onProgress, onDone) {
             float aa_ = clamp(max(fwidth(fu), fwidth(fy))*1.5, 0.0, 0.35); float win = smoothstep(0.2-aa_,0.2+aa_,f.x)*(1.0-smoothstep(0.8-aa_,0.8+aa_,f.x))*smoothstep(0.28-aa_,0.28+aa_,f.y)*(1.0-smoothstep(0.82-aa_,0.82+aa_,f.y)); win *= 1.0 - smoothstep(0.25,0.6,aa_);
             float dist = length(cameraPosition - vWP);
             float fade = 1.0 - smoothstep(120.0, 430.0, dist);
-            float r = h21(id + floor(vWP.xz*0.01));
-            float lit = step(mix(0.72, 0.65, clamp((uWinGlow - 0.7) / 0.4, 0.0, 1.0)), r);
+            float fr = vWL.x > 0.001 ? vWL.x : 0.3;
+            float fbs = h21(vec2(id.y, vWL.y * 1.7 + 3.1));
+            float pl = clamp(fr * (0.35 + 1.3 * fbs), 0.0, 0.92);
+            float r = h21(id + floor(vWP.xz*0.01) + vWL.y);
+            float lit = step(r, pl);
             vec3 glass = mix(vec3(0.07,0.10,0.13), vec3(0.28,0.38,0.47), f.y*0.8) * (0.8+0.5*r);
             float sill = step(f.y,0.28)*step(0.2,f.x)*step(f.x,0.8);
             vec3 col = diffuseColor.rgb;
             glass = mix(glass, fogColor*1.25+vec3(0.03,0.05,0.08), pow(1.0-abs(dot(normalize(cameraPosition-vWP),wn)),3.0)*0.45); col = mix(col, glass, win*0.86*fade*uWinQ); vfxWin = win*fade*uWinQ; totalEmissiveRadiance += mix(vec3(1.0,0.78,0.46), vec3(0.78,0.9,1.0), step(0.82, h21(id+3.7)))*lit*win*fade*uWinQ*uWinGlow*(0.6+0.9*h21(id+7.3));
             col *= 1.0 - 0.18*sill*fade;
+            // 켜진 창 둘레의 외벽 번짐
+            vec2 hd = max(vec2(max(0.2 - f.x, f.x - 0.8) * 3.0, max(0.28 - f.y, f.y - 0.82) * 3.5), 0.0);
+            float hdl = length(hd);
+            float halo = step(0.0001, hdl) * (1.0 - smoothstep(0.0, 0.5, hdl)) * lit * fade;
+            totalEmissiveRadiance += vec3(1.0,0.72,0.42) * col * halo * 1.1 * uNLK;
             diffuseColor.rgb = col;
+          }
+          // 주변 창문·거리에서 온 빛을 외벽이 받는다 (지면 빛 지도)
+          if (uNLK > 0.001 && abs(wn.y) < 0.5 && vWP.y > 0.3) {
+            vec2 guv = (vWP.xz - uNLC) / uNLS + 0.5;
+            float ge = smoothstep(0.5, 0.36, length(guv - 0.5));
+            float gl = texture2D(tNLG, guv).r * ge * uNLK;
+            float ha = mix(1.0, 0.25, smoothstep(6.0, 90.0, vWP.y));
+            totalEmissiveRadiance += vec3(1.0,0.72,0.42) * diffuseColor.rgb * gl * ha * 2.2;
           }
         }`)
         .replace('#include <roughnessmap_fragment>','#include <roughnessmap_fragment>\n roughnessFactor = mix(roughnessFactor, 0.12, vfxWin);')
@@ -3619,7 +3751,7 @@ function buildOSMBuildingsFromEmbeddedData(onProgress, onDone) {
   if (badge) badge.innerText=`BUILDINGS: NYC 건물 데이터 ${added.toLocaleString()}개 · 외곽선 유지 · 외벽 디테일 적용 · 실제 OSM 도로 ON`;
   if (mapOpen) buildMapBase();
   // 임시 배열 해제 (지오메트리로 복사 완료)
-  mergedPositions.length = mergedNormals.length = mergedColors.length = mergedIndices.length = 0;
+  mergedPositions.length = mergedNormals.length = mergedColors.length = mergedIndices.length = mergedWL.length = 0;
   facadeDetails.positions.length = facadeDetails.colors.length = facadeDetails.indices.length = 0;
   if (onDone) onDone();
   };
@@ -6103,7 +6235,7 @@ function gfxInit() {
 // 플레이어 주변 건물의 외벽을 따라 3m 간격 창 열 × 층을 훑어 '켜진 창'(셰이더와 같은 해시)마다 아주 약한 빛을 바깥쪽 바닥 지도에 누적한다.
 // 높은 층일수록 지면에 닿는 빛이 약해지고(거리 감쇠), 이 지도를 도로·보도 위에 따뜻한 빛으로 덧그린다. 맵은 이동에 맞춰 갱신.
 const WGL = { size: 384, px: 512, cv: null, ctx: null, tex: null, mesh: null, spr: null, cx: 1e9, cz: 1e9, on: false, dirty: true,
-  K: 0.6, GAIN: 0.010, R: 13, OUT: 5, LIT: 0.65, maxSplat: GFX_MOBILE ? 3500 : 6000 };
+  K: 1.0, GAIN: 0.012, R: 18, OUT: 5, maxSplat: GFX_MOBILE ? 4500 : 10000 };
 function wglInit() {
   if (WGL.mesh) return;
   const cv = document.createElement('canvas'); cv.width = cv.height = WGL.px; WGL.cv = cv; WGL.ctx = cv.getContext('2d');
@@ -6112,6 +6244,7 @@ function wglInit() {
   g.addColorStop(0, 'rgba(255,255,255,1)'); g.addColorStop(0.35, 'rgba(255,255,255,0.45)'); g.addColorStop(1, 'rgba(255,255,255,0)');
   sx.fillStyle = g; sx.fillRect(0, 0, 64, 64); WGL.spr = sp;
   WGL.tex = new THREE.CanvasTexture(cv); WGL.tex.minFilter = THREE.LinearFilter; WGL.tex.magFilter = THREE.LinearFilter; WGL.tex.generateMipmaps = false;
+  NYC_LIGHT.map.value = WGL.tex; NYC_LIGHT.s.value = WGL.size;
   const mat = new THREE.ShaderMaterial({
     transparent: true, depthWrite: false, depthTest: true, blending: THREE.AdditiveBlending, fog: false,
     polygonOffset: true, polygonOffsetFactor: -10, polygonOffsetUnits: -10,
@@ -6139,6 +6272,7 @@ function wglRebuild(cx, cz) {
       const ring = b.ringXZ; if (!ring || ring.length < 3 || !b.maxY || b.maxY < 8) continue;
       if (Math.abs(b.centX - cx) > S * 0.62 || Math.abs(b.centZ - cz) > S * 0.62) continue;
       const nF = Math.min(60, Math.floor((b.maxY - (b.minY || 0)) / 3.5)); if (nF < 1) continue;
+      const prof = b.winProf || nycBldProfile(b.centX, b.centZ, b.maxY, ''), pFrac = prof[0], pSeed = prof[1];
       const m = ring.length;
       for (let e = 0; e < m && n < WGL.maxSplat; e++) {
         const A = ring[e], B = ring[(e + 1) % m]; let dx = B.x - A.x, dz = B.z - A.z; const len = Math.hypot(dx, dz);
@@ -6149,7 +6283,7 @@ function wglRebuild(cx, cz) {
           const t = (c + 0.5) * 3, X = A.x + dx * t, Z = A.z + dz * t, u = X * tx + Z * tz, id = Math.floor(u / 3);
           const jx = Math.floor(X * 0.01), jz = Math.floor(Z * 0.01);
           let sum = 0;
-          for (let f = 1; f <= nF; f++) { if (h21(id + jx, f + jz) < WGL.LIT) continue; const h = f * 3.5 + 1.7; sum += 1 / (1 + (h / 16) * (h / 16)); }   // 켜진 창마다 약한 빛(높을수록 지면엔 약하게)
+          for (let f = 1; f <= nF; f++) { if (h21(id + jx + pSeed, f + jz + pSeed) >= nycLitProb(pFrac, pSeed, f)) continue; const h = f * 3.5 + 1.7; sum += 1 / (1 + (h / 16) * (h / 16)); }   // 켜진 창마다 약한 빛(높을수록 지면엔 약하게)
           if (sum <= 0) continue;
           const px = (X + nx * WGL.OUT - cx) * k + P / 2, py = (Z + nz * WGL.OUT - cz) * k + P / 2;
           ctx.globalAlpha = Math.min(0.2, WGL.GAIN * sum);
@@ -6163,11 +6297,13 @@ function wglRebuild(cx, cz) {
   WGL.cx = cx; WGL.cz = cz; WGL.dirty = false;
   const m = WGL.mesh; m.position.set(cx, 0.65, cz); m.matrixAutoUpdate = true; m.updateMatrix(); m.updateMatrixWorld(true);
   m.material.uniforms.uC.value.set(cx, cz);
+  NYC_LIGHT.c.value.set(cx, cz);
 }
 function wglUpdate() {
   if (!WGL.mesh || !player) return;
   const want = currentWeatherMode === 'night' && GFX.quality !== 'low';
   if (want !== WGL.on) { WGL.on = want; WGL.mesh.visible = want; WGL.dirty = true; }
+  NYC_LIGHT.k.value = (want && WGL.cx < 1e8) ? WGL.K : 0;
   if (!want) return;
   const p = player.pos;
   if (WGL.dirty || Math.hypot(p.x - WGL.cx, p.z - WGL.cz) > 70) wglRebuild(Math.round(p.x / 16) * 16, Math.round(p.z / 16) * 16);
@@ -7210,7 +7346,6 @@ function vfxMakeEmissive(cv, style) {
     const glass = (b >= r - 4 && lum < 175) || (r > 235 && g > 200 && b < 215);
     if (!(inner && glass)) continue;
     const h = hash(cx, cy);
-    if (h > prob) continue;
     const warm = hash(cy, cx + 7) < 0.7, k = 0.55 + 0.45 * hash(cx + 3, cy + 5);
     od.data[i] = (warm ? 255 : 170) * k; od.data[i + 1] = (warm ? 196 : 206) * k; od.data[i + 2] = (warm ? 118 : 255) * k; od.data[i + 3] = 255;
   }
@@ -7223,6 +7358,7 @@ function vfxApplyGlow() {
   const v = vfxGlowValue();
   for (const st in NYC_FACADE_MATS) { const m = NYC_FACADE_MATS[st]; if (m.emissiveMap) { m.emissiveIntensity = v * 1.15; } }
   if (window.__winGlow) window.__winGlow.value = v;
+  NYC_LIGHT.win.value = v;
 }
 // ---- 외벽 재질에 노멀/러프니스/메탈릭/발광 맵 연결 (낮음 제외 전 품질) ----
 function vfxAttachFacadePBR(m, style) {
