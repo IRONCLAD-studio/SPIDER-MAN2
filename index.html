@@ -276,11 +276,6 @@ canvas { display: block; width: 100%; height: 100%; }
       <button class="assist-toggle-btn" id="btn-gfx-quality">그래픽 품질: 보통 (권장)</button>
       <div class="assist-desc">낮음: 그림자·블룸 없음, 해상도 1.0배 (가장 빠름)<br>보통: 하늘 돔 + 캐릭터·건물 그림자 + 필름 톤매핑<br>높음: 고해상도 그림자 + 블룸(빛 번짐). 모두 게임 파일 안에 내장되어 인터넷이 필요 없습니다. 어느 단계든 FPS가 떨어지면 해상도를 자동 조절합니다.</div>
     </div>
-    <div class="settings-section">
-      <span class="settings-label">🌤️ 그림자 · 조명 (Lighting)</span>
-      <button class="assist-toggle-btn" id="btn-soft-shadow">그림자 부드러움: 자연 (기본)</button>
-      <div class="assist-desc">그림자 방향과 길이는 해/달 위치를 따릅니다(노을은 길고 부드럽게, 낮은 선명하게, 흐림은 아주 부드럽게). 반그림자는 차폐물과 거리가 멀수록 넓어지는 PCSS 방식이며, 이 기기에서 지원되지 않으면 기본 필터로 자동 전환됩니다. 그림자 품질이 '낮음'이면 그림자가 꺼집니다.</div>
-    </div>
     <div class="settings-section" style="margin-bottom:4px;">
       <span class="settings-label">🕸️ 웹스윙 어시스트 (Web-Swing Assist)</span>
       <button class="assist-toggle-btn" id="btn-assist-toggle">웹스윙 어시스트: ON (쉬운 스윙 활성)</button>
@@ -304,179 +299,6 @@ canvas { display: block; width: 100%; height: 100%; }
 }catch(e){}})();
 </script>
 <script>window.addEventListener("error",function(e){var t=document.getElementById("load-status");if(t&&!window.__worldReady)t.textContent="오류: "+(e.message||"알 수 없음")+" (줄 "+e.lineno+")";});</script>
-<script id="lx-module">
-/* =============================================================================
- * LX: 조명/그림자 연출 모듈 — 시간대·날씨별 라이팅 리그 + 부드러운 전환 + PCSS 소프트 섀도 + 구름 그림자 맥동
- *  - 광원 하나(GFX.sunDir)가 하늘의 해/달, 그림자 카메라, 림라이트, 시네마틱 패스까지 모두 구동한다(그림자 방향 = 광원 방향).
- *  - 그림자 길이는 태양 고도가 결정한다(노을 18°: 건물 높이의 약 3.1배, 낮 45°: 1배).
- *  - 소프트 섀도: Three r128의 PCFSoft 그림자 청크를 PCSS(블로커 탐색 → 거리에 비례하는 반그림자 폭)로 교체한다.
- *    교체 전 현재 GL 컨텍스트에서 컴파일 검증을 하고, 실패하면 원래 청크를 그대로 유지한다.
- * ========================================================================== */
-const LX = { cur: null, from: null, to: null, t: 1, dur: 2.4, mode: null, last: 0, soft: 1, pcss: false, pcssWhy: '', drift: true };
-const LX_SOFT_MUL = [0.55, 1.0, 1.9], LX_SOFT_NAME = ['선명', '자연 (기본)', '매우 부드럽게'];
-const LX_HEX = (h) => [((h >> 16) & 255) / 255, ((h >> 8) & 255) / 255, (h & 255) / 255];
-// 시간대별 세부 조명. 태양/달 위치는 방향 벡터(정규화됨)로만 쓴다. el = 고도.
-//  tan: 광원의 "시각적 크기"(반그림자 폭 계수), dim: 구름이 지나갈 때 직사광이 줄어드는 최대 비율
-const LX_RIG = {
-  day: {
-    fog: 0x9ccff0, fogD: 0.00030, hemiSky: 0xcfe3ff, hemiGnd: 0x6a6258, hemiI: 0.80,
-    sunCol: 0xfff0d8, sunI: 1.75, sunPos: [300, 380, 230],
-    cCover: 0.40, cDens: 0.55, cSpeed: 0.0035, cLit: [1.0, 0.98, 0.95], cShade: [0.60, 0.69, 0.84],
-    glowCol: [1.0, 0.85, 0.6], glowAmt: 0.10, cityGlow: 0.0, moon: 0.0, tan: 0.016, dim: 0.16
-  },
-  sunset: {
-    fog: 0xe98a3e, fogD: 0.00040, hemiSky: 0xffcfa8, hemiGnd: 0x6b4331, hemiI: 0.72,
-    sunCol: 0xff9d45, sunI: 2.05, sunPos: [-420, 165, 280],
-    cCover: 0.50, cDens: 0.80, cSpeed: 0.0030, cLit: [1.0, 0.72, 0.42], cShade: [0.42, 0.22, 0.38],
-    glowCol: [1.0, 0.55, 0.22], glowAmt: 0.60, cityGlow: 0.0, moon: 0.0, tan: 0.030, dim: 0.10
-  },
-  cloudy: {
-    fog: 0x9aa8ba, fogD: 0.00075, hemiSky: 0xe0e8f2, hemiGnd: 0x46505e, hemiI: 1.05,
-    sunCol: 0xd2dbe6, sunI: 0.50, sunPos: [100, 400, 100],
-    cCover: 0.93, cDens: 1.0, cSpeed: 0.0050, cLit: [0.80, 0.84, 0.89], cShade: [0.36, 0.40, 0.46],
-    glowCol: [0.9, 0.9, 0.95], glowAmt: 0.02, cityGlow: 0.0, moon: 0.0, tan: 0.110, dim: 0.0
-  },
-  night: {
-    fog: 0x0f172a, fogD: 0.00045, hemiSky: 0x5f78b0, hemiGnd: 0x161320, hemiI: 0.42,
-    sunCol: 0x8fb0ff, sunI: 0.62, sunPos: [260, 330, 200],
-    cCover: 0.40, cDens: 0.70, cSpeed: 0.0025, cLit: [0.34, 0.42, 0.62], cShade: [0.03, 0.04, 0.08],
-    glowCol: [1.0, 0.55, 0.25], glowAmt: 0.0, cityGlow: 0.22, moon: 1.0, tan: 0.050, dim: 0.12
-  }
-};
-function lxTarget(mode) {
-  const R = LX_RIG[mode] || LX_RIG.night, S = (typeof GFX_SKY !== 'undefined' && (GFX_SKY[mode] || GFX_SKY.night)) || {};
-  const p = R.sunPos, l = Math.hypot(p[0], p[1], p[2]);
-  return {
-    fog: LX_HEX(R.fog), fogD: R.fogD, hemiSky: LX_HEX(R.hemiSky), hemiGnd: LX_HEX(R.hemiGnd), hemiI: R.hemiI,
-    sunCol: LX_HEX(R.sunCol), sunI: R.sunI, sd: [p[0] / l, p[1] / l, p[2] / l],
-    skyTop: LX_HEX(S.top !== undefined ? S.top : 0x1f6fc9), skyExp: S.exp !== undefined ? S.exp : 0.8, star: S.star || 0, skySun: LX_HEX(S.sun !== undefined ? S.sun : 0xfff1c9),
-    skySunI: S.sunI !== undefined ? S.sunI : 1, expo: S.expo || 1.1, bloom: S.bloom !== undefined ? S.bloom : 0.4,
-    cCover: R.cCover, cDens: R.cDens, cSpeed: R.cSpeed, cLit: R.cLit.slice(), cShade: R.cShade.slice(), glowCol: R.glowCol.slice(), glowAmt: R.glowAmt,
-    cityGlow: R.cityGlow, moon: R.moon, tan: R.tan, dim: R.dim
-  };
-}
-function lxLerp(a, b, t) {
-  if (typeof a === 'number') return a + (b - a) * t;
-  const o = new Array(a.length); for (let i = 0; i < a.length; i++) o[i] = a[i] + (b[i] - a[i]) * t; return o;
-}
-function lxMix(A, B, t) { const o = {}; for (const k in B) o[k] = lxLerp(A[k], B[k], t); return o; }
-// 날씨 버튼에서 호출: 이전에 적용 중이던 상태 → 새 모드 목표로 2.4초 동안 부드럽게 전환
-function lxOnWeather(mode) {
-  const to = lxTarget(mode); LX.mode = mode;
-  if (!LX.cur) { LX.from = to; LX.t = 1; } else { LX.from = LX.cur; LX.t = 0; }
-  LX.to = to;
-}
-function lxCloudPulse(now) {            // 0..1: 구름이 해를 가리는 정도(느리게 변하는 비주기 파형)
-  const p = 0.5 + 0.5 * Math.sin(now * 0.061 + 2.2 * Math.sin(now * 0.023));
-  const x = Math.min(1, Math.max(0, (p - 0.62) / 0.35)); return x * x * (3 - 2 * x);
-}
-function lxSetSoft(light, tan) {         // radius = "블로커 거리 1m당 반그림자 폭(텍셀)" — PCSS 셰이더가 사용
-  const s = light && light.shadow; if (!s || !s.camera || !s.mapSize) return;
-  const c = s.camera, tw = (c.right - c.left) / Math.max(256, s.mapSize.x), rng = c.far - c.near;
-  s.radius = Math.max(0.05, tan * (rng / 800) / tw);
-}
-function lxUpdate() {
-  if (!LX.to || typeof scene === 'undefined' || !scene || !sunLight || !hemiLightRef) return;
-  const nowMs = performance.now(), now = nowMs * 0.001, dt = LX.last ? Math.min(0.1, (nowMs - LX.last) * 0.001) : 0; LX.last = nowMs;
-  if (LX.t < 1) LX.t = Math.min(1, LX.t + dt / LX.dur);
-  const e = LX.t * LX.t * (3 - 2 * LX.t), st = LX.t >= 1 ? LX.to : lxMix(LX.from, LX.to, e);
-  LX.cur = st;
-  scene.background.setRGB(st.fog[0], st.fog[1], st.fog[2]); scene.fog.color.setRGB(st.fog[0], st.fog[1], st.fog[2]); scene.fog.density = st.fogD;
-  hemiLightRef.color.setRGB(st.hemiSky[0], st.hemiSky[1], st.hemiSky[2]); hemiLightRef.groundColor.setRGB(st.hemiGnd[0], st.hemiGnd[1], st.hemiGnd[2]); hemiLightRef.intensity = st.hemiI;
-  // 광원 방향: 모드별 방향 + 아주 느린 천체 이동(방위 ±2.6°, 고도 ±1°). 해/달·그림자·림라이트가 모두 같은 벡터를 쓴다.
-  let dx = st.sd[0], dy = st.sd[1], dz = st.sd[2]; const dl = Math.hypot(dx, dy, dz) || 1; dx /= dl; dy /= dl; dz /= dl;
-  if (LX.drift) {
-    let az = Math.atan2(dz, dx) + Math.sin(now * 0.017) * 0.045, el = Math.asin(Math.max(-1, Math.min(1, dy))) + Math.sin(now * 0.011 + 1.3) * 0.017;
-    const ce = Math.cos(el); dx = Math.cos(az) * ce; dz = Math.sin(az) * ce; dy = Math.sin(el);
-  }
-  GFX.sunDir.set(dx, dy, dz);
-  if (!sunLight.castShadow) sunLight.position.set(dx * 450, dy * 450, dz * 450);
-  const pulse = st.dim > 0 ? lxCloudPulse(now) : 0;
-  sunLight.color.setRGB(st.sunCol[0], st.sunCol[1], st.sunCol[2]); sunLight.intensity = st.sunI * (1 - st.dim * pulse);
-  GFX.sunI = st.skySunI * (1 - 0.5 * st.dim * pulse);
-  if (renderer) renderer.toneMappingExposure = st.expo;
-  if (typeof GFXB !== 'undefined') GFXB.strength = st.bloom;
-  const tan = st.tan * LX_SOFT_MUL[LX.soft] * (1 + pulse * 0.8);   // 구름이 지나갈 때는 그림자 가장자리가 더 번진다
-  lxSetSoft(sunLight, tan); if (typeof GFX2 !== 'undefined' && GFX2.sun2) lxSetSoft(GFX2.sun2, tan);
-  if (GFX.sky) {
-    const u = GFX.sky.material.uniforms;
-    u.topColor.value.setRGB(st.skyTop[0], st.skyTop[1], st.skyTop[2]); u.horizonColor.value.setRGB(st.fog[0], st.fog[1], st.fog[2]);
-    u.bottomColor.value.setRGB(st.fog[0] * 0.55, st.fog[1] * 0.55, st.fog[2] * 0.55); u.sunColor.value.setRGB(st.skySun[0], st.skySun[1], st.skySun[2]);
-    u.sunDir.value.copy(GFX.sunDir); u.exponent.value = st.skyExp; u.starAmt.value = st.star; u.sunI.value = GFX.sunI;
-    u.uTime.value = now; u.cCover.value = st.cCover; u.cDens.value = st.cDens; u.cSpeed.value = st.cSpeed;
-    u.cLit.value.setRGB(st.cLit[0], st.cLit[1], st.cLit[2]); u.cShade.value.setRGB(st.cShade[0], st.cShade[1], st.cShade[2]);
-    u.glowCol.value.setRGB(st.glowCol[0], st.glowCol[1], st.glowCol[2]); u.glowAmt.value = st.glowAmt; u.cityGlow.value = st.cityGlow; u.moonAmt.value = st.moon;
-  }
-}
-
-// ---------- PCSS 소프트 섀도: Three r128 shadowmap_pars_fragment 패치 ----------
-function lxPcssGlsl() {
-  const mob = (typeof GFX_MOBILE !== 'undefined' && GFX_MOBILE), N = mob ? 12 : 20, BN = mob ? 6 : 10;
-  return `
-// LX_PCSS_PATCHED
-#define LX_PCSS_N ${N}
-#define LX_PCSS_BN ${BN}
-float lxIGN( vec2 p ) { return fract( 52.9829189 * fract( dot( p, vec2( 0.06711056, 0.00583715 ) ) ) ); }
-vec2 lxDisk( float i, float n, float rot ) { float r = sqrt( ( i + 0.5 ) / n ); float a = i * 2.39996323 + rot; return r * vec2( cos( a ), sin( a ) ); }
-float lxPCSS( sampler2D map, vec2 size, vec4 sc, float pen ) {
-  vec2 texel = vec2( 1.0 ) / size;
-  float rot = lxIGN( gl_FragCoord.xy ) * 6.2831853;
-  float zr = sc.z;
-  float searchR = clamp( pen * 40.0, 2.0, 18.0 );
-  float bSum = 0.0, bN = 0.0;
-  for ( int i = 0; i < LX_PCSS_BN; i ++ ) {
-    vec2 o = lxDisk( float( i ), float( LX_PCSS_BN ), rot ) * searchR * texel;
-    float d = unpackRGBAToDepth( texture2D( map, sc.xy + o ) );
-    if ( d < zr - ( 0.0002 + 0.00005 * searchR ) ) { bSum += d; bN += 1.0; }
-  }
-  if ( bN < 0.5 ) return 1.0;
-  float pt = clamp( ( zr - bSum / bN ) * 800.0 * pen, 1.2, 26.0 );
-  float lit = 0.0;
-  for ( int i = 0; i < LX_PCSS_N; i ++ ) {
-    vec2 o = lxDisk( float( i ), float( LX_PCSS_N ), rot + 1.7 ) * pt * texel;
-    float d = unpackRGBAToDepth( texture2D( map, sc.xy + o ) );
-    lit += step( zr - ( 0.0001 + 0.00004 * pt ), d );
-  }
-  return lit / float( LX_PCSS_N );
-}
-`;
-}
-function lxPatchChunkText(src) {         // 순수 문자열 변환(테스트 가능). 패턴이 맞지 않으면 null
-  if (!src || src.indexOf('LX_PCSS_PATCHED') >= 0) return null;
-  const rxSoft = /#elif\s+defined\(\s*SHADOWMAP_TYPE_PCF_SOFT\s*\)([\s\S]*?)#elif\s+defined\(\s*SHADOWMAP_TYPE_VSM\s*\)/;
-  const rxFn = /float\s+getShadow\(\s*sampler2D\s+shadowMap\s*,\s*vec2\s+shadowMapSize\s*,\s*float\s+shadowBias\s*,\s*float\s+shadowRadius\s*,\s*vec4\s+shadowCoord\s*\)/;
-  if (!rxSoft.test(src) || !rxFn.test(src)) return null;
-  let out = src.replace(rxFn, (m) => lxPcssGlsl() + m);
-  out = out.replace(rxSoft, '#elif defined( SHADOWMAP_TYPE_PCF_SOFT )\n\t\t\tshadow = lxPCSS( shadowMap, shadowMapSize, shadowCoord, shadowRadius );\n\t\t#elif defined( SHADOWMAP_TYPE_VSM )');
-  return out;
-}
-function lxCompileOk(gl, isGL2, packing, chunk) {
-  const head = (isGL2 ? '#version 300 es\n' : '') + 'precision highp float;\nprecision highp int;\nprecision highp sampler2D;\n' + (isGL2 ? '#define varying in\n#define texture2D texture\n' : '')
-    + '#define USE_SHADOWMAP\n#define NUM_DIR_LIGHT_SHADOWS 2\n#define SHADOWMAP_TYPE_PCF_SOFT\n';
-  const tail = isGL2 ? '\nout vec4 lxOut;\nvoid main(){ float s = getShadow( directionalShadowMap[ 0 ], vec2( 1024.0 ), 0.0, 1.0, vDirectionalShadowCoord[ 0 ] ); lxOut = vec4( s ); }'
-                     : '\nvoid main(){ float s = getShadow( directionalShadowMap[ 0 ], vec2( 1024.0 ), 0.0, 1.0, vDirectionalShadowCoord[ 0 ] ); gl_FragColor = vec4( s ); }';
-  const sh = gl.createShader(gl.FRAGMENT_SHADER); gl.shaderSource(sh, head + packing + '\n' + chunk + tail); gl.compileShader(sh);
-  const ok = !!gl.getShaderParameter(sh, gl.COMPILE_STATUS); if (!ok) LX.pcssWhy = String(gl.getShaderInfoLog(sh) || '').slice(0, 300); gl.deleteShader(sh); return ok;
-}
-function lxPatchShadowChunk() {
-  try {
-    const C = THREE.ShaderChunk, out = lxPatchChunkText(C.shadowmap_pars_fragment);
-    if (!out) { LX.pcssWhy = '청크 패턴 불일치 — 원래 그림자 유지'; return false; }
-    const gl = renderer.getContext(), isGL2 = !!(renderer.capabilities && renderer.capabilities.isWebGL2);
-    if (!lxCompileOk(gl, isGL2, C.packing || '', out)) { console.warn('LX PCSS 컴파일 검증 실패 → 원래 그림자 유지', LX.pcssWhy); return false; }
-    C.shadowmap_pars_fragment = out; LX.pcss = true; LX.pcssWhy = ''; return true;
-  } catch (e) { LX.pcssWhy = String(e); return false; }
-}
-function lxInit() {
-  try { const v = parseInt(localStorage.getItem('lxSoft'), 10); if (v >= 0 && v <= 2) LX.soft = v; } catch (e) {}
-  lxPatchShadowChunk();
-  const b = document.getElementById('btn-soft-shadow');
-  const label = () => { if (b) b.innerText = '그림자 부드러움: ' + LX_SOFT_NAME[LX.soft] + (LX.pcss ? '' : ' (PCSS 미지원 → 기본 필터)'); };
-  label();
-  if (b) b.addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); LX.soft = (LX.soft + 1) % 3; try { localStorage.setItem('lxSoft', String(LX.soft)); } catch (er) {} label(); });
-}
-window.LX = LX;
-</script>
 <script>
 // =============================================================================
 // 1. WGS84 타원체(GRS80) -> Three.js 로컬 접평면 좌표 변환기
@@ -4661,55 +4483,53 @@ function releaseWeb(giveBoost) {
 function applyWeatherTheme(mode) {
   currentWeatherMode = mode;
   if (!scene || !sunLight || !hemiLightRef) return;
+  // 환경광 = 하늘색(위) + 지면 반사색(아래). 노을은 따뜻한 직사광 + 차가운 보랏빛 그늘, 낮은 청백색 하늘광 + 따뜻한 지면 반사.
   if (mode === 'day') {
     scene.background.setHex(0x38bdf8);
-    scene.fog.color.setHex(0x7dd3fc);
+    scene.fog.color.setHex(0x93d3f6);
     scene.fog.density = 0.00032;
-    hemiLightRef.color.setHex(0xdbeafe);
-    hemiLightRef.groundColor.setHex(0x3b3a38);
-    hemiLightRef.intensity = 0.85;
-    sunLight.color.setHex(0xfff4e0);
-    sunLight.intensity = 1.6;
-    sunLight.position.set(260, 520, 200);
+    hemiLightRef.color.setHex(0xcfe4ff);
+    hemiLightRef.groundColor.setHex(0x4d4438);
+    hemiLightRef.intensity = 0.86;
+    sunLight.color.setHex(0xfff0d2);
+    sunLight.intensity = 1.7;
+    sunLight.position.set(300, 430, 230);      // 고도 약 49° — 건물 높이의 0.9배 길이 그림자
   } else if (mode === 'sunset') {
-    // Golden-hour sunset: warm atmospheric fill and a low, directional sun.
     scene.background.setHex(0xffa13b);
-    scene.fog.color.setHex(0xf6a04b);
+    scene.fog.color.setHex(0xf2994a);
     scene.fog.density = 0.00038;
-    hemiLightRef.color.setHex(0xffdfad);
-    hemiLightRef.groundColor.setHex(0x583321);
-    hemiLightRef.intensity = 0.8;
-    sunLight.color.setHex(0xffa23a);
-    sunLight.intensity = 2.0;
-    sunLight.position.set(-420, 245, 280);
+    hemiLightRef.color.setHex(0xb5a6e0);       // 그늘은 차가운 보랏빛(반대편 하늘광)
+    hemiLightRef.groundColor.setHex(0x6a3d28); // 지면에서 튕겨 오르는 따뜻한 반사광
+    hemiLightRef.intensity = 0.86;
+    sunLight.color.setHex(0xff9a3a);
+    sunLight.intensity = 2.1;
+    sunLight.position.set(-440, 170, 290);     // 고도 약 18° — 길게 늘어지는 그림자
   } else if (mode === 'cloudy') {
     scene.background.setHex(0x64748b);
     scene.fog.color.setHex(0x94a3b8);
     scene.fog.density = 0.00075;
-    hemiLightRef.color.setHex(0xe2e8f0);
-    hemiLightRef.groundColor.setHex(0x334155);
-    hemiLightRef.intensity = 1.0;
-    sunLight.color.setHex(0xcbd5e1);
-    sunLight.intensity = 0.55;
-    sunLight.position.set(100, 400, 100);
+    hemiLightRef.color.setHex(0xdde6f0);
+    hemiLightRef.groundColor.setHex(0x39434f);
+    hemiLightRef.intensity = 1.12;             // 구름이 빛을 고르게 퍼뜨림 → 환경광 비중↑
+    sunLight.color.setHex(0xd5dfea);
+    sunLight.intensity = 0.5;
+    sunLight.position.set(120, 420, 100);
   } else {
     // night (기본)
     scene.background.setHex(0x0f172a);
     scene.fog.color.setHex(0x0f172a);
     scene.fog.density = 0.00045;
-    // 밤: 하늘(별이 뜬 어두운 밤)과 일관되도록 환경광을 크게 낮추고 차가운 달빛 톤으로
-    hemiLightRef.color.setHex(0x5f78b0);
+    hemiLightRef.color.setHex(0x5a74b0);
     hemiLightRef.groundColor.setHex(0x0b1020);
-    hemiLightRef.intensity = 0.42;
-    sunLight.color.setHex(0x8fb0ff);
-    sunLight.intensity = 0.6;
+    hemiLightRef.intensity = 0.46;
+    sunLight.color.setHex(0x9bb8ff);           // 차가운 달빛
+    sunLight.intensity = 0.65;
     sunLight.position.set(200, 450, 180);
   }
   document.querySelectorAll('.weather-btn').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.mode === mode);
   });
   if (typeof gfxAfterWeather === 'function') gfxAfterWeather(mode);
-  if (typeof lxOnWeather === 'function') lxOnWeather(mode);   // 조명 리그: 2.4초 부드러운 전환
 }
 
 function createWaypointMarkers() {
@@ -5639,14 +5459,84 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
 // =============================================================================
 const GFX_PRESETS = {
   low:    { label: '낮음 (최적화)',          maxPR: 1.0, shadow: 0,    bShadow: false, bloom: false },
-  medium: { label: '보통 (권장)',            maxPR: 1.5, shadow: 2048, bShadow: true,  bloom: false, shR: 110 },
-  high:   { label: '높음 (고화질 그림자+블룸)', maxPR: 1.5, shadow: 2048, bShadow: true,  bloom: true, loadR: 900, shR: 100 },
-  ultra:  { label: '최고급 (울트라: 반사·빛줄기·시네마 후처리)', maxPR: 2.0, shadow: 4096, bShadow: true, bloom: true, ultra: true, loadR: 1200, shR: 150 },
-  cinema: { label: '시네마틱 (SSR·볼류메트릭·모션블러·AO·2단 그림자)', maxPR: 2.0, shadow: 4096, bShadow: true, bloom: true, ultra: true, cinema: true, loadR: 1200, shR: 150 }
+  medium: { label: '보통 (권장)',            maxPR: 1.5, shadow: 2048, bShadow: true,  bloom: false, shR: 150 },
+  high:   { label: '높음 (고화질 그림자+블룸)', maxPR: 1.5, shadow: 2048, bShadow: true,  bloom: true, loadR: 900, shR: 190 },
+  ultra:  { label: '최고급 (울트라: 반사·빛줄기·시네마 후처리)', maxPR: 2.0, shadow: 4096, bShadow: true, bloom: true, ultra: true, loadR: 1200, shR: 230 },
+  cinema: { label: '시네마틱 (SSR·볼류메트릭·모션블러·AO·2단 그림자)', maxPR: 2.0, shadow: 4096, bShadow: true, bloom: true, ultra: true, cinema: true, loadR: 1200, shR: 230 }
+};
+// ---------- 고급 소프트 섀도(PCSS-lite): 접촉부는 선명, 멀수록 부드러운 반그림자 + 경사면 바이어스 ----------
+// 셰이더 컴파일을 실제로 테스트해 통과할 때만 적용(실패 시 기본 PCFSoft 유지)
+(function gfxPatchSoftShadow() {
+  try {
+    const SC = THREE.ShaderChunk; let chunk = SC.shadowmap_pars_fragment;
+    const re = /#elif defined\( SHADOWMAP_TYPE_PCF_SOFT \)[\s\S]*?(?=#elif defined\( SHADOWMAP_TYPE_VSM \))/;
+    if (!re.test(chunk)) return;
+    const soft = `#elif defined( SHADOWMAP_TYPE_PCF_SOFT )
+	{
+		vec3 sdx = dFdx( shadowCoord.xyz ); vec3 sdy = dFdy( shadowCoord.xyz );
+		float sdet = sdx.x * sdy.y - sdx.y * sdy.x;
+		vec2 slope = vec2( 0.0 );
+		if ( abs( sdet ) > 1e-14 ) {
+			slope = vec2( sdy.y * sdx.z - sdx.y * sdy.z, sdx.x * sdy.z - sdy.x * sdx.z ) / sdet;
+			slope = clamp( slope, vec2( -8.0 ), vec2( 8.0 ) );
+		}
+		vec2 texel = 1.0 / shadowMapSize;
+		float ang = 6.2831853 * fract( 52.9829189 * fract( dot( gl_FragCoord.xy, vec2( 0.06711056, 0.00583715 ) ) ) );
+		float blk = 0.0; float cnt = 0.0;
+		for ( int i = 0; i < 6; i ++ ) {
+			float fi = float( i );
+			float aa = fi * 2.399963 + ang;
+			vec2 o = vec2( cos( aa ), sin( aa ) ) * ( sqrt( ( fi + 0.5 ) / 6.0 ) * 7.0 ) * texel;
+			float dd = unpackRGBAToDepth( texture2D( shadowMap, shadowCoord.xy + o ) );
+			float pz = dot( o, slope );
+			if ( dd < shadowCoord.z + pz ) { blk += dd - pz; cnt += 1.0; }
+		}
+		if ( cnt < 0.5 ) { shadow = 1.0; }
+		else {
+			float pen = clamp( shadowRadius * max( shadowCoord.z - blk / cnt, 0.0 ), 1.0, 7.0 );
+			float lit = 0.0;
+			for ( int j = 0; j < 14; j ++ ) {
+				float fj = float( j );
+				float a2 = fj * 2.399963 + ang + 1.7;
+				vec2 o2 = vec2( cos( a2 ), sin( a2 ) ) * ( sqrt( ( fj + 0.5 ) / 14.0 ) * pen ) * texel;
+				lit += texture2DCompare( shadowMap, shadowCoord.xy + o2, shadowCoord.z + dot( o2, slope ) );
+			}
+			shadow = lit / 14.0;
+		}
+	}
+`;
+    chunk = chunk.replace(re, soft);
+    // 컴파일 자체 테스트 (WebGL2 전용 — dFdx 사용)
+    const cv = document.createElement('canvas'), gl = cv.getContext('webgl2'); if (!gl) return;
+    const fs = '#version 300 es\nprecision highp float; precision highp int;\n#define varying in\n#define texture2D texture\nout highp vec4 pc_fragColor;\n#define gl_FragColor pc_fragColor\n' +
+      '#define USE_SHADOWMAP\n#define NUM_DIR_LIGHT_SHADOWS 1\n#define NUM_SPOT_LIGHT_SHADOWS 0\n#define NUM_POINT_LIGHT_SHADOWS 0\n#define SHADOWMAP_TYPE_PCF_SOFT\n' +
+      SC.packing + '\n' + chunk + '\nvoid main(){ gl_FragColor = vec4( getShadow( directionalShadowMap[0], vec2( 1024.0 ), 0.0, 100.0, vDirectionalShadowCoord[0] ) ); }';
+    const sh = gl.createShader(gl.FRAGMENT_SHADER); gl.shaderSource(sh, fs); gl.compileShader(sh);
+    const ok = gl.getShaderParameter(sh, gl.COMPILE_STATUS);
+    if (!ok) console.warn('soft shadow patch skipped:', gl.getShaderInfoLog(sh));
+    try { const ext = gl.getExtension('WEBGL_lose_context'); if (ext) ext.loseContext(); } catch (e) {}
+    if (ok) { SC.shadowmap_pars_fragment = chunk; window.__softShadow = true; }
+  } catch (e) { console.warn('soft shadow patch error', e); }
+})();
+// 시간대·날씨별 반그림자 크기(광원 크기) — 흐림은 거대한 면광원처럼 아주 부드럽게
+const GFX_SOFT = { day: 1.0, sunset: 1.3, cloudy: 3.2, night: 1.7 };
+function gfxSoftRadius() {
+  if (typeof sunLight === 'undefined' || !sunLight) return;
+  const k = (GFX_SOFT[currentWeatherMode] || 1) * 0.05;    // 광원 각크기(태양 ≈0.02)보다 살짝 키워 연출
+  const calc = (L) => { const s = L.shadow, c = s.camera, w = (c.right - c.left) / Math.max(1, s.mapSize.x); return Math.max(1, k * (c.far - c.near) / w); };
+  sunLight.shadow.radius = calc(sunLight);
+  if (typeof GFX2 !== 'undefined' && GFX2.sun2) GFX2.sun2.shadow.radius = calc(GFX2.sun2);
+}
+// 시간대·날씨별 구름: 범위(cover) · 밝은면/그늘면/태양쪽 림 색 · 불투명도 · 바람 속도
+const GFX_CLOUD = {
+  day:    { lo: 0.55, hi: 0.76, a: 0.92, topFade: 1.0, dark: 0.00, lit: [1.00, 0.99, 0.96], shade: [0.60, 0.70, 0.86], rim: [1.00, 0.95, 0.82], wind: 0.0040 },
+  sunset: { lo: 0.47, hi: 0.70, a: 0.88, topFade: 1.0, dark: 0.25, lit: [1.00, 0.70, 0.38], shade: [0.42, 0.17, 0.26], rim: [1.00, 0.62, 0.28], wind: 0.0030 },
+  cloudy: { lo: 0.26, hi: 0.50, a: 0.98, topFade: 0.0, dark: 0.55, lit: [0.78, 0.82, 0.87], shade: [0.36, 0.41, 0.48], rim: [0.00, 0.00, 0.00], wind: 0.0060 },
+  night:  { lo: 0.54, hi: 0.76, a: 0.80, topFade: 1.0, dark: 0.20, lit: [0.20, 0.25, 0.42], shade: [0.025, 0.035, 0.08], rim: [0.45, 0.55, 0.85], wind: 0.0035 }
 };
 const GFX_SKY = {
-  day:    { top: 0x1058bd, exp: 0.78, star: 0.0, sun: 0xfff2d0, sunI: 1.0, expo: 1.05, bloom: 0.35 },
-  sunset: { top: 0x4b4fa6, exp: 0.62, star: 0.0, sun: 0xffedc2, sunI: 2.35, expo: 1.06, bloom: 0.78 },
+  day:    { top: 0x1f6fc9, exp: 0.85, star: 0.0, sun: 0xfff1c9, sunI: 1.0, expo: 1.10, bloom: 0.35 },
+  sunset: { top: 0xff982b, exp: 0.62, star: 0.0, sun: 0xffedc2, sunI: 2.35, expo: 1.18, bloom: 0.78 },
   cloudy: { top: 0x6b7c8e, exp: 0.60, star: 0.0, sun: 0xdde6ee, sunI: 0.0, expo: 1.10, bloom: 0.30 },
   night:  { top: 0x040a18, exp: 0.65, star: 1.0, sun: 0x9db8ff, sunI: 0.55, expo: 1.20, bloom: 0.75 }
 };
@@ -5665,16 +5555,17 @@ function gfxCreateSky() {
       topColor: { value: new THREE.Color(0x1f6fc9) }, horizonColor: { value: new THREE.Color(0x7dd3fc) },
       bottomColor: { value: new THREE.Color(0x4b6b86) }, sunColor: { value: new THREE.Color(0xfff1c9) },
       sunDir: { value: GFX.sunDir.clone() }, exponent: { value: 0.85 }, starAmt: { value: 0.0 }, sunI: { value: 1.0 },
-      uTime: { value: 0.0 }, cCover: { value: 0.4 }, cDens: { value: 0.6 }, cSpeed: { value: 0.0035 },
-      cLit: { value: new THREE.Color(1, 0.98, 0.95) }, cShade: { value: new THREE.Color(0.6, 0.69, 0.84) }, glowCol: { value: new THREE.Color(1, 0.8, 0.5) },
-      glowAmt: { value: 0.1 }, cityGlow: { value: 0.0 }, moonAmt: { value: 0.0 }
+      cTime: { value: 0 }, cCoverLo: { value: 0.48 }, cCoverHi: { value: 0.69 }, cAlpha: { value: 0.8 }, cTopFade: { value: 1 }, cDark: { value: 0 },
+      cLit: { value: new THREE.Color(1, 0.76, 0.39) }, cShade: { value: new THREE.Color(0.66, 0.245, 0.055) }, cRim: { value: new THREE.Color(1, 0.62, 0.28) }, cSunUV: { value: new THREE.Vector2(1, 0) }
     },
     vertexShader: `
       varying vec3 vDir;
       void main() { vDir = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
     fragmentShader: `
-      uniform vec3 topColor, horizonColor, bottomColor, sunColor, sunDir, cLit, cShade, glowCol;
-      uniform float exponent, starAmt, sunI, uTime, cCover, cDens, cSpeed, glowAmt, cityGlow, moonAmt;
+      uniform vec3 topColor, horizonColor, bottomColor, sunColor, sunDir;
+      uniform float exponent, starAmt, sunI;
+      uniform float cTime, cCoverLo, cCoverHi, cAlpha, cTopFade, cDark;
+      uniform vec3 cLit, cShade, cRim; uniform vec2 cSunUV;
       varying vec3 vDir;
       float hash(vec3 p) { p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
       float hash21(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123); }
@@ -5686,54 +5577,36 @@ function gfxCreateSky() {
       }
       float cloudFbm(vec2 p) {
         float v = 0.0, a = 0.5;
-        for (int i = 0; i < ${GFX_MOBILE ? 3 : 5}; i++) { v += noise2(p) * a; p *= 2.03; a *= 0.5; }
+        for (int i = 0; i < 5; i++) { v += noise2(p) * a; p *= 2.03; a *= 0.5; }
         return v;
       }
       void main() {
         vec3 d = normalize(vDir);
         float h = d.y;
-        vec3 sd = normalize(sunDir);
         vec3 col = h >= 0.0 ? mix(horizonColor, topColor, pow(h, exponent)) : mix(horizonColor, bottomColor, pow(-h, 0.55));
 
-        // 지평선 산란: 태양 방위 쪽의 따뜻한 띠(노을/낮 헤이즈) + 야간 도시 스카이글로우
-        vec2 dh = normalize(d.xz + vec2(1e-4)), sh = normalize(sd.xz + vec2(1e-4));
-        float az = max(dot(dh, sh), 0.0);
-        float band = exp(-max(h, 0.0) * 5.5);
-        col += glowCol * glowAmt * (pow(az, 3.0) * 0.9 + 0.1) * band;
-        col += vec3(1.0, 0.55, 0.25) * cityGlow * exp(-max(h, 0.0) * 7.0) * (0.55 + 0.45 * noise2(dh * 6.0));
+        // 시간·날씨 반응형 구름: 바람에 흐르고, 태양 쪽 밀도 차이로 밝은 가장자리/어두운 밑면을 만든다.
+        vec2 wind = vec2(cTime, cTime * 0.37);
+        vec2 cloudUV = d.xz / max(h + 0.24, 0.16) + wind;
+        float cloudsA = cloudFbm(cloudUV * 1.65 + vec2(2.7, 1.3));
+        float cloudsB = cloudFbm(cloudUV * 3.25 - vec2(1.4, 0.8) + wind * 0.6);
+        float cloudField = cloudsA * 0.76 + cloudsB * 0.24;
+        float cloudMask = smoothstep(cCoverLo, cCoverHi, cloudField) *
+                          smoothstep(-0.10, 0.18, h) *
+                          (1.0 - cTopFade * smoothstep(0.68, 0.96, h));
+        float fieldSun = cloudFbm((cloudUV + cSunUV * 0.07) * 1.65 + vec2(2.7, 1.3)) * 0.76 + cloudsB * 0.24;
+        float thick = smoothstep(cCoverLo, cCoverHi + 0.22, cloudField);
+        float sunSide = clamp(0.5 + (cloudField - fieldSun) * 4.0, 0.0, 1.0);
+        float sunAlign = pow(max(dot(d, normalize(sunDir)), 0.0), 3.0);
+        vec3 cloudColor = mix(cShade, cLit, clamp(sunSide * (1.0 - thick * 0.55) + (1.0 - thick) * 0.35, 0.0, 1.0));
+        cloudColor *= 1.0 - cDark * thick * 0.5;
+        cloudColor += cRim * sunAlign * (1.0 - thick * 0.6) * sunI * 0.5;
+        col = mix(col, cloudColor, cloudMask * cAlpha);
 
-        // 구름: 원근 평면에 투영한 2층 fbm. 바람으로 천천히 흐르고, 해 방향 두께 차이로 은빛 테두리/아랫면 음영을 만든다.
-        vec2 uv = d.xz / max(h + 0.20, 0.14);
-        vec2 wv = vec2(uTime * cSpeed, uTime * cSpeed * 0.37);
-        float f1 = cloudFbm(uv * 1.55 + wv + vec2(2.7, 1.3));
-        float f2 = cloudFbm(uv * 3.3 - wv * 1.7 + vec2(-1.4, 0.8));
-        float f = f1 * 0.74 + f2 * 0.26;
-        float thr = 1.0 - cCover;
-        float mask = smoothstep(thr - 0.08, thr + 0.18, f) * smoothstep(-0.05, 0.16, h);
-        mask *= 1.0 - 0.35 * smoothstep(0.80, 1.0, h);
-        vec2 toS = sd.xz / max(sd.y + 0.20, 0.14) - uv;
-        vec2 stp = normalize(toS + vec2(1e-4)) * 0.085;
-        float f3 = cloudFbm((uv + stp) * 1.55 + wv + vec2(2.7, 1.3)) * 0.74 + f2 * 0.26;
-        float lightAmt = clamp(0.55 + (f - f3) * cDens * 5.5, 0.0, 1.0);
-        float thick = smoothstep(thr, thr + 0.35, f);
-        vec3 cc = mix(cShade, cLit, lightAmt);
-        cc = mix(cc, cShade * 0.75 + horizonColor * 0.25, thick * 0.35 * cDens);
-        float s = max(dot(d, sd), 0.0);
-        float rim = pow(s, 5.0);
-        cc += sunColor * sunI * rim * 0.22 * (1.0 - thick) * (1.0 - moonAmt * 0.6);
-        col = mix(col, cc, mask * clamp(0.45 + cDens * 0.5, 0.0, 0.95));
-
-        // 해 / 달 (구름에 가려진다)
-        float glow = pow(s, 700.0) * 3.0 + pow(s, 42.0) * 0.42 + (pow(s, 8.0) * 0.16 + pow(s, 2.0) * 0.055) * (1.0 - 0.75 * clamp(glowAmt, 0.0, 1.0));   // 노을은 넓은 백색 번짐을 줄여 색을 살린다
-        float vis = smoothstep(-0.05, 0.08, h) * (1.0 - mask * 0.85);
-        col += sunColor * glow * sunI * vis * (1.0 - moonAmt * 0.5);
-        if (moonAmt > 0.0) {
-          float md = smoothstep(0.99935, 0.99965, s);
-          float cr = 0.82 + 0.18 * noise2(d.xz * 90.0 + vec2(d.y * 40.0));
-          col = mix(col, vec3(0.93, 0.95, 1.0) * cr * 1.35, md * smoothstep(0.0, 0.1, h) * (1.0 - mask * 0.9) * moonAmt);
-          col += vec3(0.45, 0.55, 0.8) * pow(s, 60.0) * 0.35 * moonAmt * vis;
-        }
-        if (starAmt > 0.0 && h > 0.0) col += vec3(step(0.9965, hash(floor(d * 360.0)))) * starAmt * smoothstep(0.03, 0.30, h) * (1.0 - mask);
+        float s = max(dot(d, normalize(sunDir)), 0.0);
+        float glow = pow(s, 700.0) * 3.0 + pow(s, 42.0) * 0.42 + pow(s, 8.0) * 0.16 + pow(s, 2.0) * 0.055;
+        col += sunColor * glow * sunI * smoothstep(-0.05, 0.08, h) * (1.0 - cloudMask * cAlpha * 0.6);
+        if (starAmt > 0.0 && h > 0.0) col += vec3(step(0.9965, hash(floor(d * 360.0)))) * starAmt * smoothstep(0.03, 0.30, h) * (1.0 - cloudMask * cAlpha);
         gl_FragColor = vec4(col, 1.0);
         #include <tonemapping_fragment>
       }`
@@ -5757,12 +5630,17 @@ function gfxAfterWeather(mode) {
   u.bottomColor.value.copy(scene.fog.color).multiplyScalar(0.55);
   u.sunColor.value.setHex(P.sun); u.sunDir.value.copy(GFX.sunDir);
   u.exponent.value = P.exp; u.starAmt.value = P.star; u.sunI.value = P.sunI;
+  const C = GFX_CLOUD[mode] || GFX_CLOUD.night;
+  u.cCoverLo.value = C.lo; u.cCoverHi.value = C.hi; u.cAlpha.value = C.a; u.cTopFade.value = C.topFade; u.cDark.value = C.dark;
+  u.cLit.value.setRGB(C.lit[0], C.lit[1], C.lit[2]); u.cShade.value.setRGB(C.shade[0], C.shade[1], C.shade[2]); u.cRim.value.setRGB(C.rim[0], C.rim[1], C.rim[2]);
+  const hl = Math.hypot(GFX.sunDir.x, GFX.sunDir.z) || 1; u.cSunUV.value.set(GFX.sunDir.x / hl, GFX.sunDir.z / hl);
+  gfxSoftRadius();
 }
 
 // ---------- 건물 그림자 프록시 ----------
 // 6MB짜리 병합 건물 메시를 그림자 패스에 넣으면 매우 느리다. 대신 플레이어 주변(그림자가
 // 닿을 수 있는) 건물만 풋프린트 압출 형태의 저폴리 지오메트리로 모아 그림자 캐스터로 쓴다.
-const GFXS = { mesh: null, pos: null, attr: null, cap: 360000, cx: 1e9, cz: 1e9, dirty: true, wait: 0 };
+const GFXS = { mesh: null, pos: null, attr: null, cap: 720000, cx: 1e9, cz: 1e9, dirty: true, wait: 0 };
 function gfxShadowInit() {
   GFXS.pos = new Float32Array(GFXS.cap);
   const g = new THREE.BufferGeometry();
@@ -5804,11 +5682,11 @@ function gfxRebuildShadowProxy(px, pz) {
     for (let i = 0; i < list.length; i++) {
       const c = list[i]; if (seen.has(c)) continue; seen.add(c);
       if (!c.maxY || c.maxY - (c.minY || 0) < 5) continue;
-      const len = Math.min(500, (c.maxY - (c.minY || 0)) * hl / sy);            // 그림자 길이
+      const len = Math.min(900, (c.maxY - (c.minY || 0)) * hl / sy);            // 그림자 길이
       const rx = px - c.centX, rz = pz - c.centZ;
       const t = len > 1e-3 ? Math.min(1, Math.max(0, (rx * ux + rz * uz) / len)) : 0;
       const dist = Math.hypot(rx - ux * len * t, rz - uz * len * t);              // 플레이어~그림자 선분 거리
-      if (dist < 105) cands.push({ c, dist });
+      if (dist < (GFX.shR || 110) * 0.92) cands.push({ c, dist });
     }
   }
   cands.sort((a, b) => a.dist - b.dist);
@@ -6111,8 +5989,8 @@ function gfxApplyShadows() {
     renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     sunLight.castShadow = true; { const _sh = GFX_MOBILE ? Math.min(P.shadow, 2048) : P.shadow; sunLight.shadow.mapSize.set(_sh, _sh); }
     const c = sunLight.shadow.camera;
-    const R = P.shR || 80; c.near = 1; c.far = 1400; c.left = -R; c.right = R; c.top = R; c.bottom = -R; c.updateProjectionMatrix();
-    sunLight.shadow.bias = -0.00035; sunLight.shadow.normalBias = 0.25;   // 건물 자기 그림자(여드름) 방지
+    const R = Math.round((P.shR || 80) * (GFX_MOBILE ? 0.85 : 1)); GFX.shR = R; c.near = 1; c.far = 900; c.left = -R; c.right = R; c.top = R; c.bottom = -R; c.updateProjectionMatrix();
+    sunLight.shadow.bias = -0.0006; sunLight.shadow.normalBias = 0.25; gfxSoftRadius();   // 건물 자기 그림자(여드름) 방지
     if (sunLight.shadow.map) { sunLight.shadow.map.dispose(); sunLight.shadow.map = null; }
   }
   if (GFXS.mesh) GFXS.mesh.visible = !!(P.shadow && P.bShadow);
@@ -6142,7 +6020,6 @@ function gfxInit() {
   renderer.toneMappingExposure = 1.2;
   sunLight.target.position.set(0, 0, 0); scene.add(sunLight.target);
   gfxCreateSky(); gfxShadowInit(); gfxBloomInit();
-  try { lxInit(); } catch (e) { console.warn('lxInit', e); }
   let q = window.__LITE ? 'medium' : (GFX_MOBILE ? 'ultra' : 'medium'); try { q = localStorage.getItem('gfxQuality') || q; } catch (e) {}
   if (window.__LITE && (q === 'ultra' || q === 'cinema')) q = 'high';
   gfxSetQuality(q);
@@ -6155,7 +6032,7 @@ function gfxInit() {
 }
 function gfxMarkCasters() {
   if (!spideyGroup) return;
-  spideyGroup.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+  spideyGroup.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = false; } });
 }
 // 월드 생성 후 1회: 모든 정적 메시는 그림자 수신, 행렬 자동갱신 중지
 function gfxFreezeStatic() {
@@ -6169,16 +6046,19 @@ function gfxFreezeStatic() {
   }
 }
 function gfxUpdate() {
-  try { lxUpdate(); } catch (e) { if (!GFX.lxErr) { GFX.lxErr = 1; console.warn('lx', e); } }
   gfx2Update();
   if (GFX.quality !== 'low' && GFX.envTex && (GFX.envTick = (GFX.envTick || 0) + 1) % 180 === 0) gfxApplyEnv();
-  if (GFX.sky) GFX.sky.position.copy(camera.position);
+  if (GFX.sky) { GFX.sky.position.copy(camera.position); const _C = GFX_CLOUD[currentWeatherMode] || GFX_CLOUD.night; GFX.sky.material.uniforms.cTime.value = performance.now() * 0.001 * _C.wind; }
   if (sunLight.castShadow) {
     const p = player.pos, d = GFX.sunDir;
-    // 태양이 낮을수록 그림자가 멀리 뻗으므로 그림자 카메라 중심을 그림자가 향하는 쪽으로 밀어 준다(고도 18°에서 반경의 50%)
-    const _el = Math.asin(Math.max(0, Math.min(1, d.y))), _lk = Math.max(0, Math.min(1, (0.95 - _el) / 0.6)), _hl = Math.hypot(d.x, d.z) || 1, _sh = (GFX_PRESETS[GFX.quality].shR || 100) * 0.5 * _lk;
-    sunLight.target.position.set(Math.round(p.x - d.x / _hl * _sh), 0, Math.round(p.z - d.z / _hl * _sh));
-    sunLight.position.set(sunLight.target.position.x + d.x * 600, d.y * 600, sunLight.target.position.z + d.z * 600);
+    {
+      const sc = sunLight.shadow.camera, tw = (sc.right - sc.left) / Math.max(1, sunLight.shadow.mapSize.x), n = Math.hypot(d.x, d.z) || 1;
+      const xx = d.z / n, xz = -d.x / n, yx = -d.x * d.y / n, yy = n, yz = -d.z * d.y / n;   // 광원 카메라의 x·y축
+      const cx = p.x * xx + p.z * xz, cy = p.x * yx + p.z * yz;
+      const sx = Math.round(cx / tw) * tw - cx, sy = Math.round(cy / tw) * tw - cy;
+      sunLight.target.position.set(p.x + xx * sx + yx * sy, yy * sy, p.z + xz * sx + yz * sy);
+      sunLight.position.set(sunLight.target.position.x + d.x * 350, sunLight.target.position.y + d.y * 350, sunLight.target.position.z + d.z * 350);
+    }
     sunLight.target.updateMatrixWorld();
     if (GFXS.mesh.visible && GFXS.wait-- <= 0 && (GFXS.dirty || Math.hypot(p.x - GFXS.cx, p.z - GFXS.cz) > 30)) {
       gfxRebuildShadowProxy(p.x, p.z); GFXS.wait = 20;
@@ -6367,11 +6247,11 @@ function gfx2Prep(u, W, H) {
 }
 // ---------- 2단 캐스케이드 그림자(근거리 = 기존 고해상도, 원거리 = 넓은 범위 보조 맵) ----------
 function gfx2RebuildProxy2(px, pz) {
-  const gx = Math.floor(px / SPATIAL_CELL), gz = Math.floor(pz / SPATIAL_CELL), N = Math.ceil(420 / SPATIAL_CELL), seen = new Set(), cands = [];
+  const gx = Math.floor(px / SPATIAL_CELL), gz = Math.floor(pz / SPATIAL_CELL), N = Math.ceil(640 / SPATIAL_CELL), seen = new Set(), cands = [];
   for (let ox = -N; ox <= N; ox++) for (let oz = -N; oz <= N; oz++) {
     const list = spatialColliderGrid.get((gx + ox) + ',' + (gz + oz)); if (!list) continue;
     for (let i = 0; i < list.length; i++) { const c = list[i]; if (seen.has(c)) continue; seen.add(c); if (!c.maxY || c.maxY - (c.minY || 0) < 8) continue;
-      const d = Math.hypot(px - c.centX, pz - c.centZ); if (d < 440) cands.push({ c, d }); }
+      const d = Math.hypot(px - c.centX, pz - c.centZ); if (d < 660) cands.push({ c, d }); }
   }
   cands.sort((a, b) => a.d - b.d);
   let n = 0; const pos = GFX2.pos2;
@@ -6394,8 +6274,8 @@ function gfx2Apply(on) {
   GFX2.on = on; GFX2.havePrev = false;
   GFX2.rim.visible = on; GFX2.sun2.visible = on; GFX2.proxy2.visible = on; GFX2.sun2.castShadow = on;
   if (on) {
-    const s = GFX2.sun2.shadow, c = s.camera; s.mapSize.set(GFX_MOBILE ? 1024 : 2048, GFX_MOBILE ? 1024 : 2048); c.near = 1; c.far = 1600; c.left = -430; c.right = 430; c.top = 430; c.bottom = -430; c.updateProjectionMatrix();
-    s.bias = -0.0012; s.normalBias = 0.7; if (s.map) { s.map.dispose(); s.map = null; }
+    const s = GFX2.sun2.shadow, c = s.camera; s.mapSize.set(GFX_MOBILE ? 1024 : 2048, GFX_MOBILE ? 1024 : 2048); c.near = 1; c.far = 1600; c.left = -640; c.right = 640; c.top = 640; c.bottom = -640; c.updateProjectionMatrix();
+    s.bias = -0.0012; s.normalBias = 0.7; if (s.map) { s.map.dispose(); s.map = null; } gfxSoftRadius();
     for (const st in NYC_FACADE_MATS) gfx2AttachPBR(NYC_FACADE_MATS[st], st);
     try { gfx2PatchConcrete(); } catch (e) { console.warn('concrete', e); }
     GFX2.lastMain = -1; GFX2.cx2 = 1e9;
@@ -6411,15 +6291,15 @@ function gfx2Update() {
   const p = player.pos, d = GFX.sunDir, t = performance.now() * 0.001;
   // 태양광을 근거리/원거리 캐스케이드로 분배
   if (Math.abs(sunLight.intensity - GFX2.lastMain) > 1e-4) GFX2.base = sunLight.intensity;
-  sunLight.intensity = GFX2.base * 0.72; GFX2.lastMain = sunLight.intensity;
-  GFX2.sun2.color.copy(sunLight.color); GFX2.sun2.intensity = GFX2.base * 0.28;
+  sunLight.intensity = GFX2.base * 0.6; GFX2.lastMain = sunLight.intensity;
+  GFX2.sun2.color.copy(sunLight.color); GFX2.sun2.intensity = GFX2.base * 0.4;
   const tx = Math.round(p.x / 8) * 8, tz = Math.round(p.z / 8) * 8;
   GFX2.sun2.target.position.set(tx, 0, tz); GFX2.sun2.position.set(tx + d.x * 700, Math.max(60, d.y * 700), tz + d.z * 700); GFX2.sun2.target.updateMatrixWorld();
   GFX2.sun2.castShadow = renderer.shadowMap.enabled && GFX.sunI > 0;
   if (GFX2.wait2-- <= 0 && Math.hypot(p.x - GFX2.cx2, p.z - GFX2.cz2) > 70) { gfx2RebuildProxy2(p.x, p.z); GFX2.wait2 = 40; }
   // 림라이트: 태양 반대편에서 들어오는 차가운 역광(실루엣 강조)
   const night = currentWeatherMode === 'night', cloudy = currentWeatherMode === 'cloudy';
-  GFX2.rim.color.setHex(night ? 0x6f9bff : (cloudy ? 0xa9bfd6 : 0xffc78a)); GFX2.rim.intensity = night ? 0.7 : (cloudy ? 0.35 : 0.3);
+  const sunset = currentWeatherMode === 'sunset'; GFX2.rim.color.setHex(night ? 0x6f9bff : (cloudy ? 0xa9bfd6 : (sunset ? 0x9aa6ff : 0xbcd8ff))); GFX2.rim.intensity = night ? 0.7 : (cloudy ? 0.35 : (sunset ? 0.45 : 0.25));
   GFX2.rim.target.position.set(p.x, p.y, p.z); GFX2.rim.position.set(p.x - d.x * 200 + 40, p.y + 90, p.z - d.z * 200 + 40); GFX2.rim.target.updateMatrixWorld();
   // 네온 사인(타임스퀘어 전광판): 야간·노을·흐림에서 발광 강화 + 깜빡임
   if ((GFX2.neonScan++ % 120) === 0) { GFX2.neon.length = 0; scene.traverse(o => { if (o.isMesh && o.name === 'One_Times_Square_Facade_Display') { if (o.userData.neonBase === undefined) { o.userData.neonBase = o.material.emissiveIntensity; o.userData.ph = Math.random() * 6.28; } GFX2.neon.push(o); } }); }
@@ -7019,6 +6899,7 @@ function init() {
   sunLight.position.set(200, 450, 180);
   scene.add(sunLight);
   gfxInit();
+  applyWeatherTheme(currentWeatherMode);   // 시작 시 환경광·태양·하늘·그림자를 같은 시간대로 일치
 
   buildManhattanRoadFoundation();
   createTargetAndWebMarkers();
