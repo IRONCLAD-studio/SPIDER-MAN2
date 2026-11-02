@@ -697,6 +697,26 @@ function nmMakeMaterial() {
       .replace('#include <common>', `#include <common>
 varying vec3 vWP; varying vec4 vSty; varying vec2 vTop; uniform float uWinQ; uniform float uWinGlow; uniform float uWinFar; uniform sampler2D tNLG; uniform vec2 uNLC; uniform float uNLS; uniform float uNLK; float vfxWin = 0.0;
 float h21(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
+// ---- 인테리어 매핑: 창 평면에서 레이를 방 안쪽 박스(바닥/천장/측벽/뒷벽)에 교차 ----
+vec3 imap(vec2 uv, vec3 d, vec2 sd, float lit, vec3 lc){
+  vec3 o = vec3(uv, 0.0);
+  float tx = d.x > 0.0 ? (1.0 - o.x) / d.x : (d.x < 0.0 ? -o.x / d.x : 1e5);
+  float ty = d.y > 0.0 ? (1.0 - o.y) / d.y : (d.y < 0.0 ? -o.y / d.y : 1e5);
+  float tz = 1.0 / max(d.z, 1e-3);
+  float t = min(min(tx, ty), tz); vec3 p = o + d * t;
+  float hs = h21(sd + 3.1);
+  vec3 base = mix(vec3(0.78, 0.74, 0.66), vec3(0.55, 0.62, 0.70), hs);
+  float isBack = step(tz, min(tx, ty)), isVert = (1.0 - isBack) * step(ty, tx);
+  vec3 col = base * 0.6;
+  float desk = step(p.y, 0.28) * step(0.15, p.x) * step(p.x, 0.85);
+  float pic = step(abs(p.x - 0.5), 0.12) * step(abs(p.y - 0.62), 0.10) * step(0.5, hs);
+  vec3 back = mix(mix(base * 0.85, vec3(0.20, 0.17, 0.13), desk), vec3(0.20, 0.30, 0.40), pic);
+  vec3 fc = d.y > 0.0 ? base * 0.95 : vec3(0.35, 0.28, 0.20);
+  col = mix(col, fc, isVert); col = mix(col, back, isBack);
+  col *= mix(1.0, 0.55, clamp(p.z, 0.0, 1.0));
+  col *= mix(0.10, 1.0, lit); col = mix(col, col * lc, lit * 0.6);
+  return col;
+}
 // 스타일별 외벽 파라미터 (건물 판별 결과 aSty.x 로 선택)
 // A: 층고, 베이 폭, 창 폭 비율, 창 높이 비율 / B: 창 시작 높이, 피어(기둥) 폭, 벨트코스 간격(층), 코니스 높이 / C: 외벽 기본색
 void facP(float s, out vec4 A, out vec4 B, out vec3 C){
@@ -801,6 +821,13 @@ float boxS(float x, float a, float b, float aa){ return smoothstep(a-aa,a+aa,x)*
               float mull = isGlass > 0.5 ? step(f.x, 0.07) + step(0.93, f.x) : 0.0;
               float mun = (isBrick + isStone > 0.5 && ground < 0.5) ? step(abs(f.x - 0.5), 0.035) + step(abs(f.y - (y0 + wh * 0.66)), 0.03) : 0.0;
               glass = mix(glass, col * 0.55, clamp(mull + mun, 0.0, 1.0) * nearK);
+              if (nearK > 0.02 && win > 0.01) {   // 인테리어 매핑 (가까운 창만)
+                vec3 vv = normalize(vWP - cameraPosition); vec3 tU_ = vec3(-wn.z, 0.0, wn.x);
+                vec3 dl_ = vec3(dot(vv, tU_) / 3.2, vv.y / 3.0, abs(dot(vv, wn)) / 4.5);
+                vec3 lcI = mix(vec3(1.0, 0.78, 0.46), vec3(0.78, 0.9, 1.0), step(isGlass > 0.5 ? 0.45 : 0.82, h21(id + 3.7)));
+                vec3 im_ = imap(vec2(f.x, clamp((f.y - y0) / max(wh, 1e-3), 0.0, 1.0)), dl_, id + seed, lit, lcI);
+                glass = mix(glass, im_, 0.82 * nearK * (1.0 - blind) * (1.0 - clamp(mull + mun, 0.0, 1.0)));
+              }
               float fres = pow(1.0 - abs(dot(normalize(cameraPosition - vWP), wn)), 3.0) * (isGlass > 0.5 ? 0.6 : 0.45);
               glass = mix(glass, fogColor * 1.25 + vec3(0.03, 0.05, 0.08), fres);
               col = mix(col, glass, win * 0.86 * fade * uWinQ);
@@ -3087,6 +3114,12 @@ function gfxBloomInit() {
             for (int i = 0; i < 28; i++) { sp += dl; vec3 t = texture2D(tScene, sp).rgb; float l = max(t.r, max(t.g, t.b)); acc += t * smoothstep(0.72, 1.0, l) * w; w *= 0.955; }
             float fall = pow(clamp(1.0 - length((uv - sunUv) * vec2(aspect, 1.0)) * 0.9, 0.0, 1.0), 1.6);
             c += acc / 28.0 * 1.6 * sunVis * (0.35 + fall);
+            // 아나모픽 렌즈 플레어: 수평 스트릭 + 고스트
+            vec2 fd = (uv - sunUv) * vec2(aspect, 1.0);
+            c += vec3(0.35, 0.55, 1.0) * exp(-abs(fd.y) * 90.0) * exp(-abs(fd.x) * 1.6) * sunVis * 0.55;
+            vec2 gv = vec2(0.5) - sunUv;
+            c += vec3(1.0, 0.72, 0.42) * smoothstep(0.07, 0.0, length((uv - (sunUv + gv * 1.5)) * vec2(aspect, 1.0))) * 0.10 * sunVis;
+            c += vec3(0.5, 0.8, 1.0) * smoothstep(0.045, 0.0, length((uv - (sunUv + gv * 2.2)) * vec2(aspect, 1.0))) * 0.08 * sunVis;
           }
           // 컬러 그레이딩: 대비 + 채도 + 따뜻한 하이라이트/차가운 그림자
           float l = dot(c, vec3(0.299, 0.587, 0.114));
@@ -3594,6 +3627,56 @@ function gfx2Update() {
   for (const o of GFX2.neon) { const f = 0.82 + 0.2 * Math.sin(t * 3.1 + o.userData.ph) + (Math.sin(t * 17 + o.userData.ph * 3) > 0.96 ? -0.35 : 0); o.material.emissiveIntensity = o.userData.neonBase * boost * Math.max(0.3, f); }
 }
 
+// ---------------- 옥상 디테일: 목재 물탱크 / HVAC / 스팀 굴뚝 (절차적, 건물 충돌체 기준) ----------------
+const PROPS = { map: new Map(), t: 0, acc: 0, steam: [], R: null };
+function propsRes() {
+  if (PROPS.R) return PROPS.R;
+  const M = (c, r, m) => new THREE.MeshStandardMaterial({ color: c, roughness: r, metalness: m || 0 });
+  return (PROPS.R = { wood: M(0x6b4a2f, 0.9), band: M(0x2a2a2a, 0.5, 0.6), metal: M(0x8a8f94, 0.45, 0.7), dark: M(0x3a3d40, 0.7, 0.3), stack: M(0xd8d2c8, 0.8), stripe: M(0xd9531e, 0.7),
+    tank: new THREE.CylinderGeometry(1.6, 1.6, 3.2, 14), lid: new THREE.ConeGeometry(1.8, 1.1, 14), leg: new THREE.BoxGeometry(0.15, 2.4, 0.15), box: new THREE.BoxGeometry(1, 1, 1),
+    pipe: new THREE.CylinderGeometry(0.45, 0.45, 6, 10), fan: new THREE.CylinderGeometry(0.7, 0.7, 0.12, 14) });
+}
+function propsBuild(c) {
+  const r = c.ringXZ; let x = c.centX, z = c.centZ;
+  if (!pointInPolygonXZ(x, z, r)) { const p = r[0]; x = p.x + (c.centX - p.x) * 0.3; z = p.z + (c.centZ - p.z) * 0.3; }
+  const h = (k) => { const s = Math.sin(c.centX * 12.9898 + c.centZ * 78.233 + k * 37.719) * 43758.5453; return s - Math.floor(s); };
+  const R = propsRes(), g = new THREE.Group(); g.position.set(x, c.maxY, z);
+  const place = (k, o) => { const ox = (h(k) - 0.5) * o, oz = (h(k + 9) - 0.5) * o; return pointInPolygonXZ(x + ox, z + oz, r) ? [ox, oz] : [0, 0]; };
+  const add = (geo, mat, px, py, pz, sx, sy, sz) => { const m = new THREE.Mesh(geo, mat); m.position.set(px, py, pz); if (sx) m.scale.set(sx, sy, sz); g.add(m); return m; };
+  if (h(1) < 0.75) {   // 원통형 목재 물탱크
+    const [ox, oz] = place(2, 10);
+    for (const [a, b] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) add(R.leg, R.dark, ox + a * 1.1, 1.2, oz + b * 1.1);
+    add(R.tank, R.wood, ox, 4.0, oz); add(R.tank, R.band, ox, 3.0, oz, 1.03, 0.05, 1.03); add(R.tank, R.band, ox, 5.0, oz, 1.03, 0.05, 1.03); add(R.lid, R.wood, ox, 6.15, oz);
+  }
+  const nh = 1 + Math.floor(h(3) * 2.6);
+  for (let i = 0; i < nh; i++) {   // HVAC 유닛 + 팬
+    const [ox, oz] = place(10 + i, 12), w = 2 + h(20 + i) * 2.5, d = 1.5 + h(30 + i) * 1.5;
+    add(R.box, R.metal, ox, 0.8, oz, w, 1.6, d); add(R.fan, R.dark, ox - w * 0.2, 1.66, oz); add(R.box, R.dark, ox + w * 0.25, 1.7, oz, 0.5, 0.2, d * 0.8);
+  }
+  if (h(4) < 0.35) {   // 주황 줄무늬 스팀 굴뚝 + 수증기 퍼프
+    const [ox, oz] = place(5, 8);
+    add(R.pipe, R.stack, ox, 3, oz); add(R.pipe, R.stripe, ox, 5.2, oz, 1.02, 0.12, 1.02);
+    for (let i = 0; i < 4; i++) { const sp = new THREE.Sprite(new THREE.SpriteMaterial({ color: 0xffffff, transparent: true, opacity: 0.4, depthWrite: false })); sp.position.set(ox, 6, oz); g.add(sp); PROPS.steam.push({ sp, ph: i / 4, by: 6 }); }
+  }
+  scene.add(g); return g;
+}
+function propsUpdate(dt) {
+  if (window.__LITE || typeof player === 'undefined') return;
+  PROPS.t += dt; PROPS.acc += dt;
+  for (const s of PROPS.steam) { const t = (PROPS.t * 0.22 + s.ph) % 1; s.sp.position.y = s.by + t * 10; const k = 1.6 + t * 6; s.sp.scale.set(k, k, 1); s.sp.material.opacity = 0.42 * (1 - t) * Math.min(1, t * 6); }
+  if (PROPS.acc < 1.0) return; PROPS.acc = 0;
+  const px = player.pos.x, pz = player.pos.z;
+  for (const c of nearbyColliders(px, pz)) {
+    if (PROPS.map.has(c) || c.maxY < 18 || !c.ringXZ || c.ringXZ.length < 3 || Math.hypot(c.centX - px, c.centZ - pz) > 170 || PROPS.map.size >= 70) continue;
+    let ar = 0; const rr = c.ringXZ; for (let i = 0; i < rr.length; i++) { const p = rr[i], q = rr[(i + 1) % rr.length]; ar += p.x * q.z - q.x * p.z; }
+    if (Math.abs(ar) / 2 < 80) { PROPS.map.set(c, null); continue; }
+    try { PROPS.map.set(c, propsBuild(c)); } catch (e) { PROPS.map.set(c, null); }
+  }
+  for (const [c, g] of PROPS.map) if (g && Math.hypot(c.centX - px, c.centZ - pz) > 260) {
+    scene.remove(g); PROPS.steam = PROPS.steam.filter(s => { if (g.children.includes(s.sp)) { s.sp.material.dispose(); return false; } return true; }); PROPS.map.delete(c);
+  }
+}
+
 function animate() {
   requestAnimationFrame(animate);
   const now = performance.now();
@@ -3609,6 +3692,7 @@ function animate() {
   if (slingState.charging && !isSpectator) { const g = slingState.g; camera.fov = THREE.MathUtils.lerp(camera.fov, 65 - 16*g, Math.min(1, 9*dt)); if (g >= 1) { camera.position.x += (Math.random()-0.5)*0.05; camera.position.y += (Math.random()-0.5)*0.05; } camera.updateProjectionMatrix(); }
   if (isSpectator) updateSpectator(dt);
   nmFrame(dt);
+  try { propsUpdate(dt); } catch (e) { PROPS.acc = -5; }
 
   hudTimer += dt;
   if (hudTimer > 0.25) {
@@ -3753,6 +3837,9 @@ function updateCameraAndHUD(dt) {
     ? THREE.MathUtils.clamp(78 + Math.max(0, speed - 22) * 0.45, 78, 104)
     : THREE.MathUtils.clamp(64 + Math.max(0, speed - 10) * 0.62, 64, 98);
   camera.fov = THREE.MathUtils.lerp(camera.fov, targetFov, 9 * dt);
+  { const shk = THREE.MathUtils.clamp((speed - 28) / 40, 0, 1) * (isPOVMode ? 0.6 : 1);   // 고속 카메라 셰이크
+    if (shk > 0 && !isBirdEyeMode && !isSpectator) { const tt = performance.now() * 0.001;
+      camera.position.x += Math.sin(tt * 47.0) * 0.018 * shk; camera.position.y += Math.sin(tt * 61.0 + 1.3) * 0.014 * shk; camera.rotateZ(Math.sin(tt * 37.0) * 0.0016 * shk); } }
   camera.updateProjectionMatrix();
 
   if (speedLinesGroup) {
