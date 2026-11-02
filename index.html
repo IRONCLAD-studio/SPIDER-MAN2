@@ -381,7 +381,86 @@ function worldToLatLon(x, z) {
 // =============================================================================
 // 4. 전역 상태, 웹스윙 및 플레이어 물리 변수
 // =============================================================================
-const NYC_FACADE_SPECS = {}; const NYC_FACADE_MATS = {};
+// ===== NYC FACADE STYLE SYSTEM (건물별 외벽 판별) =====
+// 외곽선/충돌 데이터는 건드리지 않고, 건물마다 [스타일, 시드, 점등률, 상점] 속성만 부여한다.
+// 실제 창문·외벽 디테일은 건물 재질 셰이더(nmMakeMaterial)가 이 속성을 읽어 그린다.
+// 스타일 id: 0 일반 / 1 유리 커튼월 / 2 벽돌 저층 / 3 석회암 프리워 타워 / 4 로프트 / 5 공장·창고 / 6 전후 슬래브 / 7 아파트 / 8 단순(차고·부속)
+const NYC_FACADE_STYLES = ['generic', 'glass', 'brick', 'stone', 'loft', 'industrial', 'postwar', 'apartment', 'plain'];
+const NYC_FACADE_SPECS = {
+  generic:    { id: 0, fam: 'stucco',  rough: 0.80, metal: 0.05 },
+  glass:      { id: 1, fam: 'glass',   rough: 0.15, metal: 0.55 },
+  brick:      { id: 2, fam: 'brick',   rough: 0.90, metal: 0.02 },
+  stone:      { id: 3, fam: 'stone',   rough: 0.78, metal: 0.05 },
+  loft:       { id: 4, fam: 'loft',    rough: 0.85, metal: 0.10 },
+  industrial: { id: 5, fam: 'concrete',rough: 0.88, metal: 0.10 },
+  postwar:    { id: 6, fam: 'ribbon',  rough: 0.70, metal: 0.15 },
+  apartment:  { id: 7, fam: 'brick',   rough: 0.86, metal: 0.03 },
+  plain:      { id: 8, fam: 'concrete',rough: 0.92, metal: 0.02 }
+};
+const NYC_FACADE_MATS = {};
+// 지구 분류: 0 코어(오피스) / 1 로프트·구도심 / 2 주거 / 3 공원·기타
+const NYC_DISTRICT_CAT = {
+  'Battery Park': 0, 'Financial District': 0, 'Midtown': 0, 'Midtown East': 0, "Hell's Kitchen": 2,
+  'Tribeca': 1, 'SoHo': 1, 'Greenwich Village': 1, 'Chelsea': 1, 'Flatiron / Gramercy': 1,
+  'Chinatown': 2, 'Lower East Side': 2, 'East Village': 2, 'Kips Bay / Murray Hill': 2,
+  'Upper West Side': 2, 'Upper East Side': 2, 'Morningside Heights': 2, 'Harlem': 2, 'East Harlem': 2,
+  'Washington Heights': 2, 'Inwood': 2, 'Roosevelt Island': 2, 'Central Park': 3
+};
+let _nycDistXZ = null;
+function nycDistrictCat(x, z) {
+  if (!_nycDistXZ) {
+    _nycDistXZ = NM_DISTRICTS.map(d => ({ x: (d[2] - MANHATTAN_ORIGIN.lon) * METERS_PER_DEG_LON, z: -(d[1] - MANHATTAN_ORIGIN.lat) * METERS_PER_DEG_LAT, c: NYC_DISTRICT_CAT[d[0]] === undefined ? 1 : NYC_DISTRICT_CAT[d[0]] }));
+  }
+  let bd = 1e18, bc = 1;
+  for (const d of _nycDistXZ) { const dx = x - d.x, dz = z - d.z, q = dx * dx + dz * dz; if (q < bd) { bd = q; bc = d.c; } }
+  return bc;
+}
+// 건물 1동(청크)의 지오메트리에서 높이·바닥면적·지붕 단수·세장비·위치를 읽어 스타일을 판별한다.
+function nycBldInfo(ch, cls, bi) {
+  const nu = ch.nu, nt = ch.nt, ux = ch.ux, uy = ch.uy, uz = ch.uz, T = ch.T, C = ch.C;
+  let mnY = 1e9, mxY = -1e9, cx = 0, cz = 0;
+  for (let u = 0; u < nu; u++) { const y = uy[u]; if (y < mnY) mnY = y; if (y > mxY) mxY = y; cx += ux[u]; cz += uz[u]; }
+  cx /= Math.max(1, nu); cz /= Math.max(1, nu);
+  let aFloor = 0, aRoof = 0; const tiers = new Map();
+  for (let t = 0; t < nt; t++) {
+    const c = cls[C[t]]; if (c === 2) continue;
+    const a = T[t * 3], b = T[t * 3 + 1], d = T[t * 3 + 2];
+    const ar = Math.abs((ux[b] - ux[a]) * (uz[d] - uz[a]) - (ux[d] - ux[a]) * (uz[b] - uz[a])) * 0.5;
+    if (c === 1) aFloor += ar;
+    else { aRoof += ar; const k = Math.round(((uy[a] + uy[b] + uy[d]) / 3) / 4); tiers.set(k, (tiers.get(k) || 0) + ar); }
+  }
+  let nT = 0, maxTier = 0; for (const v of tiers.values()) if (v > maxTier) maxTier = v;
+  for (const v of tiers.values()) if (v >= 30 && v >= 0.1 * maxTier) nT++;
+  const H = mxY - mnY, A = Math.max(aFloor > 1 ? aFloor : 0, maxTier, 1), slender = H / Math.sqrt(A), cat = nycDistrictCat(cx, cz);
+  const seed = nycHashN(Math.round(cx * 4), Math.round(cz * 4), 11);
+  let s;
+  if (cat === 3) s = H < 8 ? 8 : 0;                                        // 공원 주변 소규모 구조물
+  else if (H < 5 || (H < 9 && A < 120)) s = 8;                             // 차고·창고·부속건물
+  else if ((A > 1800 && H < 34) || (A > 1100 && H < 14)) s = 5;            // 공장·창고·대형 저층
+  else if (H >= 150) {                                                     // 초고층
+    const big = nT >= 4 && A > 2500;                                       // 엠파이어 스테이트처럼 거대한 계단식 → 석회암
+    const pre = cat === 0 ? 0.30 : 0.45;
+    s = (big || seed < pre + (nT >= 4 ? 0.2 : 0)) ? 3 : 1;
+  } else if (H >= 60) {
+    const pre = (cat === 0 ? 0.50 : (cat === 1 ? 0.65 : 0.72)) + (nT >= 4 ? 0.18 : 0) - (nT <= 1 ? 0.30 : 0);   // 프리워(석회암) 확률
+    if (seed < pre) s = 3;
+    else if (cat === 0) s = A > 900 ? 1 : (seed > 0.85 ? 6 : 1);
+    else s = (cat === 2 && seed < pre + 0.18) ? 7 : 6;
+  } else if (H >= 28) {
+    if (cat === 1) s = A > 300 ? 4 : 2;                                    // 소호·트라이베카·첼시: 철골/로프트
+    else if (cat === 2) s = A > 900 && seed < 0.3 ? 6 : 7;                 // 주거 지역 중층: 아파트
+    else s = (A > 700 && seed < 0.5) ? 6 : (nT >= 3 && seed < 0.6 ? 3 : 0);
+  } else {
+    if (cat === 0) s = A > 600 ? (seed < 0.5 ? 6 : 0) : 2;
+    else if (cat === 1 && A > 500 && H >= 14) s = 4;
+    else s = 2;                                                            // 저층: 벽돌 타운하우스·워크업
+  }
+  const resid = (s === 2 || s === 7) ? 'apartments' : (s === 5 || s === 8 ? 'warehouse' : '');
+  const prof = nycBldProfile(cx, cz, H, resid);
+  const shop = (s === 2 || s === 7) ? (H > 8 && seed > 0.6 ? 1 : 0) : (s === 5 || s === 8 ? 0 : (seed < 0.8 ? 1 : 0));
+  return { style: s, seed, lit: prof[0], profSeed: prof[1], shop, topY: mxY, baseY: mnY, H, A, nT, cat, cx, cz, btype: resid };
+}
+
 // =============================================================================
 // ★ NEW MAP : DA33 C6 병합 맵 (001~006) — 실제 뉴욕 1:1 (1 unit = 1 m), 건물 약 4.6만 동 / 삼각형 366만 개
 //   좌표계: 게임 월드 = 맵원본 − (NM_OX, NM_OZ)  (엠파이어 스테이트 ≈ 원점, +X 동, −Z 북)
@@ -490,7 +569,7 @@ function nmRegister(col) {
 function nmBuildCols(g) {
   const bx = NM.bx[g]; if (bx.built) return; bx.built = true;
   const P = NM.parts[bx.p], r = nmExtractRings(P.d, bx.i);
-  for (const q of r.rings) { nmRegister({ name: 'NYC building #' + g, ringXZ: q.ring, minY: r.base, maxY: q.y, nm: true }); NM.nBuilt++; }
+  for (const q of r.rings) { nmRegister({ name: 'NYC building #' + g, ringXZ: q.ring, minY: r.base, maxY: q.y, nm: true, winProf: bx.prof, btypeHint: bx.shop ? '' : 'apartments' }); NM.nBuilt++; }
 }
 function nmEnsureCell(k) {
   if (NM.cellDone.has(k)) return; NM.cellDone.add(k);
@@ -612,33 +691,125 @@ function nmMakeMaterial() {
     sh.uniforms.uWinFar = window.__winFar = { value: 455.0 };
     sh.uniforms.tNLG = NYC_LIGHT.map; sh.uniforms.uNLC = NYC_LIGHT.c; sh.uniforms.uNLS = NYC_LIGHT.s; sh.uniforms.uNLK = NYC_LIGHT.k;
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vWP; varying vec2 vWL;')
-      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvWP=(modelMatrix*vec4(position,1.0)).xyz; vec2 _q=floor(vWP.xz/22.0); vWL=vec2(0.25+0.6*fract(sin(dot(_q,vec2(12.9898,78.233)))*43758.5453), fract(sin(dot(_q,vec2(39.346,11.135)))*24634.6345));');
+      .replace('#include <common>', '#include <common>\nattribute vec4 aSty; attribute vec2 aTop; varying vec3 vWP; varying vec4 vSty; varying vec2 vTop;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvWP=(modelMatrix*vec4(position,1.0)).xyz; vSty=aSty; vTop=aTop;');
     sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vWP; varying vec2 vWL; uniform float uWinQ; uniform float uWinGlow; uniform float uWinFar; uniform sampler2D tNLG; uniform vec2 uNLC; uniform float uNLS; uniform float uNLK; float vfxWin = 0.0;\nfloat h21(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}')
+      .replace('#include <common>', `#include <common>
+varying vec3 vWP; varying vec4 vSty; varying vec2 vTop; uniform float uWinQ; uniform float uWinGlow; uniform float uWinFar; uniform sampler2D tNLG; uniform vec2 uNLC; uniform float uNLS; uniform float uNLK; float vfxWin = 0.0;
+float h21(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
+// 스타일별 외벽 파라미터 (건물 판별 결과 aSty.x 로 선택)
+// A: 층고, 베이 폭, 창 폭 비율, 창 높이 비율 / B: 창 시작 높이, 피어(기둥) 폭, 벨트코스 간격(층), 코니스 높이 / C: 외벽 기본색
+void facP(float s, out vec4 A, out vec4 B, out vec3 C){
+  if (s < 0.5)      { A = vec4(3.6, 3.0, 0.58, 0.52); B = vec4(0.30, 0.04, 0.0, 0.7);  C = vec3(0.80, 0.78, 0.74); }
+  else if (s < 1.5) { A = vec4(4.0, 1.5, 0.93, 0.66); B = vec4(0.30, 0.00, 0.0, 1.4);  C = vec3(0.46, 0.60, 0.68); }
+  else if (s < 2.5) { A = vec4(3.2, 2.7, 0.46, 0.58); B = vec4(0.26, 0.05, 0.0, 0.9);  C = vec3(0.62, 0.30, 0.22); }
+  else if (s < 3.5) { A = vec4(3.9, 3.4, 0.44, 0.56); B = vec4(0.28, 0.13, 10.0, 1.6); C = vec3(0.80, 0.76, 0.66); }
+  else if (s < 4.5) { A = vec4(4.3, 3.3, 0.76, 0.70); B = vec4(0.18, 0.07, 0.0, 1.0);  C = vec3(0.52, 0.38, 0.32); }
+  else if (s < 5.5) { A = vec4(5.2, 6.0, 0.82, 0.30); B = vec4(0.50, 0.03, 0.0, 0.6);  C = vec3(0.62, 0.60, 0.57); }
+  else if (s < 6.5) { A = vec4(3.7, 2.6, 0.86, 0.52); B = vec4(0.30, 0.00, 0.0, 1.0);  C = vec3(0.74, 0.72, 0.66); }
+  else if (s < 7.5) { A = vec4(3.1, 3.0, 0.50, 0.60); B = vec4(0.22, 0.06, 0.0, 1.1);  C = vec3(0.64, 0.50, 0.38); }
+  else              { A = vec4(4.0, 5.0, 0.30, 0.30); B = vec4(0.40, 0.00, 0.0, 0.5);  C = vec3(0.58, 0.58, 0.56); }
+}
+float boxS(float x, float a, float b, float aa){ return smoothstep(a-aa,a+aa,x)*(1.0-smoothstep(b-aa,b+aa,x)); }`)
       .replace('#include <color_fragment>', `#include <color_fragment>
         {
           vec3 gn = normalize(cross(dFdx(vWP), dFdy(vWP))); vec3 wn = gn;
           float cdist = length(cameraPosition - vWP);
-          if (abs(gn.y) < 0.12 && cdist < uWinFar) {
-            float u = dot(vWP.xz, vec2(-wn.z, wn.x));
-            float fl = 3.5;
-            float fy = vWP.y / fl, fu = u / 3.0;
-            vec2 id = vec2(floor(fu), floor(fy));
-            vec2 f = vec2(fract(fu), fract(fy));
-            float aa_ = clamp(max(fwidth(fu), fwidth(fy))*1.5, 0.0, 0.35); float win = smoothstep(0.2-aa_,0.2+aa_,f.x)*(1.0-smoothstep(0.8-aa_,0.8+aa_,f.x))*smoothstep(0.28-aa_,0.28+aa_,f.y)*(1.0-smoothstep(0.82-aa_,0.82+aa_,f.y)); win *= 1.0 - smoothstep(0.25,0.6,aa_);
-            float dist = cdist;
-            float fade = 1.0 - smoothstep(uWinFar*0.27, uWinFar*0.95, dist);
-            float fr = vWL.x > 0.001 ? vWL.x : 0.3;
-            float fbs = h21(vec2(id.y, vWL.y * 1.7 + 3.1));
-            float pl = clamp(fr * (0.35 + 1.3 * fbs), 0.0, 0.92);
-            float r = h21(id + floor(vWP.xz*0.01) + vWL.y);
-            float lit = step(r, pl);
-            vec3 glass = mix(vec3(0.07,0.10,0.13), vec3(0.28,0.38,0.47), f.y*0.8) * (0.8+0.5*r);
-            float sill = step(f.y,0.28)*step(0.2,f.x)*step(f.x,0.8);
-            vec3 col = diffuseColor.rgb;
-            glass = mix(glass, fogColor*1.25+vec3(0.03,0.05,0.08), pow(1.0-abs(dot(normalize(cameraPosition-vWP),wn)),3.0)*0.45); col = mix(col, glass, win*0.86*fade*uWinQ); vfxWin = win*fade*uWinQ; totalEmissiveRadiance += mix(vec3(1.0,0.78,0.46), vec3(0.78,0.9,1.0), step(0.82, h21(id+3.7)))*lit*win*fade*uWinQ*uWinGlow*(0.6+0.9*h21(id+7.3));
-            col *= 1.0 - 0.18*sill*fade;
+          float sid = floor(vSty.x * 255.0 + 0.5);
+          float topY = vTop.x * 1024.0 - 64.0, baseY = vTop.y * 1024.0 - 64.0;
+          if (abs(gn.y) < 0.12 && topY > baseY + 1.0 && vSty.z > 0.0) {
+            float seed = vSty.y, lf = vSty.z, shop = step(0.5, vSty.w);
+            vec4 PA, PB; vec3 PC; facP(sid, PA, PB, PC);
+            float flH = PA.x, bayW = PA.y, ww = PA.z, wh = PA.w, wy0 = PB.x, pier = PB.y, beltN = PB.z, cornH = PB.w;
+            float isBrick = step(1.5, sid) * step(sid, 2.5) + step(6.5, sid) * step(sid, 7.5);
+            float isStone = step(2.5, sid) * step(sid, 3.5);
+            float isGlass = step(0.5, sid) * step(sid, 1.5) + step(5.5, sid) * step(sid, 6.5);
+            float isLoft = step(3.5, sid) * step(sid, 4.5);
+            // ---- 외벽 기본색: 스타일별 재질색 (벽돌은 건물마다 붉은/갈색/황토색) ----
+            vec3 tint = PC; float sel = fract(seed * 5.31);
+            if (isBrick > 0.5) tint = sel < 0.38 ? vec3(0.62, 0.30, 0.22) : (sel < 0.72 ? vec3(0.50, 0.36, 0.27) : vec3(0.72, 0.62, 0.46));
+            if (isLoft > 0.5) tint = sel < 0.5 ? vec3(0.52, 0.34, 0.28) : vec3(0.46, 0.46, 0.46);
+            tint *= 0.88 + 0.24 * fract(seed * 13.7);
+            float lum0 = dot(diffuseColor.rgb, vec3(0.30, 0.59, 0.11)) / 0.6;
+            vec3 col = mix(diffuseColor.rgb, tint * lum0, 0.82);
+            if (cdist < uWinFar) {
+              // ---- 창 그리드 (건물별 위상 + 층고/베이 폭) ----
+              float u = dot(vWP.xz, vec2(-wn.z, wn.x)) + seed * bayW * 7.0;
+              float dU = fwidth(u), dY = fwidth(vWP.y);
+              float yy = vWP.y - baseY;
+              float gH = 4.6, ground = shop * step(yy, gH);
+              float gy = ground > 0.5 ? yy : yy - shop * gH;
+              float fyl = ground > 0.5 ? gy / gH : gy / flH;
+              float bw = ground > 0.5 ? 3.6 : bayW;
+              float fu = u / bw;
+              vec2 id = vec2(floor(fu), ground > 0.5 ? -1.0 : floor(fyl));
+              vec2 f = vec2(fract(fu), fract(fyl));
+              float aa_ = clamp(max(dU / bw, dY / flH) * 1.5, 0.0, 0.35);
+              float xa = (1.0 - ww) * 0.5, y0 = wy0, y1 = wy0 + wh;
+              if (ground > 0.5) { xa = 0.07; y0 = 0.08; y1 = 0.74; }
+              float winx = boxS(f.x, xa, 1.0 - xa, aa_), winy = boxS(f.y, y0, y1, aa_);
+              float win = winx * winy;
+              // 피어(기둥)·벨트코스·코니스·파라펫에는 창을 내지 않는다
+              float pierM = pier > 0.0 && ground < 0.5 ? max(step(f.x, pier), step(1.0 - pier, f.x)) : 0.0;
+              float belt = (beltN > 0.5 && ground < 0.5 && mod(id.y, beltN) < 0.5 && id.y > 0.5) ? step(f.y, 0.16) : 0.0;
+              float dTop = topY - vWP.y, nearTop = step(dTop, cornH);
+              win *= (1.0 - pierM) * (1.0 - belt) * (1.0 - nearTop);
+              win *= 1.0 - smoothstep(0.25, 0.6, aa_);
+              float fade = 1.0 - smoothstep(uWinFar * 0.27, uWinFar * 0.95, cdist);
+              // ---- 외벽 질감: 벽돌 줄눈 / 석재 줄눈 / 콘크리트 패널 (가까울 때만) ----
+              float nearK = 1.0 - smoothstep(35.0, 120.0, cdist);
+              if (nearK > 0.01) {
+                float bh = isBrick > 0.5 ? 0.225 : (isStone > 0.5 ? 0.95 : 1.2);
+                float bwid = isBrick > 0.5 ? 0.55 : (isStone > 0.5 ? 1.7 : 2.4);
+                float row = floor(vWP.y / bh), bx = u / bwid + 0.5 * mod(row, 2.0);
+                vec2 bf = vec2(fract(bx), fract(vWP.y / bh));
+                float mort = 1.0 - step(0.07, bf.x) * step(0.10, bf.y);
+                float bAA = 1.0 - smoothstep(0.25, 0.7, max(dY / bh, dU / bwid));
+                float amt = (isBrick > 0.5 ? 0.20 : (isStone > 0.5 ? 0.10 : (isGlass > 0.5 ? 0.0 : 0.07))) * nearK * bAA;
+                col *= 1.0 - amt * mort;
+                col *= 1.0 + (isBrick > 0.5 ? 0.14 : 0.05) * (h21(vec2(floor(bx), row) + seed * 31.0) - 0.5) * nearK * bAA;
+              }
+              // 석회암 피어·벨트코스는 밝게, 코니스는 밝게 + 아래에 그림자 띠
+              col *= 1.0 + 0.16 * pierM * isStone + 0.08 * pierM * (1.0 - isStone);
+              col *= 1.0 + 0.20 * belt;
+              col *= 1.0 + 0.14 * nearTop * (1.0 - isGlass);
+              col *= 1.0 - 0.20 * step(cornH, dTop) * step(dTop, cornH + 0.45) * (1.0 - isGlass);
+              // 상점 간판 띠(1층 위쪽)와 하부 기단
+              if (ground > 0.5) {
+                float sgn = boxS(f.y, 0.78, 0.97, aa_);
+                vec3 sc = 0.35 + 0.45 * vec3(h21(vec2(id.x, seed * 9.0)), h21(vec2(id.x, seed * 5.0 + 1.0)), h21(vec2(id.x, seed * 3.0 + 2.0)));
+                col = mix(col, sc * lum0, sgn * 0.8 * fade);
+                col *= 1.0 - 0.25 * step(f.y, 0.06);
+              }
+              // 창틀 아래 턱(실)과 상인방
+              float sill = step(f.y, y0) * step(y0 - 0.07, f.y) * step(xa - 0.03, f.x) * step(f.x, 1.0 - xa + 0.03) * (1.0 - isGlass);
+              float lint = step(y1, f.y) * step(f.y, y1 + 0.06) * step(xa - 0.02, f.x) * step(f.x, 1.0 - xa + 0.02) * (1.0 - isGlass);
+              col *= 1.0 + 0.12 * sill * fade; col *= 1.0 - 0.22 * lint * fade * nearK;
+              // ---- 유리 ----
+              float r = h21(id + seed * 13.0);
+              float fbs = h21(vec2(id.y, seed * 37.0 + 3.1));
+              float pl = clamp(lf * (0.35 + 1.3 * fbs), 0.0, 0.92);
+              float lit = step(r, pl);
+              if (ground > 0.5) lit = step(h21(id + seed * 9.0 + 5.0), 0.86);
+              vec3 glass = isGlass > 0.5 ? mix(vec3(0.10, 0.16, 0.20), vec3(0.38, 0.52, 0.62), f.y * 0.8)
+                                         : mix(vec3(0.05, 0.07, 0.09), vec3(0.22, 0.30, 0.37), f.y * 0.8);
+              glass *= (0.8 + 0.5 * r);
+              // 블라인드/커튼 (꺼진 창 일부)
+              float blind = step(0.78, h21(id + seed * 17.0)) * (1.0 - lit) * (1.0 - isGlass * 0.6);
+              glass = mix(glass, vec3(0.42, 0.38, 0.30) * (0.55 + 0.4 * f.y), blind * 0.8);
+              // 창틀: 멀리온(유리) / 중간 문설주와 가로살(벽돌·석재·아파트)
+              float mull = isGlass > 0.5 ? step(f.x, 0.07) + step(0.93, f.x) : 0.0;
+              float mun = (isBrick + isStone > 0.5 && ground < 0.5) ? step(abs(f.x - 0.5), 0.035) + step(abs(f.y - (y0 + wh * 0.66)), 0.03) : 0.0;
+              glass = mix(glass, col * 0.55, clamp(mull + mun, 0.0, 1.0) * nearK);
+              float fres = pow(1.0 - abs(dot(normalize(cameraPosition - vWP), wn)), 3.0) * (isGlass > 0.5 ? 0.6 : 0.45);
+              glass = mix(glass, fogColor * 1.25 + vec3(0.03, 0.05, 0.08), fres);
+              col = mix(col, glass, win * 0.86 * fade * uWinQ);
+              vfxWin = win * fade * uWinQ;
+              float cool = step(isGlass > 0.5 ? 0.45 : 0.82, h21(id + 3.7));
+              vec3 lc = mix(vec3(1.0, 0.78, 0.46), vec3(0.78, 0.9, 1.0), cool);
+              if (ground > 0.5) lc = vec3(1.0, 0.82, 0.55) * 1.25;
+              totalEmissiveRadiance += lc * lit * win * fade * uWinQ * uWinGlow * (0.6 + 0.9 * h21(id + 7.3));
+            }
             diffuseColor.rgb = col;
           }
         }`)
@@ -660,9 +831,10 @@ async function nmBuildPart(P, pi, R, mat, prog) {
   for (const [key, list] of cells) {
     const [gx, gz] = key.split(',').map(Number), cx0 = gx * 400, cz0 = gz * 400;
     let bv = 0, nI = 0; for (const i of list) { bv += Math.min(d.nup[i] * K, d.ntri[i] * 3); nI += d.ntri[i] * 3; }
-    const Pp = new Float32Array(bv * 3), Cc = new Uint8Array(bv * 3), X = new Uint32Array(nI); let nv = 0, pi2 = 0;
+    const Pp = new Float32Array(bv * 3), Cc = new Uint8Array(bv * 3), X = new Uint32Array(nI), Sa = new Uint8Array(bv * 4), Tp = new Uint16Array(bv * 2); let nv = 0, pi2 = 0;
     for (const i of list) {
       const ch = nmChunk(d, i), baseY = d.org[i * 3 + 1], HH = d.sc[i * 3 + 1] * 65535, k0 = 0.9 + 0.2 * nmHash(i + 1, pi * 7 + 3);
+      const inf = nycBldInfo(ch, cls, i), sB = inf.style, sS = Math.round(inf.seed * 255), sL = Math.max(1, Math.round(inf.lit * 255)), sP = inf.shop ? 255 : 0, tT = Math.round((inf.topY + 64) / 1024 * 65535), tB = Math.round((inf.baseY + 64) / 1024 * 65535);
       vmap.fill(-1, 0, ch.nu * K);
       for (let t = 0; t < ch.nt; t++) {
         const ci = ch.C[t], cl = cls[ci];
@@ -672,6 +844,7 @@ async function nmBuildPart(P, pi, R, mat, prog) {
             v = nv++; vmap[kk] = v; Pp[v * 3] = ch.ux[p] - cx0; Pp[v * 3 + 1] = ch.uy[p]; Pp[v * 3 + 2] = ch.uz[p] - cz0;
             let f = k0; if (cl === 2) { const yr = ch.uy[p] - baseY; f *= yr < 3 ? 0.72 : 0.9 + 0.2 * Math.min(1, yr / Math.max(1, HH)); } else if (cl === 1) f *= 0.85;
             Cc[v * 3] = Math.min(255, d.pal[ci * 3] * f); Cc[v * 3 + 1] = Math.min(255, d.pal[ci * 3 + 1] * f); Cc[v * 3 + 2] = Math.min(255, d.pal[ci * 3 + 2] * f);
+            Sa[v * 4] = sB; Sa[v * 4 + 1] = sS; Sa[v * 4 + 2] = sL; Sa[v * 4 + 3] = sP; Tp[v * 2] = tT; Tp[v * 2 + 1] = tB;
           }
           X[pi2++] = v;
         }
@@ -682,15 +855,17 @@ async function nmBuildPart(P, pi, R, mat, prog) {
       // 건물 인덱스(충돌체 지연 생성용)
       const gi = NM.bx.length, mnx = ch.ux.reduce((a, b) => Math.min(a, b), 1e9), mxx = ch.ux.reduce((a, b) => Math.max(a, b), -1e9),
         mnz = ch.uz.reduce((a, b) => Math.min(a, b), 1e9), mxz = ch.uz.reduce((a, b) => Math.max(a, b), -1e9);
-      NM.bx.push({ p: pi, i, built: false });
+      NM.bx.push({ p: pi, i, built: false, prof: [inf.lit, inf.profSeed], shop: inf.shop, style: sB });
       const a0 = Math.floor((mnx - 0.5) / SPATIAL_CELL), a1 = Math.floor((mxx + 0.5) / SPATIAL_CELL), b0 = Math.floor((mnz - 0.5) / SPATIAL_CELL), b1 = Math.floor((mxz + 0.5) / SPATIAL_CELL);
       for (let a = a0; a <= a1; a++) for (let b = b0; b <= b1; b++) { const kk2 = a + ',' + b; let l = NM.idx.get(kk2); if (!l) NM.idx.set(kk2, l = []); l.push(gi); }
     }
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(Pp.slice(0, nv * 3), 3));
     g.setAttribute('color', new THREE.BufferAttribute(Cc.slice(0, nv * 3), 3, true));
+    g.setAttribute('aSty', new THREE.BufferAttribute(Sa.slice(0, nv * 4), 4, true));
+    g.setAttribute('aTop', new THREE.BufferAttribute(Tp.slice(0, nv * 2), 2, true));
     g.setIndex(new THREE.BufferAttribute(X.slice(0, pi2), 1)); g.computeBoundingSphere();
-    try { g.attributes.position.onUpload(function () { this.array = null; }); g.attributes.color.onUpload(function () { this.array = null; }); g.index.onUpload(function () { this.array = null; }); } catch (e) {}
+    try { g.attributes.position.onUpload(function () { this.array = null; }); g.attributes.color.onUpload(function () { this.array = null; }); g.attributes.aSty.onUpload(function () { this.array = null; }); g.attributes.aTop.onUpload(function () { this.array = null; }); g.index.onUpload(function () { this.array = null; }); } catch (e) {}
     const mesh = new THREE.Mesh(g, mat); mesh.name = 'OpenStreetMap_Manhattan_Buildings_' + pi + '_' + key; mesh.position.set(cx0, 0, cz0);
     scene.add(mesh); NM.cellMeshes.push({ mesh, x: cx0 + 200, z: cz0 + 200 });
     if (++cn % 6 === 0) { if (prog) prog(cn / cells.size); await nmYield(); }
