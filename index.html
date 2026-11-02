@@ -575,10 +575,11 @@ function nmEnsureCell(k) {
   if (NM.cellDone.has(k)) return; NM.cellDone.add(k);
   const l = NM.idx.get(k); if (!l) return; for (let i = 0; i < l.length; i++) nmBuildCols(l[i]);
 }
+const LOW_BUILDING_H = 30.0; // 이보다 낮은 건물은 웹 부착점이 꼭대기(옥상)뿐
 function nmMakeAnchors(col) {
   col._an = 1; const ring = col.ringXZ, n = ring.length, h = col.maxY - col.minY; if (h < 2 || n < 3) return;
   const samples = Math.min(12, n), cx = col.centX, cz = col.centZ;
-  const lv = [...new Set([col.minY + Math.max(0.8, h * 0.25), col.minY + h * 0.5, col.minY + h * 0.75, col.maxY - 0.08])].filter(y => y > col.minY && y <= col.maxY + 0.001);
+  const lv = (h < LOW_BUILDING_H ? [col.maxY - 0.08] : [...new Set([col.minY + Math.max(0.8, h * 0.25), col.minY + h * 0.5, col.minY + h * 0.75, col.maxY - 0.08])]).filter(y => y > col.minY && y <= col.maxY + 0.001);
   const M = spatialAnchorGrid._m;
   for (let s = 0; s < samples; s++) {
     const idx = Math.floor(s * n / samples), a = ring[idx], b = ring[(idx + 1) % n];
@@ -1077,6 +1078,7 @@ let cameraYaw = Math.PI - AZIMUTH_RAD;   // 업타운(북북동) 방향 = 애비
 let cameraPitch = 0.22;
 let isRunning = true;
 let isSwinging = false;
+let webHeld = false; // WEB 버튼/F키를 누르고 있는 동안 true — 누르고 있으면 줄이 절대 끊기지 않음
 const webAnchor = new THREE.Vector3();
 let ropeLength = 0;
 let currentBestSpot = null;
@@ -1374,7 +1376,7 @@ function resolvePolygonBuildingCollisions(prev) {
         player.vel.y = 0;
         player.onGround = true;
         supportedByRoof = true;
-        if (isSwinging) releaseWeb(false);
+        if (isSwinging && !webHeld) releaseWeb(false);
       }
       continue;
     }
@@ -1886,7 +1888,7 @@ function setupControls() {
     if (e.code === 'Space') { e.preventDefault(); triggerJump(); }
     if ((e.code === 'ShiftLeft' || e.code === 'ShiftRight') && !e.repeat) toggleRun();
     if (e.code === 'KeyE') triggerWebZip();
-    if (e.code === 'KeyF') shootWeb();
+    if (e.code === 'KeyF') { if (!e.repeat) webHeld = true; shootWeb(); }
     if (e.code === 'KeyM' && !e.repeat) setMap(!mapOpen);
   });
   window.addEventListener('keyup', (e) => {
@@ -1894,7 +1896,7 @@ function setupControls() {
     if (e.code === 'KeyS' || e.code === 'ArrowDown') keys.s = false;
     if (e.code === 'KeyA' || e.code === 'ArrowLeft') keys.a = false;
     if (e.code === 'KeyD' || e.code === 'ArrowRight') keys.d = false;
-    if (e.code === 'KeyF') releaseWeb(true);
+    if (e.code === 'KeyF') { webHeld = false; releaseWeb(true); }
   });
 
   function bindButton(id, onDown, onUp) {
@@ -1925,7 +1927,7 @@ function setupControls() {
   bindButton('btn-run', () => toggleRun());
   bindButton('btn-jump', () => triggerJump());
   bindButton('btn-zip', () => triggerWebZip());
-  bindButton('btn-web', () => shootWeb(), () => releaseWeb(true));
+  bindButton('btn-web', () => { webHeld = true; shootWeb(); }, () => { webHeld = false; releaseWeb(true); });
 
   const joyZone = document.getElementById('joystick-zone');
   const joyStick = document.getElementById('joystick-stick');
@@ -2183,10 +2185,10 @@ function updatePhysics(dt) {
       const qh = new THREE.Vector3(player.pos.x, player.pos.y + 1.45, player.pos.z).sub(webAnchor);
       const ql = Math.max(1.0, qh.length());
       const qAng = THREE.MathUtils.radToDeg(Math.acos(THREE.MathUtils.clamp(-qh.y / ql, -1, 1)));
-      if (qAng >= 42) { releaseWeb(true); return; }
+      if (qAng >= 42 && !webHeld) { releaseWeb(true); return; }
     }
     // 아크 꼭대기 자동 릴리즈 슬링샷
-    if (msm2SwingTime > 0.35 && player.pos.y + 1.45 >= webAnchor.y - 2.0 && player.vel.y > 0) {
+    if (!webHeld && msm2SwingTime > 0.35 && player.pos.y + 1.45 >= webAnchor.y - 2.0 && player.vel.y > 0) {
       releaseWeb(true);
       return;
     }
@@ -2284,7 +2286,7 @@ function hardCollisionPass(prev) {
       if (inXZ && below) {
         if (lIn && ly >= col.maxY-0.4) { // 위에서 떨어짐 → 옥상 착지
           p.set(lx, col.maxY, lz);
-          if (player.vel.y <= 0) { player.vel.y = 0; player.onGround = true; if (isSwinging) releaseWeb(false); }
+          if (player.vel.y <= 0) { player.vel.y = 0; player.onGround = true; if (isSwinging && !webHeld) releaseWeb(false); }
           hit = true; break;
         }
         if (!lIn) { // 옆벽으로 진입 → 마지막 자유 위치로 되돌리고 벽 방향 속도 제거
@@ -2513,7 +2515,7 @@ function wireSling() {
   btn.addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); if (pid !== null) return; pid = e.pointerId; try { btn.setPointerCapture(e.pointerId); } catch (_) {} btn.classList.add('pressed'); startSling(); });
   const up = (e) => { if (e.pointerId !== pid) return; e.preventDefault(); e.stopPropagation(); pid = null; btn.classList.remove('pressed'); releaseSling(); };
   btn.addEventListener('pointerup', up); btn.addEventListener('pointercancel', up);
-  window.addEventListener('keydown', (e) => { if (e.code === 'KeyF' && !e.repeat) startSling(); });
+  window.addEventListener('keydown', (e) => { if (e.code === 'KeyF' && !e.repeat && !isSwinging) startSling(); });
   window.addEventListener('keyup', (e) => { if (e.code === 'KeyF') releaseSling(); });
 }
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', wireSling); else wireSling();
