@@ -575,11 +575,10 @@ function nmEnsureCell(k) {
   if (NM.cellDone.has(k)) return; NM.cellDone.add(k);
   const l = NM.idx.get(k); if (!l) return; for (let i = 0; i < l.length; i++) nmBuildCols(l[i]);
 }
-const LOW_BUILDING_H = 30.0; // 이보다 낮은 건물은 웹 부착점이 꼭대기(옥상)뿐
 function nmMakeAnchors(col) {
   col._an = 1; const ring = col.ringXZ, n = ring.length, h = col.maxY - col.minY; if (h < 2 || n < 3) return;
   const samples = Math.min(12, n), cx = col.centX, cz = col.centZ;
-  const lv = (h < LOW_BUILDING_H ? [col.maxY - 0.08] : [...new Set([col.minY + Math.max(0.8, h * 0.25), col.minY + h * 0.5, col.minY + h * 0.75, col.maxY - 0.08])]).filter(y => y > col.minY && y <= col.maxY + 0.001);
+  const lv = [...new Set([col.minY + Math.max(0.8, h * 0.25), col.minY + h * 0.5, col.minY + h * 0.75, col.maxY - 0.08])].filter(y => y > col.minY && y <= col.maxY + 0.001);
   const M = spatialAnchorGrid._m;
   for (let s = 0; s < samples; s++) {
     const idx = Math.floor(s * n / samples), a = ring[idx], b = ring[(idx + 1) % n];
@@ -690,6 +689,7 @@ function nmMakeMaterial() {
   m.onBeforeCompile = (sh) => {
     sh.uniforms.uWinQ = window.__winQ = { value: 1.0 }; sh.uniforms.uWinGlow = window.__winGlow = { value: vfxGlowValue() };
     sh.uniforms.uWinFar = window.__winFar = { value: 455.0 };
+    sh.uniforms.uAerC = AER.c; sh.uniforms.uAerE = AER.e;
     sh.uniforms.tNLG = NYC_LIGHT.map; sh.uniforms.uNLC = NYC_LIGHT.c; sh.uniforms.uNLS = NYC_LIGHT.s; sh.uniforms.uNLK = NYC_LIGHT.k;
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', '#include <common>\nattribute vec4 aSty; attribute vec2 aTop; varying vec3 vWP; varying vec4 vSty; varying vec2 vTop;')
@@ -842,7 +842,9 @@ float boxS(float x, float a, float b, float aa){ return smoothstep(a-aa,a+aa,x)*
           }
         }`)
       .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\n roughnessFactor = mix(roughnessFactor, 0.12, vfxWin);')
-      .replace('#include <metalnessmap_fragment>', '#include <metalnessmap_fragment>\n metalnessFactor = mix(metalnessFactor, 0.55, vfxWin);');
+      .replace('#include <metalnessmap_fragment>', '#include <metalnessmap_fragment>\n metalnessFactor = mix(metalnessFactor, 0.55, vfxWin);')
+      .replace('#include <common>', '#include <common>\nuniform vec3 uAerC; uniform vec3 uAerE;')
+      .replace('#include <fog_fragment>', '#include <fog_fragment>\n { vec3 aT = exp(-length(vViewPosition) * uAerE); gl_FragColor.rgb = gl_FragColor.rgb * aT + uAerC * (1.0 - aT); }');
   };
   m.extensions = Object.assign({}, m.extensions, { derivatives: true });
   vfxPatch(m, { ao: true, aoMin: 0.5, grain: 0.05, bump: 0.09, scale: 1 });
@@ -1078,7 +1080,6 @@ let cameraYaw = Math.PI - AZIMUTH_RAD;   // 업타운(북북동) 방향 = 애비
 let cameraPitch = 0.22;
 let isRunning = true;
 let isSwinging = false;
-let webHeld = false; // WEB 버튼/F키를 누르고 있는 동안 true — 누르고 있으면 줄이 절대 끊기지 않음
 const webAnchor = new THREE.Vector3();
 let ropeLength = 0;
 let currentBestSpot = null;
@@ -1376,7 +1377,7 @@ function resolvePolygonBuildingCollisions(prev) {
         player.vel.y = 0;
         player.onGround = true;
         supportedByRoof = true;
-        if (isSwinging && !webHeld) releaseWeb(false);
+        if (isSwinging) releaseWeb(false);
       }
       continue;
     }
@@ -1888,7 +1889,7 @@ function setupControls() {
     if (e.code === 'Space') { e.preventDefault(); triggerJump(); }
     if ((e.code === 'ShiftLeft' || e.code === 'ShiftRight') && !e.repeat) toggleRun();
     if (e.code === 'KeyE') triggerWebZip();
-    if (e.code === 'KeyF') { if (!e.repeat) webHeld = true; shootWeb(); }
+    if (e.code === 'KeyF') shootWeb();
     if (e.code === 'KeyM' && !e.repeat) setMap(!mapOpen);
   });
   window.addEventListener('keyup', (e) => {
@@ -1896,7 +1897,7 @@ function setupControls() {
     if (e.code === 'KeyS' || e.code === 'ArrowDown') keys.s = false;
     if (e.code === 'KeyA' || e.code === 'ArrowLeft') keys.a = false;
     if (e.code === 'KeyD' || e.code === 'ArrowRight') keys.d = false;
-    if (e.code === 'KeyF') { webHeld = false; releaseWeb(true); }
+    if (e.code === 'KeyF') releaseWeb(true);
   });
 
   function bindButton(id, onDown, onUp) {
@@ -1927,7 +1928,7 @@ function setupControls() {
   bindButton('btn-run', () => toggleRun());
   bindButton('btn-jump', () => triggerJump());
   bindButton('btn-zip', () => triggerWebZip());
-  bindButton('btn-web', () => { webHeld = true; shootWeb(); }, () => { webHeld = false; releaseWeb(true); });
+  bindButton('btn-web', () => shootWeb(), () => releaseWeb(true));
 
   const joyZone = document.getElementById('joystick-zone');
   const joyStick = document.getElementById('joystick-stick');
@@ -2185,10 +2186,10 @@ function updatePhysics(dt) {
       const qh = new THREE.Vector3(player.pos.x, player.pos.y + 1.45, player.pos.z).sub(webAnchor);
       const ql = Math.max(1.0, qh.length());
       const qAng = THREE.MathUtils.radToDeg(Math.acos(THREE.MathUtils.clamp(-qh.y / ql, -1, 1)));
-      if (qAng >= 42 && !webHeld) { releaseWeb(true); return; }
+      if (qAng >= 42) { releaseWeb(true); return; }
     }
     // 아크 꼭대기 자동 릴리즈 슬링샷
-    if (!webHeld && msm2SwingTime > 0.35 && player.pos.y + 1.45 >= webAnchor.y - 2.0 && player.vel.y > 0) {
+    if (msm2SwingTime > 0.35 && player.pos.y + 1.45 >= webAnchor.y - 2.0 && player.vel.y > 0) {
       releaseWeb(true);
       return;
     }
@@ -2286,7 +2287,7 @@ function hardCollisionPass(prev) {
       if (inXZ && below) {
         if (lIn && ly >= col.maxY-0.4) { // 위에서 떨어짐 → 옥상 착지
           p.set(lx, col.maxY, lz);
-          if (player.vel.y <= 0) { player.vel.y = 0; player.onGround = true; if (isSwinging && !webHeld) releaseWeb(false); }
+          if (player.vel.y <= 0) { player.vel.y = 0; player.onGround = true; if (isSwinging) releaseWeb(false); }
           hit = true; break;
         }
         if (!lIn) { // 옆벽으로 진입 → 마지막 자유 위치로 되돌리고 벽 방향 속도 제거
@@ -2515,7 +2516,7 @@ function wireSling() {
   btn.addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); if (pid !== null) return; pid = e.pointerId; try { btn.setPointerCapture(e.pointerId); } catch (_) {} btn.classList.add('pressed'); startSling(); });
   const up = (e) => { if (e.pointerId !== pid) return; e.preventDefault(); e.stopPropagation(); pid = null; btn.classList.remove('pressed'); releaseSling(); };
   btn.addEventListener('pointerup', up); btn.addEventListener('pointercancel', up);
-  window.addEventListener('keydown', (e) => { if (e.code === 'KeyF' && !e.repeat && !isSwinging) startSling(); });
+  window.addEventListener('keydown', (e) => { if (e.code === 'KeyF' && !e.repeat) startSling(); });
   window.addEventListener('keyup', (e) => { if (e.code === 'KeyF') releaseSling(); });
 }
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', wireSling); else wireSling();
@@ -3679,6 +3680,170 @@ function propsUpdate(dt) {
   }
 }
 
+// ---------------- 거리 레벨: 택시·차량, 가로등, 신호등, 네온, 맨홀 수증기, 대기 원근 ----------------
+// 도로 데이터가 없어서, 맨해튼 격자(북쪽에서 동으로 29°)를 따라 건물 충돌체 사이의 빈 통로를 찾아 "거리"로 간주한다.
+const AER = { c: { value: new THREE.Vector3(0.58, 0.74, 0.96) }, e: { value: new THREE.Vector3(0.00075, 0.0006, 0.00048) } };
+const AER_SET = { day: { c: [0.58, 0.74, 0.96], k: 0.0006 }, sunset: { c: [1.0, 0.60, 0.30], k: 0.0007 }, cloudy: { c: [0.62, 0.68, 0.76], k: 0.0008 }, night: { c: [0.03, 0.05, 0.12], k: 0.0006 } };
+const CITY = { cols: [], acc: 0, t: 0, cars: [], lamps: [], sigs: [], neons: [], steam: [], keys: new Set(), R: null, dead: false, dusk: false };
+const CITY_GA = 29 * Math.PI / 180, CITY_A = [Math.sin(CITY_GA), -Math.cos(CITY_GA)], CITY_B = [Math.cos(CITY_GA), Math.sin(CITY_GA)];
+function cityBlocked(x, z) {
+  const L = CITY.cols;
+  for (let i = 0; i < L.length; i++) { const b = L[i]; if (x < b.x0 || x > b.x1 || z < b.z0 || z > b.z1) continue; if (pointInPolygonXZ(x, z, b.r)) return true; }
+  return false;
+}
+function cityRun(x, z, dx, dz, len) { for (let d = 3; d <= len; d += 3) if (cityBlocked(x + dx * d, z + dz * d)) return false; return true; }
+function cityProbe() {
+  const px = player.pos.x, pz = player.pos.z;
+  for (let k = 0; k < 10; k++) {
+    const a = Math.random() * 6.2832, rr = 20 + Math.random() * 150, x = px + Math.cos(a) * rr, z = pz + Math.sin(a) * rr;
+    if (cityBlocked(x, z)) continue;
+    const ax = Math.random() < 0.5 ? CITY_A : CITY_B, bx = ax === CITY_A ? CITY_B : CITY_A;
+    if (!cityRun(x, z, ax[0], ax[1], 24) || !cityRun(x, z, -ax[0], -ax[1], 24)) continue;
+    if (cityRun(x, z, bx[0], bx[1], 26) && cityRun(x, z, -bx[0], -bx[1], 26)) continue;   // 광장/공원 제외: 옆면 어딘가는 막혀 있어야 거리
+    return { x, z, a: ax, b: bx };
+  }
+  return null;
+}
+function cityRes() {
+  if (CITY.R) return CITY.R;
+  const g = new THREE.Group(); scene.add(g);
+  const mk = (geo, mat, n, col) => { const m = new THREE.InstancedMesh(geo, mat, n); m.count = 0; m.frustumCulled = false; if (col) m.setColorAt(0, new THREE.Color(1, 1, 1)); g.add(m); return m; };
+  const S = (c, r, mt) => new THREE.MeshStandardMaterial({ color: c, roughness: r, metalness: mt || 0 });
+  const wheelG = new THREE.CylinderGeometry(0.33, 0.33, 0.25, 12); wheelG.rotateZ(Math.PI / 2);
+  const NC = 22, R = CITY.R = { g, NC,
+    body: mk(new THREE.BoxGeometry(1.9, 0.75, 4.5), new THREE.MeshStandardMaterial({ roughness: 0.35, metalness: 0.5 }), NC, true),
+    cab: mk(new THREE.BoxGeometry(1.7, 0.6, 2.2), S(0x1a222b, 0.15, 0.2), NC),
+    roof: mk(new THREE.BoxGeometry(0.5, 0.18, 0.3), new THREE.MeshBasicMaterial({ color: 0xfff2b0 }), NC),
+    wheel: mk(wheelG, S(0x111111, 0.9), NC * 4),
+    head: mk(new THREE.BoxGeometry(0.3, 0.18, 0.06), new THREE.MeshBasicMaterial({ color: 0xcfcfc8 }), NC * 2),
+    tail: mk(new THREE.BoxGeometry(0.3, 0.14, 0.06), new THREE.MeshBasicMaterial({ color: 0xff2020 }), NC * 2),
+    pole: mk(new THREE.CylinderGeometry(0.09, 0.12, 6, 8), S(0x2b2f33, 0.6, 0.5), 100),
+    lhead: mk(new THREE.BoxGeometry(0.9, 0.16, 0.35), new THREE.MeshBasicMaterial({ color: 0x555555 }), 100),
+    spole: mk(new THREE.CylinderGeometry(0.07, 0.07, 4.2, 6), S(0x1f2327, 0.6, 0.4), 160),
+    shead: mk(new THREE.BoxGeometry(0.34, 0.9, 0.3), new THREE.MeshBasicMaterial({ color: 0xffffff }), 160, true),
+    neon: mk(new THREE.BoxGeometry(3, 0.9, 0.15), new THREE.MeshBasicMaterial({ color: 0xffffff }), 40, true),
+    mh: mk(new THREE.CylinderGeometry(0.45, 0.45, 0.05, 14), S(0x2a2a2a, 0.8, 0.4), 12) };
+  CITY.cars = Array.from({ length: NC }, () => ({ alive: false, x: 0, z: 0, dx: 0, dz: 1, v: 10, tv: 10, col: new THREE.Color() }));
+  return R;
+}
+const _cm = new THREE.Matrix4(), _cb = new THREE.Matrix4(), _cq = new THREE.Matrix4(), _cc = new THREE.Color();
+const CAR_PARTS = [['cab', 0, 1.22, 0.2], ['roof', 0, 1.62, 0.2], ['wheel', -0.95, 0.33, -1.4], ['wheel', 0.95, 0.33, -1.4], ['wheel', -0.95, 0.33, 1.4], ['wheel', 0.95, 0.33, 1.4],
+  ['head', -0.65, 0.7, -2.27], ['head', 0.65, 0.7, -2.27], ['tail', -0.65, 0.72, 2.27], ['tail', 0.65, 0.72, 2.27]];
+const CAR_COLS = [0x222428, 0xb8bcc2, 0x7a1f1f, 0x1e3a5f, 0xffffff];
+function citySpawnCar(car, pr) {
+  const sg = Math.random() < 0.5 ? 1 : -1, dx = pr.a[0] * sg, dz = pr.a[1] * sg, rx = -dz, rz = dx;   // 오른쪽 차선
+  const x = pr.x + rx * 2.4, z = pr.z + rz * 2.4; if (cityBlocked(x, z)) return false;
+  car.x = x; car.z = z; car.dx = dx; car.dz = dz; car.tv = 7 + Math.random() * 7; car.v = car.tv; car.alive = true;
+  car.col.setHex(Math.random() < 0.7 ? 0xf5c400 : CAR_COLS[(Math.random() * CAR_COLS.length) | 0]); return true;
+}
+function cityCarsUpdate(dt) {
+  const R = CITY.R, px = player.pos.x, pz = player.pos.z;
+  for (let i = 0; i < R.NC; i++) {
+    const c = CITY.cars[i];
+    if (c.alive) {
+      c.v += (c.tv - c.v) * Math.min(1, dt * 1.5); c.x += c.dx * c.v * dt; c.z += c.dz * c.v * dt;
+      if (Math.hypot(c.x - px, c.z - pz) > 230) c.alive = false;
+      else if (((i + (CITY.t * 20 | 0)) % 3 === 0) && cityBlocked(c.x + c.dx * 6, c.z + c.dz * 6)) {   // 막히면 좌/우/유턴
+        const opts = Math.random() < 0.5 ? [[-c.dz, c.dx], [c.dz, -c.dx], [-c.dx, -c.dz]] : [[c.dz, -c.dx], [-c.dz, c.dx], [-c.dx, -c.dz]];
+        let ok = false; for (const o of opts) if (!cityBlocked(c.x + o[0] * 8, c.z + o[1] * 8)) { c.dx = o[0]; c.dz = o[1]; ok = true; break; }
+        if (!ok) c.alive = false; else c.v *= 0.5;
+      }
+    }
+    if (!c.alive) { _cm.makeScale(0, 0, 0); R.body.setMatrixAt(i, _cm); for (const m of [R.cab, R.roof]) m.setMatrixAt(i, _cm);
+      for (let k = 0; k < 4; k++) R.wheel.setMatrixAt(i * 4 + k, _cm); for (let k = 0; k < 2; k++) { R.head.setMatrixAt(i * 2 + k, _cm); R.tail.setMatrixAt(i * 2 + k, _cm); } continue; }
+    const gy = nmGroundAt(c.x, c.z), yaw = Math.atan2(-c.dx, -c.dz);
+    _cb.makeRotationY(yaw); _cb.setPosition(c.x, gy, c.z);
+    _cm.makeTranslation(0, 0.65, 0); _cq.multiplyMatrices(_cb, _cm); R.body.setMatrixAt(i, _cq); R.body.setColorAt(i, c.col);
+    let w = 0, h = 0, t = 0;
+    for (const P of CAR_PARTS) { _cm.makeTranslation(P[1], P[2], P[3]); _cq.multiplyMatrices(_cb, _cm);
+      if (P[0] === 'wheel') R.wheel.setMatrixAt(i * 4 + w++, _cq); else if (P[0] === 'head') R.head.setMatrixAt(i * 2 + h++, _cq); else if (P[0] === 'tail') R.tail.setMatrixAt(i * 2 + t++, _cq); else R[P[0]].setMatrixAt(i, _cq); }
+  }
+  for (const m of [R.body, R.cab, R.roof, R.wheel, R.head, R.tail]) { m.count = m === R.wheel ? R.NC * 4 : (m === R.head || m === R.tail) ? R.NC * 2 : R.NC; m.instanceMatrix.needsUpdate = true; }
+  if (R.body.instanceColor) R.body.instanceColor.needsUpdate = true;
+}
+function cityAddLamp(pr) {
+  for (const sd of [1, -1]) {
+    let t = 3, hit = false; for (; t < 28; t += 1.5) if (cityBlocked(pr.x + pr.b[0] * sd * t, pr.z + pr.b[1] * sd * t)) { hit = true; break; }
+    if (!hit) continue; const x = pr.x + pr.b[0] * sd * (t - 1.9), z = pr.z + pr.b[1] * sd * (t - 1.9), key = Math.round(x / 14) + ',' + Math.round(z / 14);
+    if (CITY.keys.has(key)) continue; CITY.keys.add(key);
+    if (CITY.lamps.length < 100) CITY.lamps.push({ x, z, ox: -pr.b[0] * sd * 0.9, oz: -pr.b[1] * sd * 0.9, y: nmGroundAt(x, z) });
+    if (Math.random() < 0.3 && CITY.neons.length < 40) {   // 벽면 네온 사인
+      const col = new THREE.Color([0xff2d95, 0x22e6ff, 0xff3030, 0x35ff7a, 0xffb020][(Math.random() * 5) | 0]);
+      CITY.neons.push({ x: pr.x + pr.b[0] * sd * (t - 0.2), z: pr.z + pr.b[1] * sd * (t - 0.2), y: nmGroundAt(x, z) + 4 + Math.random() * 4, yaw: Math.atan2(pr.b[0] * sd, pr.b[1] * sd), col, ph: Math.random() * 6 });
+    }
+  }
+}
+function cityAddSignals(pr) {
+  // 거리를 따라 걸으며 교차로(옆 방향으로도 뚫린 구간)를 찾고, 그 구간 중심의 네 모서리에 신호등을 세운다.
+  for (const sd of [1, -1]) {
+    let d0 = -1, d1 = -1;
+    for (let d = 4; d < 150; d += 3) {
+      const x = pr.x + pr.a[0] * sd * d, z = pr.z + pr.a[1] * sd * d; if (cityBlocked(x, z)) break;
+      const cross = cityRun(x, z, pr.b[0], pr.b[1], 8) && cityRun(x, z, -pr.b[0], -pr.b[1], 8);
+      if (cross && d0 < 0) d0 = d; if (cross) d1 = d; else if (d0 >= 0) break;
+    }
+    if (d0 < 0 || d1 - d0 < 6 || d1 - d0 > 40) continue;
+    const dm = (d0 + d1) / 2, cx = pr.x + pr.a[0] * sd * dm, cz = pr.z + pr.a[1] * sd * dm, key = 'S' + Math.round(cx / 30) + ',' + Math.round(cz / 30);
+    if (CITY.keys.has(key) || CITY.sigs.length > 150) continue; CITY.keys.add(key);
+    let wb = 8; while (wb < 30 && !cityBlocked(cx + pr.b[0] * wb, cz + pr.b[1] * wb)) wb += 2;
+    const da = (d1 - d0) / 2 + 2.0, db = Math.max(5, wb - 2.0);
+    for (const [u, v] of [[1, 1], [-1, 1], [1, -1], [-1, -1]]) {
+      const x = cx + pr.a[0] * u * da + pr.b[0] * v * db, z = cz + pr.a[1] * u * da + pr.b[1] * v * db;
+      CITY.sigs.push({ x, z, y: nmGroundAt(x, z), axis: u * v > 0 ? 0 : 1 });
+    }
+    return;
+  }
+}
+function cityAddSteam(pr) {
+  if (CITY.steam.length >= 8) return; const g = new THREE.Group(); g.position.set(pr.x, nmGroundAt(pr.x, pr.z), pr.z); const sp = [];
+  for (let i = 0; i < 4; i++) { const s = new THREE.Sprite(new THREE.SpriteMaterial({ color: 0xffffff, transparent: true, opacity: 0.4, depthWrite: false })); g.add(s); sp.push({ s, ph: i / 4 }); }
+  scene.add(g); CITY.steam.push({ x: pr.x, z: pr.z, g, sp });
+}
+function cityRebuildStatic() {
+  const R = CITY.R, Lm = CITY.lamps, S = CITY.sigs, N = CITY.neons, tmp = new THREE.Matrix4();
+  Lm.forEach((l, i) => { tmp.makeTranslation(l.x, l.y + 3, l.z); R.pole.setMatrixAt(i, tmp); tmp.makeTranslation(l.x + l.ox, l.y + 6.05, l.z + l.oz); R.lhead.setMatrixAt(i, tmp); });
+  R.pole.count = R.lhead.count = Lm.length; R.pole.instanceMatrix.needsUpdate = R.lhead.instanceMatrix.needsUpdate = true;
+  S.forEach((s, i) => { tmp.makeTranslation(s.x, s.y + 2.1, s.z); R.spole.setMatrixAt(i, tmp); tmp.makeTranslation(s.x, s.y + 4.4, s.z); R.shead.setMatrixAt(i, tmp); });
+  R.spole.count = R.shead.count = S.length; R.spole.instanceMatrix.needsUpdate = true; R.shead.instanceMatrix.needsUpdate = true;
+  N.forEach((n, i) => { tmp.makeRotationY(n.yaw); tmp.setPosition(n.x, n.y, n.z); R.neon.setMatrixAt(i, tmp); R.neon.setColorAt(i, n.col); });
+  R.neon.count = N.length; R.neon.instanceMatrix.needsUpdate = true; if (R.neon.instanceColor) R.neon.instanceColor.needsUpdate = true;
+  CITY.steam.forEach((m, i) => { tmp.makeTranslation(m.x, nmGroundAt(m.x, m.z) + 0.03, m.z); R.mh.setMatrixAt(i, tmp); }); R.mh.count = CITY.steam.length; R.mh.instanceMatrix.needsUpdate = true;
+}
+function citySignalColors() {
+  const R = CITY.R, ph = Math.floor(CITY.t / 8) % 2;
+  CITY.sigs.forEach((s, i) => { _cc.setHex((s.axis === ph) ? 0x20ff60 : 0xff2a2a); R.shead.setColorAt(i, _cc); }); if (R.shead.instanceColor) R.shead.instanceColor.needsUpdate = true;
+}
+function cityRefresh() {
+  const px = player.pos.x, pz = player.pos.z; CITY.cols.length = 0;
+  for (const c of nearbyColliders(px, pz)) {
+    const r = c.ringXZ; if (!r || r.length < 3) continue;
+    if (!c._bb) { let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9; for (const q of r) { if (q.x < x0) x0 = q.x; if (q.x > x1) x1 = q.x; if (q.z < z0) z0 = q.z; if (q.z > z1) z1 = q.z; } c._bb = { x0, x1, z0, z1 }; }
+    CITY.cols.push({ r, x0: c._bb.x0, x1: c._bb.x1, z0: c._bb.z0, z1: c._bb.z1 });
+  }
+  const mode = currentWeatherMode, st = AER_SET[mode] || AER_SET.day; CITY.dusk = mode === 'night' || mode === 'sunset';
+  AER.c.value.lerp(new THREE.Vector3(st.c[0], st.c[1], st.c[2]), 0.6); AER.e.value.set(st.k * 1.25, st.k, st.k * 0.8);
+  const R = cityRes(); R.head.material.color.setHex(CITY.dusk ? 0xfff3c8 : 0xcfcfc8); R.lhead.material.color.setHex(CITY.dusk ? 0xffd9a0 : 0x555555); R.neon.visible = CITY.dusk;
+  let changed = false;
+  for (let n = 0; n < 6; n++) {
+    const pr = cityProbe(); if (!pr) continue;
+    const free = CITY.cars.find(c => !c.alive); if (free) citySpawnCar(free, pr);
+    const r = Math.random(); if (r < 0.5) { cityAddLamp(pr); changed = true; } else if (r < 0.7) { cityAddSignals(pr); changed = true; } else if (r < 0.78) { cityAddSteam(pr); changed = true; }
+  }
+  const far = (o) => Math.hypot(o.x - px, o.z - pz) > 320, nL = CITY.lamps.length + CITY.sigs.length + CITY.neons.length;
+  CITY.lamps = CITY.lamps.filter(o => !far(o)); CITY.sigs = CITY.sigs.filter(o => !far(o)); CITY.neons = CITY.neons.filter(o => !far(o));
+  if (CITY.lamps.length + CITY.sigs.length + CITY.neons.length !== nL) { changed = true; if (CITY.keys.size > 400) CITY.keys.clear(); }
+  CITY.steam = CITY.steam.filter(m => { if (!far(m)) return true; scene.remove(m.g); m.sp.forEach(q => q.s.material.dispose()); changed = true; return false; });
+  if (changed) cityRebuildStatic();
+}
+function cityUpdate(dt) {
+  if (window.__LITE || CITY.dead || typeof player === 'undefined' || !scene) return;
+  CITY.t += dt; CITY.acc += dt;
+  if (CITY.acc > 1.0 || !CITY.R) { CITY.acc = 0; cityRefresh(); citySignalColors(); }
+  if (!CITY.R) return;
+  cityCarsUpdate(dt);
+  for (const m of CITY.steam) for (const q of m.sp) { const t = (CITY.t * 0.3 + q.ph) % 1; q.s.position.y = 0.2 + t * 4.5; const k = 0.8 + t * 3.2; q.s.scale.set(k, k, 1); q.s.material.opacity = 0.45 * (1 - t) * Math.min(1, t * 8); }
+}
+
 function animate() {
   requestAnimationFrame(animate);
   const now = performance.now();
@@ -3695,6 +3860,7 @@ function animate() {
   if (isSpectator) updateSpectator(dt);
   nmFrame(dt);
   try { propsUpdate(dt); } catch (e) { PROPS.acc = -5; }
+  try { cityUpdate(dt); } catch (e) { CITY.dead = true; console.warn('city', e); }
 
   hudTimer += dt;
   if (hudTimer > 0.25) {
