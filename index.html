@@ -738,7 +738,7 @@ function nmWallInit() {
     uWinQ: window.__winQ = { value: 1.0 }, uWinGlow: window.__winGlow = { value: vfxGlowValue() },
     uWinFar: window.__winFar = { value: 455.0 }, uGlassR: { value: 0.80 }
   };
-  NM_WALL.FC = `varying vec3 vWP; varying vec3 vLP; varying vec3 vCP; varying vec2 vAnc; varying vec4 vSty; varying vec4 vTop; varying vec2 vTr;
+  NM_WALL.FC = `varying vec3 vWP; varying vec3 vLP; varying vec3 vCP; varying vec2 vAnc; flat varying vec2 vWn; varying vec4 vSty; varying vec4 vTop; varying vec2 vTr;
 uniform float uWinQ; uniform float uWinGlow; uniform float uWinFar; uniform float uTime;
 uniform sampler2D tCor; uniform vec3 uCorC;
 float vfxWin = 0.0;
@@ -922,6 +922,16 @@ void shopCell(float u, float y, float w, float gH, float SW, out float h, out ve
   float topY = vTop.x * 1024.0 - 64.0, baseY = vTop.y * 1024.0 - 64.0, H = topY - baseY;
   if (abs(gn.y) < 0.12 && H > 1.0 && vSty.z > 0.0) {
     vec3 wn = gn, vv = normalize(vCP);
+    {   // 벽 방향: 화면 미분 gn(노이즈 있음)으로 '정점에 저장된 정확한 벽 법선 후보 2개' 중 하나를 고른다 → 정밀도 노이즈 0
+      vec2 gx = normalize(gn.xz + vec2(1e-6));
+      if (vWn.x >= 0.0) {
+        float a1 = vWn.x * 0.0000958738, a2 = vWn.y >= 0.0 ? vWn.y * 0.0000958738 : a1;   // π/32768
+        vec2 n1 = vec2(cos(a1), sin(a1)), n2 = vec2(cos(a2), sin(a2));
+        float d1 = abs(dot(gx, n1)), d2 = abs(dot(gx, n2));
+        vec2 nb = d1 >= d2 ? n1 : n2; float db = max(d1, d2);
+        if (db > 0.985) { vec3 w0 = vec3(nb.x, 0.0, nb.y); wn = dot(w0, vv) > 0.0 ? -w0 : w0; }
+      }
+    }
     float cdist = length(vCP);
     float sid = floor(vSty.x * 255.0 + 0.5), seed = vSty.y, lf = vSty.z;
     float code = floor(vSty.w * 255.0 + 0.5) / 16.0; gShopT = mod(code, 4.0); float cat = floor(code / 4.0);
@@ -1155,8 +1165,8 @@ function nmWallOBC(sh) {
   sh.uniforms.uWinQ = U.uWinQ; sh.uniforms.uWinGlow = U.uWinGlow; sh.uniforms.uWinFar = U.uWinFar; sh.uniforms.uGlassR = U.uGlassR;
   sh.uniforms.uTime = FC.time; sh.uniforms.tCor = FC.corTex; sh.uniforms.uCorC = FC.corC;
   sh.vertexShader = sh.vertexShader
-    .replace('#include <common>', '#include <common>\nattribute vec4 aSty; attribute vec4 aTop; attribute vec2 aTr; attribute vec2 aBc; varying vec3 vWP; varying vec3 vLP; varying vec3 vCP; varying vec2 vAnc; varying vec4 vSty; varying vec4 vTop; varying vec2 vTr;')
-    .replace('#include <begin_vertex>', '#include <begin_vertex>\nvWP=(modelMatrix*vec4(position,1.0)).xyz; vLP=position; vCP=position+(modelMatrix[3].xyz-cameraPosition); vAnc=aBc*0.0125; vSty=aSty; vTop=aTop; vTr=aTr;');
+    .replace('#include <common>', '#include <common>\nattribute vec4 aSty; attribute vec4 aTop; attribute vec2 aTr; attribute vec2 aBc; attribute vec2 aWn; flat varying vec2 vWn; varying vec3 vWP; varying vec3 vLP; varying vec3 vCP; varying vec2 vAnc; varying vec4 vSty; varying vec4 vTop; varying vec2 vTr;')
+    .replace('#include <begin_vertex>', '#include <begin_vertex>\nvWP=(modelMatrix*vec4(position,1.0)).xyz; vLP=position; vCP=position+(modelMatrix[3].xyz-cameraPosition); vAnc=aBc*0.0125; vWn=aWn; vSty=aSty; vTop=aTop; vTr=aTr;');
   sh.fragmentShader = sh.fragmentShader
     .replace('#include <common>', '#include <common>\n' + NM_WALL.FC)
     .replace('#include <color_fragment>', '#include <color_fragment>\n' + NM_WALL.FCOL)
@@ -1400,7 +1410,7 @@ async function nmBuildPart(P, pi, R, mat, prog) {
   for (const [key, list] of cells) {
     const [gx, gz] = key.split(',').map(Number), cx0 = gx * 400, cz0 = gz * 400;
     let bv = 0, nI = 0; for (const i of list) { bv += Math.min(d.nup[i] * K, d.ntri[i] * 3); nI += d.ntri[i] * 3; }
-    const Pp = new Float32Array(bv * 3), Cc = new Uint8Array(bv * 3), X = new Uint32Array(nI), Sa = new Uint8Array(bv * 4), Tp = new Uint16Array(bv * 4), Tr = new Uint16Array(bv * 2), Bc = new Int16Array(bv * 2); let nv = 0, pi2 = 0;
+    const Pp = new Float32Array(bv * 3), Cc = new Uint8Array(bv * 3), X = new Uint32Array(nI), Sa = new Uint8Array(bv * 4), Tp = new Uint16Array(bv * 4), Tr = new Uint16Array(bv * 2), Bc = new Int16Array(bv * 2), Wn = new Int16Array(bv * 2).fill(-1); let nv = 0, pi2 = 0;
     for (const i of list) {
       const ch = nmChunk(d, i), baseY = d.org[i * 3 + 1], HH = d.sc[i * 3 + 1] * 65535, k0 = 0.9 + 0.2 * nmHash(i + 1, pi * 7 + 3);
       const inf = nycBldInfo(ch, cls, i, pi + ':' + i), sB = inf.style, sS = Math.round(inf.seed * 255), sL = Math.max(1, Math.round(inf.lit * 255)), sP = inf.code * 16, tT = Math.round((inf.topY + 64) / 1024 * 65535), tB = Math.round((inf.baseY + 64) / 1024 * 65535);
@@ -1411,6 +1421,12 @@ async function nmBuildPart(P, pi, R, mat, prog) {
       vmap.fill(-1, 0, ch.nu * K);
       for (let t = 0; t < ch.nt; t++) {
         const ci = ch.C[t], cl = cls[ci];
+        // 벽 삼각형의 수평 법선 각도(0..π, 15bit). 정점마다 인접한 서로 다른 벽 2개까지 기록 → 셰이더가 provoking vertex(flat)로 정확한 벽 방향을 얻는다
+        let wq = -1;
+        { const ta = ch.T[t * 3], tb = ch.T[t * 3 + 1], tc = ch.T[t * 3 + 2];
+          const ex = ch.ux[tb] - ch.ux[ta], ey = ch.uy[tb] - ch.uy[ta], ez = ch.uz[tb] - ch.uz[ta], fx = ch.ux[tc] - ch.ux[ta], fy = ch.uy[tc] - ch.uy[ta], fz = ch.uz[tc] - ch.uz[ta];
+          const nx = ey * fz - ez * fy, ny = ez * fx - ex * fz, nz = ex * fy - ey * fx, nl = Math.hypot(nx, ny, nz);
+          if (nl > 1e-12 && Math.abs(ny) / nl < 0.3) { let th = Math.atan2(nz, nx); if (th < 0) th += Math.PI; wq = Math.round(th / Math.PI * 32768) % 32768; } }
         for (let k = 0; k < 3; k++) {
           const p = ch.T[t * 3 + k], kk = p * K + ci; let v = vmap[kk];
           if (v < 0) {
@@ -1420,6 +1436,9 @@ async function nmBuildPart(P, pi, R, mat, prog) {
             Sa[v * 4] = sB; Sa[v * 4 + 1] = sS; Sa[v * 4 + 2] = sL; Sa[v * 4 + 3] = sP; Tp[v * 4] = tT; Tp[v * 4 + 1] = tB; Tp[v * 4 + 2] = tq[0]; Tp[v * 4 + 3] = tq[1]; Tr[v * 2] = tq[2]; Tr[v * 2 + 1] = tq[3]; Bc[v * 2] = bq0; Bc[v * 2 + 1] = bq1;
           }
           X[pi2++] = v;
+          if (wq >= 0) { const s0 = Wn[v * 2], s1 = Wn[v * 2 + 1];
+            if (s0 < 0) Wn[v * 2] = wq;
+            else { let d0 = Math.abs(s0 - wq); d0 = Math.min(d0, 32768 - d0); if (d0 > 10 && s1 < 0) Wn[v * 2 + 1] = wq; } }
         }
         if (cl !== 2) { const a = ch.T[t * 3], b = ch.T[t * 3 + 1], c = ch.T[t * 3 + 2];
           if (cl === 1) nmRast(R, ch.ux[a], ch.uz[a], ch.ux[b], ch.uz[b], ch.ux[c], ch.uz[c], Math.min(ch.uy[a], ch.uy[b], ch.uy[c]), 0);
@@ -1439,8 +1458,9 @@ async function nmBuildPart(P, pi, R, mat, prog) {
     g.setAttribute('aTop', new THREE.BufferAttribute(Tp.slice(0, nv * 4), 4, true));
     g.setAttribute('aTr', new THREE.BufferAttribute(Tr.slice(0, nv * 2), 2, true));
     g.setAttribute('aBc', new THREE.BufferAttribute(Bc.slice(0, nv * 2), 2, false));
+    g.setAttribute('aWn', new THREE.BufferAttribute(Wn.slice(0, nv * 2), 2, false));
     g.setIndex(new THREE.BufferAttribute(X.slice(0, pi2), 1)); g.computeBoundingSphere();
-    try { g.attributes.position.onUpload(function () { this.array = null; }); g.attributes.color.onUpload(function () { this.array = null; }); g.attributes.aSty.onUpload(function () { this.array = null; }); g.attributes.aTop.onUpload(function () { this.array = null; }); g.attributes.aTr.onUpload(function () { this.array = null; }); g.attributes.aBc.onUpload(function () { this.array = null; }); g.index.onUpload(function () { this.array = null; }); } catch (e) {}
+    try { g.attributes.position.onUpload(function () { this.array = null; }); g.attributes.color.onUpload(function () { this.array = null; }); g.attributes.aSty.onUpload(function () { this.array = null; }); g.attributes.aTop.onUpload(function () { this.array = null; }); g.attributes.aTr.onUpload(function () { this.array = null; }); g.attributes.aBc.onUpload(function () { this.array = null; }); g.attributes.aWn.onUpload(function () { this.array = null; }); g.index.onUpload(function () { this.array = null; }); } catch (e) {}
     const mesh = new THREE.Mesh(g, mat); mesh.name = 'OpenStreetMap_Manhattan_Buildings_' + pi + '_' + key; mesh.position.set(cx0, 0, cz0);
     scene.add(mesh); NM.cellMeshes.push({ mesh, x: cx0 + 200, z: cz0 + 200 });
     if (++cn % 6 === 0) { if (prog) prog(cn / cells.size); await nmYield(); }
