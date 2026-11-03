@@ -2569,7 +2569,7 @@ function setupControls() {
     if (e.code === 'KeyF') { webHeld = false; releaseWeb(true); }
   });
 
-  function bindButton(id, onDown, onUp) {
+  function bindButton(id, onDown, onUp, sticky) {
     const btn = document.getElementById(id);
     if (!btn) return;
     let activeId = null;
@@ -2584,6 +2584,7 @@ function setupControls() {
     });
     const handleUp = (e) => {
       if (e.pointerId !== activeId) return;
+      if (sticky && e.type === 'pointercancel') return;   // 시스템이 포인터를 취소해도 손가락이 아직 눌려 있으면 유지 (실제 손뗌은 pointerup/touchend 로 판정)
       e.preventDefault();
       e.stopPropagation();
       activeId = null;
@@ -2593,11 +2594,19 @@ function setupControls() {
     btn.addEventListener('pointerup', handleUp);
     btn.addEventListener('pointercancel', handleUp);
     btn.addEventListener('contextmenu', (e) => e.preventDefault());
+    if (sticky) {
+      const forceUp = () => { if (activeId === null) return; activeId = null; btn.classList.remove('pressed'); if (onUp) onUp(); };
+      // 버튼에서 시작된 터치가 하나도 남지 않았을 때만 해제 (다른 손가락 조작·포인터 취소와 무관)
+      const touchGone = (e) => { if (activeId === null || !e.touches) return; for (let i = 0; i < e.touches.length; i++) if (btn.contains(e.touches[i].target)) return; forceUp(); };
+      window.addEventListener('touchend', touchGone, { passive: true }); window.addEventListener('touchcancel', touchGone, { passive: true });
+      window.addEventListener('pointerup', (e) => { if (e.pointerId === activeId) forceUp(); }, true);
+      window.addEventListener('blur', forceUp); document.addEventListener('visibilitychange', () => { if (document.hidden) forceUp(); });
+    }
   }
   bindButton('btn-run', () => toggleRun());
   bindButton('btn-jump', () => triggerJump());
   bindButton('btn-zip', () => triggerWebZip());
-  bindButton('btn-web', () => { webHeld = true; shootWeb(); }, () => { webHeld = false; releaseWeb(true); });
+  bindButton('btn-web', () => { webHeld = true; shootWeb(); }, () => { webHeld = false; releaseWeb(true); }, true);
 
   const joyZone = document.getElementById('joystick-zone');
   const joyStick = document.getElementById('joystick-stick');
