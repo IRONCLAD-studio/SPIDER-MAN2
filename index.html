@@ -738,7 +738,7 @@ function nmWallInit() {
     uWinQ: window.__winQ = { value: 1.0 }, uWinGlow: window.__winGlow = { value: vfxGlowValue() },
     uWinFar: window.__winFar = { value: 455.0 }, uGlassR: { value: 0.80 }
   };
-  NM_WALL.FC = `varying vec3 vWP; varying vec4 vSty; varying vec4 vTop; varying vec2 vTr;
+  NM_WALL.FC = `varying vec3 vWP; varying vec3 vLP; varying vec3 vCP; varying vec2 vAnc; varying vec4 vSty; varying vec4 vTop; varying vec2 vTr;
 uniform float uWinQ; uniform float uWinGlow; uniform float uWinFar; uniform float uTime;
 uniform sampler2D tCor; uniform vec3 uCorC;
 float vfxWin = 0.0;
@@ -918,11 +918,11 @@ void shopCell(float u, float y, float w, float gH, float SW, out float h, out ve
 }
 `.replace('/*LM*/', nycLmGlsl()) + '\nuniform float uGlassR;\n';
   NM_WALL.FCOL = `{
-  vec3 gn = normalize(cross(dFdx(vWP), dFdy(vWP)));
+  vec3 gn = normalize(cross(dFdx(vCP), dFdy(vCP)));   // 카메라 상대 좌표로 미분 (큰 월드 좌표는 모바일에서 정밀도 붕괴)
   float topY = vTop.x * 1024.0 - 64.0, baseY = vTop.y * 1024.0 - 64.0, H = topY - baseY;
   if (abs(gn.y) < 0.12 && H > 1.0 && vSty.z > 0.0) {
-    vec3 wn = gn, vv = normalize(vWP - cameraPosition);
-    float cdist = length(cameraPosition - vWP);
+    vec3 wn = gn, vv = normalize(vCP);
+    float cdist = length(vCP);
     float sid = floor(vSty.x * 255.0 + 0.5), seed = vSty.y, lf = vSty.z;
     float code = floor(vSty.w * 255.0 + 0.5) / 16.0; gShopT = mod(code, 4.0); float cat = floor(code / 4.0);
     facParams(sid, seed, H, cat);
@@ -943,7 +943,7 @@ void shopCell(float u, float y, float w, float gH, float SW, out float h, out ve
     tq = vTr.y * 1024.0 - 64.0; if (vTr.y > 0.0005 && tq > vWP.y - 0.03 && tq < wallTop) wallTop = tq;
     float dTop = wallTop - vWP.y;
     vec3 T3 = vec3(-wn.z, 0.0, wn.x);
-    float u = dot(vWP.xz, T3.xz) + seed * 23.7;
+    float u = dot(vLP.xz - vAnc, T3.xz) + seed * 23.7;   // 건물 기준점 상대 좌표 → 작은 수로 계산해 노이즈 제거
     float w = clamp(0.5 * (fwidth(u) + fwidth(vWP.y)), 0.012, 1.5);
     #ifdef GBUF
     float nearK = 0.0;
@@ -1155,8 +1155,8 @@ function nmWallOBC(sh) {
   sh.uniforms.uWinQ = U.uWinQ; sh.uniforms.uWinGlow = U.uWinGlow; sh.uniforms.uWinFar = U.uWinFar; sh.uniforms.uGlassR = U.uGlassR;
   sh.uniforms.uTime = FC.time; sh.uniforms.tCor = FC.corTex; sh.uniforms.uCorC = FC.corC;
   sh.vertexShader = sh.vertexShader
-    .replace('#include <common>', '#include <common>\nattribute vec4 aSty; attribute vec4 aTop; attribute vec2 aTr; varying vec3 vWP; varying vec4 vSty; varying vec4 vTop; varying vec2 vTr;')
-    .replace('#include <begin_vertex>', '#include <begin_vertex>\nvWP=(modelMatrix*vec4(position,1.0)).xyz; vSty=aSty; vTop=aTop; vTr=aTr;');
+    .replace('#include <common>', '#include <common>\nattribute vec4 aSty; attribute vec4 aTop; attribute vec2 aTr; attribute vec2 aBc; varying vec3 vWP; varying vec3 vLP; varying vec3 vCP; varying vec2 vAnc; varying vec4 vSty; varying vec4 vTop; varying vec2 vTr;')
+    .replace('#include <begin_vertex>', '#include <begin_vertex>\nvWP=(modelMatrix*vec4(position,1.0)).xyz; vLP=position; vCP=position+(modelMatrix[3].xyz-cameraPosition); vAnc=aBc*0.0125; vSty=aSty; vTop=aTop; vTr=aTr;');
   sh.fragmentShader = sh.fragmentShader
     .replace('#include <common>', '#include <common>\n' + NM_WALL.FC)
     .replace('#include <color_fragment>', '#include <color_fragment>\n' + NM_WALL.FCOL)
@@ -1329,7 +1329,7 @@ function fcBuildCell(a, b, key) {
   for (const col of lst) {
     if (!col.nm || !col.main || !col.bx) continue;
     if (Math.floor(col.centX / SPATIAL_CELL) !== a || Math.floor(col.centZ / SPATIAL_CELL) !== b) continue;   // 건물이 속한 셀에서 한 번만
-    const bx = col.bx, sty = bx.sty, H = bx.H, ring = col.ringXZ, nr = ring.length, sB = bx.sB, seed = sB / 255, base = bx.base;
+    const bx = col.bx, anc = bx.anc || [0, 0], sty = bx.sty, H = bx.H, ring = col.ringXZ, nr = ring.length, sB = bx.sB, seed = sB / 255, base = bx.base;
     const wantAw = bx.shopT > 0 && H < 70 && H >= 6 && (sty < 8 || !NYC_LM[sty - 8].o.arch);
     const wantFe = sty === 2 && H >= 9 && H <= 48 && col.maxY - base >= 9;
     if (!wantAw && !wantFe) continue;
@@ -1340,7 +1340,7 @@ function fcBuildCell(a, b, key) {
       const mx = (A.x + B.x) / 2, mz = (A.z + B.z) / 2;
       if (pointInPolygonXZ(mx + n[0] * 0.6, mz + n[1] * 0.6, ring)) n = [-n[0], -n[1]];
       if (!fcEdgeOpen(col, mx, mz, n[0], n[1])) continue;
-      const t = [-n[1], n[0]], sgn = dir[0] * t[0] + dir[1] * t[1] > 0 ? 1 : -1, uA = A.x * t[0] + A.z * t[1] + phase;
+      const t = [-n[1], n[0]], sgn = dir[0] * t[0] + dir[1] * t[1] > 0 ? 1 : -1, uA = (A.x - anc[0]) * t[0] + (A.z - anc[1]) * t[1] + phase;
       if (wantAw) {
         const j0 = Math.floor((Math.min(uA, uA + sgn * L)) / SW), j1 = Math.ceil((Math.max(uA, uA + sgn * L)) / SW);
         for (let j = j0; j < j1; j++) {
@@ -1400,11 +1400,14 @@ async function nmBuildPart(P, pi, R, mat, prog) {
   for (const [key, list] of cells) {
     const [gx, gz] = key.split(',').map(Number), cx0 = gx * 400, cz0 = gz * 400;
     let bv = 0, nI = 0; for (const i of list) { bv += Math.min(d.nup[i] * K, d.ntri[i] * 3); nI += d.ntri[i] * 3; }
-    const Pp = new Float32Array(bv * 3), Cc = new Uint8Array(bv * 3), X = new Uint32Array(nI), Sa = new Uint8Array(bv * 4), Tp = new Uint16Array(bv * 4), Tr = new Uint16Array(bv * 2); let nv = 0, pi2 = 0;
+    const Pp = new Float32Array(bv * 3), Cc = new Uint8Array(bv * 3), X = new Uint32Array(nI), Sa = new Uint8Array(bv * 4), Tp = new Uint16Array(bv * 4), Tr = new Uint16Array(bv * 2), Bc = new Int16Array(bv * 2); let nv = 0, pi2 = 0;
     for (const i of list) {
       const ch = nmChunk(d, i), baseY = d.org[i * 3 + 1], HH = d.sc[i * 3 + 1] * 65535, k0 = 0.9 + 0.2 * nmHash(i + 1, pi * 7 + 3);
       const inf = nycBldInfo(ch, cls, i, pi + ':' + i), sB = inf.style, sS = Math.round(inf.seed * 255), sL = Math.max(1, Math.round(inf.lit * 255)), sP = inf.code * 16, tT = Math.round((inf.topY + 64) / 1024 * 65535), tB = Math.round((inf.baseY + 64) / 1024 * 65535);
       const tq = [0, 0, 0, 0]; for (let q = 0; q < inf.tiers.length; q++) tq[q] = Math.round((inf.tiers[q] + 64) / 1024 * 65535);
+      // 건물 기준점(바운딩 중심, 셀 로컬 0.0125m 격자): 창 격자 좌표를 작은 수로 계산하기 위한 앵커
+      let ax0 = 1e9, ax1 = -1e9, az0 = 1e9, az1 = -1e9; for (let u = 0; u < ch.nu; u++) { ax0 = Math.min(ax0, ch.ux[u]); ax1 = Math.max(ax1, ch.ux[u]); az0 = Math.min(az0, ch.uz[u]); az1 = Math.max(az1, ch.uz[u]); }
+      const bq0 = Math.max(-32767, Math.min(32767, Math.round(((ax0 + ax1) / 2 - cx0) / 0.0125))), bq1 = Math.max(-32767, Math.min(32767, Math.round(((az0 + az1) / 2 - cz0) / 0.0125)));
       vmap.fill(-1, 0, ch.nu * K);
       for (let t = 0; t < ch.nt; t++) {
         const ci = ch.C[t], cl = cls[ci];
@@ -1414,7 +1417,7 @@ async function nmBuildPart(P, pi, R, mat, prog) {
             v = nv++; vmap[kk] = v; Pp[v * 3] = ch.ux[p] - cx0; Pp[v * 3 + 1] = ch.uy[p]; Pp[v * 3 + 2] = ch.uz[p] - cz0;
             let f = k0; if (cl === 2) { const yr = ch.uy[p] - baseY; f *= yr < 3 ? 0.72 : 0.9 + 0.2 * Math.min(1, yr / Math.max(1, HH)); } else if (cl === 1) f *= 0.85;
             Cc[v * 3] = Math.min(255, d.pal[ci * 3] * f); Cc[v * 3 + 1] = Math.min(255, d.pal[ci * 3 + 1] * f); Cc[v * 3 + 2] = Math.min(255, d.pal[ci * 3 + 2] * f);
-            Sa[v * 4] = sB; Sa[v * 4 + 1] = sS; Sa[v * 4 + 2] = sL; Sa[v * 4 + 3] = sP; Tp[v * 4] = tT; Tp[v * 4 + 1] = tB; Tp[v * 4 + 2] = tq[0]; Tp[v * 4 + 3] = tq[1]; Tr[v * 2] = tq[2]; Tr[v * 2 + 1] = tq[3];
+            Sa[v * 4] = sB; Sa[v * 4 + 1] = sS; Sa[v * 4 + 2] = sL; Sa[v * 4 + 3] = sP; Tp[v * 4] = tT; Tp[v * 4 + 1] = tB; Tp[v * 4 + 2] = tq[0]; Tp[v * 4 + 3] = tq[1]; Tr[v * 2] = tq[2]; Tr[v * 2 + 1] = tq[3]; Bc[v * 2] = bq0; Bc[v * 2 + 1] = bq1;
           }
           X[pi2++] = v;
         }
@@ -1425,7 +1428,7 @@ async function nmBuildPart(P, pi, R, mat, prog) {
       // 건물 인덱스(충돌체 지연 생성용)
       const gi = NM.bx.length, mnx = ch.ux.reduce((a, b) => Math.min(a, b), 1e9), mxx = ch.ux.reduce((a, b) => Math.max(a, b), -1e9),
         mnz = ch.uz.reduce((a, b) => Math.min(a, b), 1e9), mxz = ch.uz.reduce((a, b) => Math.max(a, b), -1e9);
-      NM.bx.push({ p: pi, i, built: false, prof: [inf.lit, inf.profSeed], shop: inf.shop, shopT: inf.shopT, sty: sB, sB: sS, H: inf.H, base: inf.baseY });
+      NM.bx.push({ p: pi, i, built: false, prof: [inf.lit, inf.profSeed], shop: inf.shop, shopT: inf.shopT, sty: sB, sB: sS, H: inf.H, base: inf.baseY, anc: [cx0 + bq0 * 0.0125, cz0 + bq1 * 0.0125] });
       const a0 = Math.floor((mnx - 0.5) / SPATIAL_CELL), a1 = Math.floor((mxx + 0.5) / SPATIAL_CELL), b0 = Math.floor((mnz - 0.5) / SPATIAL_CELL), b1 = Math.floor((mxz + 0.5) / SPATIAL_CELL);
       for (let a = a0; a <= a1; a++) for (let b = b0; b <= b1; b++) { const kk2 = a + ',' + b; let l = NM.idx.get(kk2); if (!l) NM.idx.set(kk2, l = []); l.push(gi); }
     }
@@ -1435,8 +1438,9 @@ async function nmBuildPart(P, pi, R, mat, prog) {
     g.setAttribute('aSty', new THREE.BufferAttribute(Sa.slice(0, nv * 4), 4, true));
     g.setAttribute('aTop', new THREE.BufferAttribute(Tp.slice(0, nv * 4), 4, true));
     g.setAttribute('aTr', new THREE.BufferAttribute(Tr.slice(0, nv * 2), 2, true));
+    g.setAttribute('aBc', new THREE.BufferAttribute(Bc.slice(0, nv * 2), 2, false));
     g.setIndex(new THREE.BufferAttribute(X.slice(0, pi2), 1)); g.computeBoundingSphere();
-    try { g.attributes.position.onUpload(function () { this.array = null; }); g.attributes.color.onUpload(function () { this.array = null; }); g.attributes.aSty.onUpload(function () { this.array = null; }); g.attributes.aTop.onUpload(function () { this.array = null; }); g.attributes.aTr.onUpload(function () { this.array = null; }); g.index.onUpload(function () { this.array = null; }); } catch (e) {}
+    try { g.attributes.position.onUpload(function () { this.array = null; }); g.attributes.color.onUpload(function () { this.array = null; }); g.attributes.aSty.onUpload(function () { this.array = null; }); g.attributes.aTop.onUpload(function () { this.array = null; }); g.attributes.aTr.onUpload(function () { this.array = null; }); g.attributes.aBc.onUpload(function () { this.array = null; }); g.index.onUpload(function () { this.array = null; }); } catch (e) {}
     const mesh = new THREE.Mesh(g, mat); mesh.name = 'OpenStreetMap_Manhattan_Buildings_' + pi + '_' + key; mesh.position.set(cx0, 0, cz0);
     scene.add(mesh); NM.cellMeshes.push({ mesh, x: cx0 + 200, z: cz0 + 200 });
     if (++cn % 6 === 0) { if (prog) prog(cn / cells.size); await nmYield(); }
