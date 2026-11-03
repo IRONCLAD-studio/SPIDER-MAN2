@@ -765,7 +765,8 @@ float boxS(float x, float a, float b, float aa){ return smoothstep(a-aa,a+aa,x)*
               float fu = u / bw;
               vec2 id = vec2(floor(fu), ground > 0.5 ? -1.0 : floor(fyl));
               vec2 f = vec2(fract(fu), fract(fyl));
-              float aa_ = clamp(max(dU / bw, dY / flH) * 1.5, 0.0, 0.35);
+              float aaRaw = max(dU / bw, dY / flH) * 1.5, aa_ = clamp(aaRaw, 0.0, 0.35);
+              float wBand = smoothstep(0.12, 0.5, aaRaw);   // 창 한 칸이 몇 픽셀 안 될 때 → 평균값으로 프리필터
               float xa = (1.0 - ww) * 0.5, y0 = wy0, y1 = wy0 + wh;
               if (ground > 0.5) { xa = 0.07; y0 = 0.08; y1 = 0.74; }
               float winx = boxS(f.x, xa, 1.0 - xa, aa_), winy = boxS(f.y, y0, y1, aa_);
@@ -775,7 +776,7 @@ float boxS(float x, float a, float b, float aa){ return smoothstep(a-aa,a+aa,x)*
               float belt = (beltN > 0.5 && ground < 0.5 && mod(id.y, beltN) < 0.5 && id.y > 0.5) ? step(f.y, 0.16) : 0.0;
               float dTop = topY - vWP.y, nearTop = step(dTop, cornH);
               win *= (1.0 - pierM) * (1.0 - belt) * (1.0 - nearTop);
-              win *= 1.0 - smoothstep(0.25, 0.6, aa_);
+              win = mix(win, (ground > 0.5 ? 0.57 : ww * wh), wBand);
               float fade = 1.0 - smoothstep(uWinFar * 0.27, uWinFar * 0.95, cdist);
               // ---- 외벽 질감: 벽돌 줄눈 / 석재 줄눈 / 콘크리트 패널 (가까울 때만) ----
               float nearK = 1.0 - smoothstep(35.0, 120.0, cdist);
@@ -812,15 +813,18 @@ float boxS(float x, float a, float b, float aa){ return smoothstep(a-aa,a+aa,x)*
               float pl = clamp(lf * (0.35 + 1.3 * fbs), 0.0, 0.92);
               float lit = step(r, pl);
               if (ground > 0.5) lit = step(h21(id + seed * 9.0 + 5.0), 0.86);
+              lit = mix(lit, ground > 0.5 ? 0.86 : pl, wBand); r = mix(r, 0.5, wBand);   // 창별 난수(점등/색)도 기대값으로 수렴
               vec3 glass = isGlass > 0.5 ? mix(vec3(0.10, 0.16, 0.20), vec3(0.38, 0.52, 0.62), f.y * 0.8)
                                          : mix(vec3(0.05, 0.07, 0.09), vec3(0.22, 0.30, 0.37), f.y * 0.8);
               glass *= (0.8 + 0.5 * r);
               // 블라인드/커튼 (꺼진 창 일부)
               float blind = step(0.78, h21(id + seed * 17.0)) * (1.0 - lit) * (1.0 - isGlass * 0.6);
+              blind *= 1.0 - wBand;
               glass = mix(glass, vec3(0.42, 0.38, 0.30) * (0.55 + 0.4 * f.y), blind * 0.8);
               // 창틀: 멀리온(유리) / 중간 문설주와 가로살(벽돌·석재·아파트)
               float mull = isGlass > 0.5 ? step(f.x, 0.07) + step(0.93, f.x) : 0.0;
               float mun = (isBrick + isStone > 0.5 && ground < 0.5) ? step(abs(f.x - 0.5), 0.035) + step(abs(f.y - (y0 + wh * 0.66)), 0.03) : 0.0;
+              mull *= 1.0 - wBand; mun *= 1.0 - wBand;   // 창틀 선도 서브픽셀이면 사라지게
               glass = mix(glass, col * 0.55, clamp(mull + mun, 0.0, 1.0) * nearK);
               if (nearK > 0.02 && win > 0.01) {   // 인테리어 매핑 (가까운 창만)
                 vec3 vv = normalize(vWP - cameraPosition); vec3 tU_ = vec3(-wn.z, 0.0, wn.x);
