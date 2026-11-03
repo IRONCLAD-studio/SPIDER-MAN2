@@ -486,13 +486,14 @@ function nycShopSW(sb) { const s = sb / 255; return 4.0 + 2.0 * nycFr(s * 3.3); 
 function nycPickFamily(H, A, cat, seed, nT) {
   if (H < 5 || (H < 9 && A < 120)) return 3;
   if ((A > 1800 && H < 34) || (A > 1100 && H < 14)) return 3;
-  if (cat === 3) return H < 8 ? 3 : 2;
+  if (cat === 3 && H < 45) return H < 8 ? 3 : 2;
   let g, d;
   if (H >= 150) { g = cat === 0 ? 0.5 : 0.6; d = 1 - g; }
   else if (H >= 60) { if (cat === 0) { g = 0.5; d = 0.45; } else if (cat === 1) { g = 0.15; d = 0.5; } else { g = 0.12; d = 0.28; } }
   else if (H >= 25) { if (cat === 0) { g = 0.3; d = 0.45; } else if (cat === 1) { g = 0.15; d = 0.30; } else { g = 0.05; d = 0.20; } }
   else { if (cat === 0) { g = 0.2; d = 0.3; } else if (cat === 1) { g = 0.05; d = 0.10; } else { g = 0.03; d = 0.10; } }
   if (nT >= 3 && H >= 60) g *= 0.4;                       // 계단식 세트백 타워는 아르데코 쪽으로
+  if (H >= 45) return seed < Math.max(0.5, g / (g + d)) ? 0 : 1;   // 고층: 벽돌 블록 대신 유리 커튼월/석조
   return seed < g ? 0 : (seed < g + d ? 1 : 2);
 }
 // 건물 1동(청크)의 지오메트리에서 높이·바닥면적·세트백 단·위치를 읽어 속성을 만든다.
@@ -567,6 +568,13 @@ function nmParse(buf) {
   // 팔레트 → 클래스 (0 지붕 / 1 바닥판 / 2 벽)
   const cls = []; for (let k = 0; k < K; k++) { const r = pal[k * 3], g = pal[k * 3 + 1], bl = pal[k * 3 + 2]; cls.push(r === 170 && g === 75 ? 0 : (r === 145 ? 2 : 1)); }
   return { N, K, pal, org, sc, nup, nxz, nyv, ntri, XZ, YV, PX, PY, TI, TC, Su, St, xo, yo, uo, to, maxU, cls };
+}
+// 실제 뉴욕 옥상: 타르/아스팔트 루핑(짙은 회색·흑색)이 대부분, 자갈 발라스트(회색), 반사 코팅(밝은 회색·은색), 소수의 녹청·진흙색
+const NM_ROOF = [[0.34, [52, 52, 54]], [0.16, [40, 41, 43]], [0.20, [104, 102, 98]], [0.10, [92, 95, 98]], [0.09, [158, 159, 156]], [0.05, [84, 98, 88]], [0.04, [98, 82, 74]], [0.02, [128, 126, 120]]];
+function nmRoofColor(i, pi, ci) {
+  let h = nmHash(i + 91, pi * 5 + 17), c = NM_ROOF[NM_ROOF.length - 1][1]; for (const e of NM_ROOF) { if (h < e[0]) { c = e[1]; break; } h -= e[0]; }
+  const v = 0.92 + 0.16 * nmHash(i + ci * 7 + 3, pi + 29);
+  return [Math.min(255, c[0] * v), Math.min(255, c[1] * v), Math.min(255, c[2] * v)];
 }
 // 건물(청크) 1동의 정점/삼각형을 게임 좌표로 복원
 function nmChunk(d, i) {
@@ -822,13 +830,14 @@ void facParams(float sid, float seed, float H, float cat){
     pFam = 0.0; pBW = r2 < 0.34 ? 1.35 : (r2 < 0.67 ? 1.5 : 1.8); pFH = 3.8 + 0.5 * r3; pSill = r1 > 0.72 ? 0.03 : 0.8 + 0.3 * r3; pCorn = 0.45; pDepth = 0.05;
     if (v < 0.38) { gGC = vec3(0.09, 0.32, 0.36); gWC = vec3(0.16, 0.27, 0.29); gAC = vec3(0.62, 0.66, 0.68); }
     else if (v < 0.72) { gGC = vec3(0.40, 0.48, 0.54); gWC = vec3(0.54, 0.57, 0.60); gAC = vec3(0.80, 0.82, 0.84); }
-    else { gGC = vec3(0.05, 0.09, 0.18); gWC = vec3(0.09, 0.11, 0.15); gAC = vec3(0.22, 0.24, 0.27); }
+    else if (v < 0.86) { gGC = vec3(0.05, 0.09, 0.18); gWC = vec3(0.09, 0.11, 0.15); gAC = vec3(0.22, 0.24, 0.27); }
+    else { gGC = vec3(0.20, 0.30, 0.34); gWC = vec3(0.30, 0.33, 0.35); gAC = vec3(0.70, 0.72, 0.73); }
   } else if (sid < 1.5) {                            // ② 아르데코 석조/콘크리트
     pFam = 1.0; pBW = 2.7 + 0.8 * r2; pFH = 3.7 + 0.4 * r3; pWW = 0.95 + 0.35 * r4; pWH = 1.7 + 0.3 * r1; pSill = 0.85; pCorn = 0.9 + 0.8 * r3; gStone = 1.0;
-    if (v < 0.40) gWC = vec3(0.72, 0.68, 0.58);
-    else if (v < 0.65) gWC = vec3(0.64, 0.50, 0.36);
-    else if (v < 0.88) gWC = vec3(0.58, 0.58, 0.56);
-    else gWC = vec3(0.42, 0.40, 0.39);
+    if (v < 0.30) gWC = vec3(0.68, 0.67, 0.63);
+    else if (v < 0.55) gWC = vec3(0.47, 0.50, 0.54);
+    else if (v < 0.80) gWC = vec3(0.58, 0.58, 0.57);
+    else gWC = vec3(0.38, 0.39, 0.41);
     gAC = vec3(0.30, 0.32, 0.34); gGC = vec3(0.08, 0.11, 0.15);
   } else if (sid < 2.5) {                            // ③ 붉은 벽돌 / 브라운스톤
     pFam = 2.0; pBW = 2.5 + 0.5 * r2; pFH = 3.1 + 0.25 * r3; pWW = 0.95 + 0.2 * r4; pWH = 1.7 + 0.2 * r1; pSill = 0.75; pCorn = 1.0 + 0.5 * r3; gBrick = 1.0;
@@ -1561,7 +1570,8 @@ async function nmBuildPart(P, pi, R, mat, prog) {
           if (v < 0) {
             v = nv++; vmap[kk] = v; Pp[v * 3] = ch.ux[p] - cx0; Pp[v * 3 + 1] = ch.uy[p]; Pp[v * 3 + 2] = ch.uz[p] - cz0;
             let f = k0; if (cl === 2) { const yr = ch.uy[p] - baseY; f *= yr < 3 ? 0.72 : 0.9 + 0.2 * Math.min(1, yr / Math.max(1, HH)); } else if (cl === 1) f *= 0.85;
-            Cc[v * 3] = Math.min(255, d.pal[ci * 3] * f); Cc[v * 3 + 1] = Math.min(255, d.pal[ci * 3 + 1] * f); Cc[v * 3 + 2] = Math.min(255, d.pal[ci * 3 + 2] * f);
+            if (cl === 0) { const rc = nmRoofColor(i, pi, ci); Cc[v * 3] = rc[0]; Cc[v * 3 + 1] = rc[1]; Cc[v * 3 + 2] = rc[2]; }
+            else { Cc[v * 3] = Math.min(255, d.pal[ci * 3] * f); Cc[v * 3 + 1] = Math.min(255, d.pal[ci * 3 + 1] * f); Cc[v * 3 + 2] = Math.min(255, d.pal[ci * 3 + 2] * f); }
             Sa[v * 4] = sB; Sa[v * 4 + 1] = sS; Sa[v * 4 + 2] = sL; Sa[v * 4 + 3] = sP; Tp[v * 4] = tT; Tp[v * 4 + 1] = tB; Tp[v * 4 + 2] = tq[0]; Tp[v * 4 + 3] = tq[1]; Tr[v * 2] = tq[2]; Tr[v * 2 + 1] = tq[3]; Bc[v * 2] = bq0; Bc[v * 2 + 1] = bq1;
           }
           X[pi2++] = v;
