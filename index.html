@@ -1,6 +1,20 @@
 <!DOCTYPE html>
 <html lang="ko">
 <head>
+<script>
+(function() {
+    window.onerror = function(message, source, lineno, colno, error) {
+        var formattedMsg = "[JS Exception] " + message + " at " + (source || "inline") + ":" + lineno;
+        if (window.parent && window.parent.google && window.parent.google.colab) {
+            window.parent.google.colab.kernel.invokeFunction('report_js_error', [formattedMsg], {});
+        }
+    };
+})();
+</script>
+
+
+
+
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>Spider-Man NYC · Manhattan 1:1 Real-Scale Map</title>
@@ -322,7 +336,7 @@ canvas { display: block; width: 100%; height: 100%; }
   window.__LITE=localStorage.getItem('nycLite')==='1';
 }catch(e){}})();
 </script>
-<script>window.addEventListener("error",function(e){var t=document.getElementById("load-status");if(t&&!window.__worldReady)t.textContent="오류: "+(e.message||"알 수 없음")+" (줄 "+e.lineno+")";});</script>
+<script>window.addEventListener("error",function(e){var t=document.getElementById("load-status");if(t&&!window.__worldReady){if(e.lineno !== 0 && e.message) { t.textContent="기럐: "+(e.message||"가ᅦ서배 너므퍄")+" (줄 "+e.lineno+")"; } }});</script>
 <script>
 const DBGQ = Object.fromEntries(new URLSearchParams(location.search)), BUILD_TAG = 'build-0311-c';   // 진단용: ?nowin=1 ?nonoise=1 ?nocity=1 ?pr=2
 console.info(BUILD_TAG, DBGQ);
@@ -400,6 +414,17 @@ const NYC_FACADE_SPECS = {
   apartment:  { id: 7, fam: 'brick',   rough: 0.86, metal: 0.03 },
   plain:      { id: 8, fam: 'concrete',rough: 0.92, metal: 0.02 }
 };
+
+const NYC_LANDMARKS = [
+  { name: 'Empire State Building', x: -73.9857, z: 40.7484, height: 381, style: 'art-deco', color: '#d1c7bd' },
+  { name: 'Chrysler Building', x: -73.9753, z: 40.7516, height: 319, style: 'art-deco', color: '#e5e5e5' },
+  { name: 'One World Trade Center', x: -74.0134, z: 40.7127, height: 541, style: 'modern-glass', color: '#a0c4ff' },
+  { name: 'Rockefeller Center', x: -73.9787, z: 40.7587, height: 260, style: 'stone-deco', color: '#c7bfae' },
+  { name: 'St. Patrick's Cathedral', x: -73.9762, z: 40.7586, height: 100, style: 'gothic-stone', color: '#dfd5c6' },
+  { name: 'Grand Central Terminal', x: -73.9772, z: 40.7527, height: 45, style: 'classical-stone', color: '#cfc4b2' },
+  { name: 'Times Square Tower', x: -73.9851, z: 40.7580, height: 220, style: 'billboard-glass', color: '#1a1a1a' }
+];
+
 const NYC_FACADE_MATS = {};
 // 지구 분류: 0 코어(오피스) / 1 로프트·구도심 / 2 주거 / 3 공원·기타
 const NYC_DISTRICT_CAT = {
@@ -750,9 +775,7 @@ float boxS(float x, float a, float b, float aa){ return smoothstep(a-aa,a+aa,x)*
             float isGlass = step(0.5, sid) * step(sid, 1.5) + step(5.5, sid) * step(sid, 6.5);
             float isLoft = step(3.5, sid) * step(sid, 4.5);
             // ---- 외벽 기본색: 스타일별 재질색 (벽돌은 건물마다 붉은/갈색/황토색) ----
-            vec3 tint = PC; float sel = fract(seed * 5.31);
-            if (isBrick > 0.5) tint = sel < 0.38 ? vec3(0.62, 0.30, 0.22) : (sel < 0.72 ? vec3(0.50, 0.36, 0.27) : vec3(0.72, 0.62, 0.46));
-            if (isLoft > 0.5) tint = sel < 0.5 ? vec3(0.52, 0.34, 0.28) : vec3(0.46, 0.46, 0.46);
+            vec3 tint = vec3(0.6, 0.6, 0.6); // 모든 건물의 외형 색상을 단일 회색 톤으로 통일
             tint *= 0.88 + 0.24 * fract(seed * 13.7);
             float lum0 = dot(diffuseColor.rgb, vec3(0.30, 0.59, 0.11)) / 0.6;
             vec3 col = mix(diffuseColor.rgb, tint * lum0, 0.82);
