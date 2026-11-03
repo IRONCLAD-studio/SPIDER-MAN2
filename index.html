@@ -1155,6 +1155,12 @@ void shopCell(float u, float y, float w, float gH, float SW, out float h, out ve
   } else if (gn.y > 0.5 && H > 1.0 && vSty.z > 0.0) {
     float rn = fbm(vWP.xz * 0.35);
     diffuseColor.rgb *= 0.80 + 0.32 * rn;
+    {   // 지붕 방수막 이음선 + 물얼룩 (가까이서만)
+      float rw = clamp(fwidth(vLP.x) * 1.2, 0.01, 0.6), sm = abs(fract((vLP.x - vAnc.x) * 0.8) - 0.5);
+      float seam = (1.0 - smoothstep(0.455, 0.5, sm)) * 0.0 + smoothstep(0.5 - 0.035 - rw, 0.5 - rw * 0.2, sm) * (1.0 - smoothstep(0.1, 0.35, rw));
+      float pond = smoothstep(0.62, 0.78, fbm((vLP.xz - vAnc) * 0.22 + 3.1)) * 0.22 * (1.0 - smoothstep(0.1, 0.5, rw));
+      diffuseColor.rgb *= 1.0 - 0.18 * seam - pond;
+    }
   }
 }
 `;
@@ -1215,7 +1221,7 @@ function nmMakeGMat(useFloat) {
 // =============================================================================
 const FC = {
   S: 256, time: { value: 0 }, corC: { value: new THREE.Vector3(1e9, 1e9, 256) }, corCx: 1e9, corCz: 1e9, corT: 0,
-  corTex: null, cells: new Map(), acc: 0, matFe: null, matAw: null
+  corTex: null, cells: new Map(), acc: 0, matFe: null, matAw: null, matRf: null
 };
 FC.corTex = (() => {
   const t = new THREE.DataTexture(new Uint8Array(FC.S * FC.S * 4).fill(255), FC.S, FC.S, THREE.RGBAFormat);
@@ -1332,6 +1338,93 @@ function fcEdgeOpen(col, mx, mz, nx, nz, k) {
   for (const c of l) { if (c === col || !c.nm || c.maxY < col.minY + 3) continue; if (px < c.minX || px > c.maxX || pz < c.minZ || pz > c.maxZ) continue; if (pointInPolygonXZ(px, pz, c.ringXZ)) return false; }
   return true;
 }
+
+// ---- 옥상 디테일: 파라펫 · 계단/엘리베이터 탑옥 · 목조 급수탑 · 냉난방 실외기 · 환기관 · 스카이라이트 · 안테나 ----
+function fcRng(a, b) { let s = (Math.imul(a | 0, 374761393) ^ Math.imul(b | 0, 668265263)) >>> 0; return () => { s = (s + 0x6D2B79F5) >>> 0; let t = s; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+function fcPolyDist(ring, x, z) {
+  let m = 1e9; const n = ring.length;
+  for (let i = 0; i < n; i++) { const a = ring[i], b = ring[(i + 1) % n], ex = b.x - a.x, ez = b.z - a.z, l2 = ex * ex + ez * ez || 1e-9; let t = ((x - a.x) * ex + (z - a.z) * ez) / l2; t = Math.max(0, Math.min(1, t)); m = Math.min(m, Math.hypot(x - a.x - ex * t, z - a.z - ez * t)); }
+  return m;
+}
+function fcCyl(G, cx, y, cz, r0, r1, h, seg, col, colTop) {
+  for (let i = 0; i < seg; i++) {
+    const a0 = i / seg * 6.2831853, a1 = (i + 1) / seg * 6.2831853, c0 = Math.cos(a0), s0 = Math.sin(a0), c1 = Math.cos(a1), s1 = Math.sin(a1);
+    const p00 = [cx + c0 * r0, y, cz + s0 * r0], p01 = [cx + c1 * r0, y, cz + s1 * r0], p10 = [cx + c0 * r1, y + h, cz + s0 * r1], p11 = [cx + c1 * r1, y + h, cz + s1 * r1];
+    fcQuad(G, p00, p01, p11, p10, col);
+    fcTri(G, [cx, y + h, cz], p10, p11, colTop || col);
+  }
+}
+const FC_UP = [0, 1, 0];
+function fcRoof(G, col, taller) {
+  const bx = col.bx, sty = bx.sty; if (sty >= 8) return;
+  const ring = col.ringXZ, n = ring.length, y0 = col.maxY, H = bx.H; if (n < 3 || y0 - col.minY < 4) return;
+  let ar = 0, x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9, le = 0, ld = [1, 0];
+  for (let i = 0; i < n; i++) { const a = ring[i], b = ring[(i + 1) % n]; ar += a.x * b.z - b.x * a.z; x0 = Math.min(x0, a.x); x1 = Math.max(x1, a.x); z0 = Math.min(z0, a.z); z1 = Math.max(z1, a.z);
+    const L = Math.hypot(b.x - a.x, b.z - a.z); if (L > le) { le = L; ld = [(b.x - a.x) / L, (b.z - a.z) / L]; } }
+  ar = Math.abs(ar) / 2; if (ar < 25) return;
+  const R = fcRng(bx.sB * 977 + Math.round(y0 * 10), Math.round(ring[0].x * 13 + ring[0].z * 7));
+  const wc = sty === 2 ? [.50, .26, .19] : sty === 1 ? [.64, .62, .57] : sty === 0 ? [.50, .54, .58] : [.55, .53, .50], tone = 0.85 + 0.25 * R();
+  const WC = wc.map(v => v * tone), CAP = wc.map(v => Math.min(1, v * 1.18 + 0.05)), DK = [.10, .10, .11];
+  const adx = ld, anx = [-ld[1], ld[0]], ad = [adx[0], 0, adx[1]], an = [anx[0], 0, anx[1]];
+  // 파라펫: 열린 변(이웃과 맞닿지 않은 변)을 따라 낮은 벽 + 윗면 캡
+  if (!(sty === 0 && H > 60)) {
+    const hp = sty === 0 ? 0.55 : (H < 30 ? 1.0 : 0.8);
+    for (let i = 0; i < n; i++) {
+      const A = ring[i], B = ring[(i + 1) % n], ex = B.x - A.x, ez = B.z - A.z, L = Math.hypot(ex, ez); if (L < 1.2) continue;
+      const d = [ex / L, ez / L]; let nn = [d[1], -d[0]]; const mx = (A.x + B.x) / 2, mz = (A.z + B.z) / 2;
+      if (pointInPolygonXZ(mx + nn[0] * 0.5, mz + nn[1] * 0.5, ring)) nn = [-nn[0], -nn[1]];
+      if (!fcEdgeOpenB(col, mx, mz, nn[0], nn[1])) continue;
+      const c = [mx - nn[0] * 0.16, y0 + hp / 2, mz - nn[1] * 0.16], ax = [d[0], 0, d[1]], az = [nn[0], 0, nn[1]];
+      fcBox(G, c, ax, FC_UP, az, L / 2, hp / 2, 0.15, WC, true);
+      fcBox(G, [c[0], y0 + hp + 0.03, c[2]], ax, FC_UP, az, L / 2 + 0.02, 0.03, 0.2, CAP, true);
+    }
+  }
+  // 장비 배치
+  const placed = [], inTaller = (x, z, r) => { for (const t of taller) { const rr = t.ringXZ; if (pointInPolygonXZ(x, z, rr) || pointInPolygonXZ(x + r, z, rr) || pointInPolygonXZ(x - r, z, rr) || pointInPolygonXZ(x, z + r, rr) || pointInPolygonXZ(x, z - r, rr)) return true; } return false; };
+  const place = (r) => { for (let k = 0; k < 14; k++) { const x = x0 + R() * (x1 - x0), z = z0 + R() * (z1 - z0);
+    if (!pointInPolygonXZ(x, z, ring) || fcPolyDist(ring, x, z) < r + 0.9 || inTaller(x, z, r + 0.6)) continue;
+    let ok = true; for (const q of placed) if (Math.hypot(q[0] - x, q[1] - z) < q[2] + r + 0.5) { ok = false; break; } if (ok) { placed.push([x, z, r]); return [x, z]; } } return null; };
+  let budget = Math.min(9, Math.floor(ar / 80) + 1); if (sty === 0 && H > 60) budget = Math.min(budget, 4);
+  const big = H > 18 && ar > 120, taglow = sty === 2 || sty === 1 || sty === 3;
+  if (big || R() < 0.55) {   // 계단·엘리베이터 탑옥
+    const w = 2.6 + 2.2 * R(), dd = 2.2 + 1.4 * R(), hh = 2.5 + 0.8 * R(), pt = place(Math.hypot(w, dd) / 2);
+    if (pt) { fcBox(G, [pt[0], y0 + hh / 2, pt[1]], ad, FC_UP, an, w / 2, hh / 2, dd / 2, WC, true); fcBox(G, [pt[0], y0 + hh + 0.06, pt[1]], ad, FC_UP, an, w / 2 + 0.12, 0.06, dd / 2 + 0.12, CAP, true);
+      fcBox(G, [pt[0] + an[0] * (dd / 2 + 0.01), y0 + 1.0, pt[1] + an[2] * (dd / 2 + 0.01)], ad, FC_UP, an, 0.5, 1.0, 0.02, DK, true); budget--; }
+  }
+  if (taglow && H >= 8 && H < 95 && R() < (sty === 2 ? 0.5 : 0.35)) {   // 급수탑
+    const pt = place(1.9);
+    if (pt) { const r = 1.5 + 0.2 * R(), h = 3.0 + 0.4 * R(), leg = 1.3, wood = [.36 + .06 * R(), .25, .16], iron = [.12, .12, .13];
+      for (const [ox, oz] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) fcBar(G, [pt[0] + ox * r * 0.7, y0, pt[1] + oz * r * 0.7], [pt[0] + ox * r * 0.7, y0 + leg, pt[1] + oz * r * 0.7], 0.07, iron);
+      fcBox(G, [pt[0], y0 + leg - 0.05, pt[1]], ad, FC_UP, an, r + 0.1, 0.06, r + 0.1, iron, true);
+      fcCyl(G, pt[0], y0 + leg, pt[1], r, r, h, 14, wood, wood);
+      for (const f of [0.18, 0.5, 0.82]) fcCyl(G, pt[0], y0 + leg + h * f, pt[1], r + 0.03, r + 0.03, 0.07, 14, iron, iron);
+      fcCyl(G, pt[0], y0 + leg + h, pt[1], r + 0.12, 0.05, 0.95, 14, [.27, .2, .15], [.27, .2, .15]); budget--; }
+  }
+  for (let k = 0; k < budget; k++) {
+    const t = R();
+    if (t < 0.5) {   // 실외기
+      const pt = place(1.3); if (!pt) continue; const w = 1.4 + 0.9 * R(), dd = 0.9 + 0.4 * R(), hh = 0.8 + 0.5 * R(), g = [.60 + .06 * R(), .62 + .05 * R(), .64];
+      fcBox(G, [pt[0], y0 + 0.2 + hh / 2, pt[1]], ad, FC_UP, an, w / 2, hh / 2, dd / 2, g, true); fcBox(G, [pt[0], y0 + 0.1, pt[1]], ad, FC_UP, an, w / 2 - 0.1, 0.1, dd / 2 - 0.1, DK, true);
+      const nf = w > 1.9 ? 2 : 1; for (let f = 0; f < nf; f++) { const s = nf === 1 ? 0 : (f - 0.5) * w * 0.5; fcCyl(G, pt[0] + ad[0] * s, y0 + 0.2 + hh + 0.01, pt[1] + ad[2] * s, Math.min(dd, w / nf) * 0.38, Math.min(dd, w / nf) * 0.38, 0.04, 10, DK, DK); }
+    } else if (t < 0.75) {   // 환기관
+      const pt = place(0.5); if (!pt) continue; const h = 1.1 + 1.1 * R(), r = 0.07 + 0.05 * R(), g = [.55, .56, .58];
+      fcCyl(G, pt[0], y0, pt[1], r, r, h, 6, g, g); fcCyl(G, pt[0], y0 + h, pt[1], r * 2.2, 0.02, 0.22, 6, [.35, .36, .38], [.35, .36, .38]);
+    } else if (t < 0.9) {   // 스카이라이트
+      const pt = place(1.0); if (!pt) continue; const w = 1.2 + 0.8 * R();
+      fcBox(G, [pt[0], y0 + 0.2, pt[1]], ad, FC_UP, an, w / 2, 0.2, w / 2 * 0.8, CAP, true); fcBox(G, [pt[0], y0 + 0.43, pt[1]], ad, FC_UP, an, w / 2 - 0.08, 0.05, w / 2 * 0.8 - 0.08, [.30, .44, .52], true);
+    } else if (H > 35) {   // 안테나
+      const pt = place(0.4); if (!pt) continue; const h = 5 + 8 * R(), g = [.2, .2, .22];
+      fcBar(G, [pt[0], y0, pt[1]], [pt[0], y0 + h, pt[1]], 0.05, g);
+      for (const f of [0.55, 0.8]) fcBar(G, [pt[0] - ad[0] * 0.7, y0 + h * f, pt[1] - ad[2] * 0.7], [pt[0] + ad[0] * 0.7, y0 + h * f, pt[1] + ad[2] * 0.7], 0.025, g);
+    }
+  }
+}
+function fcEdgeOpenB(col, mx, mz, nx, nz) {   // 같은 건물의 다른 단(tier)은 이웃으로 보지 않는다
+  const px = mx + nx * 0.9, pz = mz + nz * 0.9;
+  const l = spatialColliderGrid.get(Math.floor(px / SPATIAL_CELL) + ',' + Math.floor(pz / SPATIAL_CELL)); if (!l) return true;
+  for (const c of l) { if (c === col || !c.nm || c.bx === col.bx || c.maxY < col.maxY - 1) continue; if (px < c.minX || px > c.maxX || pz < c.minZ || pz > c.maxZ) continue; if (pointInPolygonXZ(px, pz, c.ringXZ)) return false; }
+  return true;
+}
 function fcBuildCell(a, b, key) {
   const lst = spatialColliderGrid.get(key), Gf = fcNewG(), Ga = fcNewG();
   const entry = { x: (a + 0.5) * SPATIAL_CELL, z: (b + 0.5) * SPATIAL_CELL, meshes: [] }; FC.cells.set(key, entry);
@@ -1371,6 +1464,14 @@ function fcBuildCell(a, b, key) {
       }
     }
   }
+  // 옥상 디테일 (모든 단의 지붕)
+  const Gr = fcNewG(), byB = new Map();
+  for (const col of lst) { if (col.nm && col.bx) { let q = byB.get(col.bx); if (!q) byB.set(col.bx, q = []); if (!q.includes(col)) q.push(col); } }
+  for (const col of lst) {
+    if (!col.nm || !col.bx || col.bx.sty >= 8) continue;
+    if (Math.floor(col.centX / SPATIAL_CELL) !== a || Math.floor(col.centZ / SPATIAL_CELL) !== b) continue;
+    try { fcRoof(Gr, col, (byB.get(col.bx) || []).filter(o => o !== col && o.maxY > col.maxY + 0.5)); } catch (e) { }
+  }
   const mk = (G, mat, nm) => {
     if (!G.p.length) return;
     const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(G.p), 3)); g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(G.c), 3));
@@ -1379,8 +1480,9 @@ function fcBuildCell(a, b, key) {
   if (!FC.matFe) {
     FC.matFe = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.55, metalness: 0.6, flatShading: true, side: THREE.DoubleSide });
     FC.matAw = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, metalness: 0.0, flatShading: true, side: THREE.DoubleSide });
+    FC.matRf = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.85, metalness: 0.1, flatShading: true, side: THREE.DoubleSide });
   }
-  mk(Gf, FC.matFe, 'NYC_FireEscapes'); mk(Ga, FC.matAw, 'NYC_Awnings');
+  mk(Gf, FC.matFe, 'NYC_FireEscapes'); mk(Ga, FC.matAw, 'NYC_Awnings'); mk(Gr, FC.matRf, 'NYC_RoofProps');
 }
 
 function fcUpdate(dt) {
