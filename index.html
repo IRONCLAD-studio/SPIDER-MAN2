@@ -858,6 +858,32 @@ float boxS(float x, float a, float b, float aa){ return smoothstep(a-aa,a+aa,x)*
   window.__baseWallMat = m;
   return m;
 }
+// ---- 겹친 벽 제거: 서로 다른 건물에서 같은 평면·같은 방향으로 완전히 덮이는 벽 삼각형은 Z-fighting 원인이라 버린다 ----
+function nmWallDup(WP, ch, t, own) {
+  const LOOSE = DBGQ.dedup === '2';
+  const T = ch.T, a = T[t * 3], b = T[t * 3 + 1], c = T[t * 3 + 2], X = ch.ux, Y = ch.uy, Z = ch.uz;
+  const ax = X[a], ay = Y[a], az = Z[a], bx = X[b], by = Y[b], bz = Z[b], cx = X[c], cy = Y[c], cz = Z[c];
+  const e1x = bx - ax, e1y = by - ay, e1z = bz - az, e2x = cx - ax, e2y = cy - ay, e2z = cz - az;
+  let nx = e1y * e2z - e1z * e2y, ny = e1z * e2x - e1x * e2z, nz = e1x * e2y - e1y * e2x; const ln = Math.sqrt(nx * nx + ny * ny + nz * nz);
+  if (ln < 1e-6) return false; nx /= ln; ny /= ln; nz /= ln; if (Math.abs(ny) > 0.3) return false;
+  const key = ((Math.round(nx * 40) + 50) * 101 + Math.round(nz * 40) + 50) * 400000 + Math.round((nx * ax + ny * ay + nz * az) * 25) + 200000;
+  let L = WP.get(key); if (!L) WP.set(key, L = []);
+  for (let q = 0; q < L.length; q++) {
+    const o = L[q]; if (o.own === own) continue;
+    if (LOOSE) { if ((nmTriHas(o, ax, ay, az) + nmTriHas(o, bx, by, bz) + nmTriHas(o, cx, cy, cz)) >= 2 && nmTriHas(o, (ax + bx + cx) / 3, (ay + by + cy) / 3, (az + bz + cz) / 3)) return true; }   // ?dedup=2 : 더 공격적(틈 위험 약간)
+    else if (nmTriHas(o, ax, ay, az) && nmTriHas(o, bx, by, bz) && nmTriHas(o, cx, cy, cz)) return true;
+  }
+  L.push({ own, ax, ay, az, v0x: cx - ax, v0y: cy - ay, v0z: cz - az, v1x: e1x, v1y: e1y, v1z: e1z });
+  return false;
+}
+function nmTriHas(o, px, py, pz) {   // o: 삼각형 A(ax..) + 변벡터 v0=C-A, v1=B-A. 3D 무게중심 좌표로 포함 검사(약간 여유)
+  const v2x = px - o.ax, v2y = py - o.ay, v2z = pz - o.az;
+  const d00 = o.v0x * o.v0x + o.v0y * o.v0y + o.v0z * o.v0z, d01 = o.v0x * o.v1x + o.v0y * o.v1y + o.v0z * o.v1z, d11 = o.v1x * o.v1x + o.v1y * o.v1y + o.v1z * o.v1z;
+  const d20 = v2x * o.v0x + v2y * o.v0y + v2z * o.v0z, d21 = v2x * o.v1x + v2y * o.v1y + v2z * o.v1z, den = d00 * d11 - d01 * d01;
+  if (Math.abs(den) < 1e-9) return false;
+  const u = (d11 * d20 - d01 * d21) / den, v = (d00 * d21 - d01 * d20) / den, e = -0.01;
+  return u >= e && v >= e && u + v <= 1.01;
+}
 async function nmBuildPart(P, pi, R, mat, prog) {
   const d = P.d, K = d.K, N = d.N, cls = d.cls, cells = new Map();
   for (let i = 0; i < N; i++) {
@@ -868,13 +894,14 @@ async function nmBuildPart(P, pi, R, mat, prog) {
   for (const [key, list] of cells) {
     const [gx, gz] = key.split(',').map(Number), cx0 = gx * 400, cz0 = gz * 400;
     let bv = 0, nI = 0; for (const i of list) { bv += Math.min(d.nup[i] * K, d.ntri[i] * 3); nI += d.ntri[i] * 3; }
-    const Pp = new Float32Array(bv * 3), Cc = new Uint8Array(bv * 3), X = new Uint32Array(nI), Sa = new Uint8Array(bv * 4), Tp = new Uint16Array(bv * 2); let nv = 0, pi2 = 0;
+    const Pp = new Float32Array(bv * 3), Cc = new Uint8Array(bv * 3), X = new Uint32Array(nI), Sa = new Uint8Array(bv * 4), Tp = new Uint16Array(bv * 2); let nv = 0, pi2 = 0; const WP = new Map();
     for (const i of list) {
       const ch = nmChunk(d, i), baseY = d.org[i * 3 + 1], HH = d.sc[i * 3 + 1] * 65535, k0 = 0.9 + 0.2 * nmHash(i + 1, pi * 7 + 3);
       const inf = nycBldInfo(ch, cls, i), sB = inf.style, sS = Math.round(inf.seed * 255), sL = Math.max(1, Math.round(inf.lit * 255)), sP = inf.shop ? 255 : 0, tT = Math.round((inf.topY + 64) / 1024 * 65535), tB = Math.round((inf.baseY + 64) / 1024 * 65535);
       vmap.fill(-1, 0, ch.nu * K);
       for (let t = 0; t < ch.nt; t++) {
         const ci = ch.C[t], cl = cls[ci];
+        if (cl === 2 && !DBGQ.nodedup && nmWallDup(WP, ch, t, i)) continue;   // ?nodedup=1 로 끌 수 있음
         for (let k = 0; k < 3; k++) {
           const p = ch.T[t * 3 + k], kk = p * K + ci; let v = vmap[kk];
           if (v < 0) {
