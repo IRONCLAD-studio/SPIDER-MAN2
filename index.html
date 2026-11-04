@@ -169,6 +169,23 @@ canvas { display: block; width: 100%; height: 100%; }
   cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
   padding: 0; line-height: 1;
 }
+
+@media (max-width: 640px) {
+  .hud-panel { top: 8px; left: 8px; right: 8px; min-width: 0; max-width: none; padding: 7px 10px; }
+  .hud-title { font-size: 11px; margin-bottom: 2px; }
+  .hud-text { font-size: 10px; margin: 1px 0; line-height: 1.3; }
+  .hud-badge { font-size: 9px; padding: 1px 5px; }
+  .top-right-bar { top: 128px; left: 8px; right: 8px; align-items: stretch; gap: 6px; }
+  .look-hint { display: none; }
+  .top-btn-row { justify-content: flex-start; gap: 6px; }
+  .util-btn { padding: 6px 9px; font-size: 10px; }
+  #joystick-zone { width: 130px; height: 130px; left: 14px; bottom: 18px; }
+  #joystick-stick { top: 36px; left: 36px; }
+  .action-buttons { right: 12px; bottom: 16px; display: grid; grid-template-columns: auto auto; gap: 9px 10px; justify-items: end; align-items: end; }
+  .action-btn { width: 58px; height: 58px; font-size: 11px; }
+  #btn-jump { width: 68px; height: 68px; font-size: 12px; }
+  #btn-web { width: 78px; height: 78px; font-size: 14px; }
+}
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 </head>
@@ -1756,30 +1773,65 @@ function nmBuildTerrain(R) {
   NM.ter = { x0: R.x0, z0: R.z0, cs: NM_CS, w: vw, h: vh, hgt, land: cland };
   const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.92, metalness: 0.0, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 2 });
   mat.extensions = Object.assign({}, mat.extensions, { derivatives: true });
-  mat.onBeforeCompile = function (sh) {   // 차도가 없는 지면 = 인도: 5ft 콘크리트 슬랩 + 줄눈 (월드좌표, 거리에 따라 페이드)
+  mat.onBeforeCompile = function (sh) {   // 차도가 없는 지면 = 인도: 뉴욕 보도 콘크리트 (5ft 슬랩, 줄눈, 때, 균열, 껌, 타르 보수, 얼룩)
     sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vPvW;').replace('#include <begin_vertex>', '#include <begin_vertex>\nvPvW = (modelMatrix * vec4(transformed, 1.0)).xyz;');
-    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vPvW;\nfloat pvH(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }')
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
+varying vec3 vPvW;
+vec2 pvG = vec2(0.0);
+float pvH(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float pvN(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(pvH(i), pvH(i + vec2(1.0, 0.0)), f.x), mix(pvH(i + vec2(0.0, 1.0)), pvH(i + vec2(1.0, 1.0)), f.x), f.y); }
+float pvF(vec2 p) { float a = 0.5, s = 0.0; for (int i = 0; i < 4; i++) { s += a * pvN(p); p = p * 2.03 + vec2(17.1, 9.2); a *= 0.5; } return s; }
+`)
       .replace('#include <color_fragment>', `#include <color_fragment>
       {
-        vec2 q = vPvW.xz / 1.524; vec2 f = fract(q), id = floor(q);
+        vec2 w = vPvW.xz;
+        vec2 q = w / 1.524; vec2 f = fract(q), id = floor(q);
         float fw = max(max(fwidth(q.x), fwidth(q.y)), 1e-4);
+        float px = fw * 1.524;
         float fade = 1.0 - smoothstep(0.10, 0.40, fw);
+        float f1 = 1.0 - smoothstep(0.015, 0.06, px);
+        float f2 = 1.0 - smoothstep(0.2, 1.0, px);
         vec2 e = min(f, 1.0 - f); float dd = min(e.x, e.y);
         float joint = 1.0 - smoothstep(0.010, 0.010 + fw, dd);
-        diffuseColor.rgb *= mix(1.0, 0.93 + 0.14 * pvH(id), fade);
-        diffuseColor.rgb *= 1.0 - 0.40 * joint * fade;
-      }`);
+        float halo = 1.0 - smoothstep(0.0, 0.07, dd);
+        float tone = (0.88 + 0.24 * pvH(id)) * (0.80 + 0.40 * pvF(w / 14.0 + 3.0));
+        tone *= mix(1.0, 0.86 + 0.28 * pvF(w / 1.3 + 21.0), f2);
+        tone *= 1.0 - 0.22 * smoothstep(0.62, 0.80, pvF(w / 3.5 + 50.0)) * f2;
+        tone *= 1.0 + (pvH(floor(w * 40.0)) - 0.5) * 0.24 * f1;
+        tone *= 1.0 - 0.13 * halo * fade;
+        tone *= 1.0 - 0.45 * joint * fade;
+        float cw = max(0.012, px / 0.9);
+        float crack = (1.0 - smoothstep(0.0, cw, abs(pvN(w / 0.9 + id * 3.1) - 0.5))) * step(0.72, pvH(id + 3.3));
+        tone *= 1.0 - 0.5 * crack * f2;
+        vec2 gc = floor(w * 5.0);
+        float gd = length(fract(w * 5.0) - vec2(pvH(gc + 1.7), pvH(gc + 5.3)));
+        tone *= 1.0 - 0.35 * step(0.965, pvH(gc)) * (1.0 - smoothstep(0.05, 0.09, gd)) * f2;
+        vec2 t6 = w / 6.0, tp = fract(t6);
+        float tar = step(0.94, pvH(floor(t6) + 11.0)) * step(0.15, tp.x) * step(tp.x, 0.78) * step(0.2, tp.y) * step(tp.y, 0.7);
+        tone *= mix(1.0, 0.42 + 0.1 * pvF(w * 2.0), tar);
+        vec3 tint = mix(vec3(1.02, 1.0, 0.96), vec3(0.96, 0.98, 1.02), pvH(id + 7.0));
+        diffuseColor.rgb *= tone * tint;
+        float h0 = pvN(w * 18.0), hx = pvN((w + vec2(0.02, 0.0)) * 18.0), hz = pvN((w + vec2(0.0, 0.02)) * 18.0);
+        pvG = vec2(hx - h0, hz - h0) / 0.02 * 0.004 * f1;
+      }`)
+      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+      { if (!(dot(normal, normal) > 0.25)) normal = normalize((viewMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xyz);
+        vec3 wn = normalize((vec4(normal, 0.0) * viewMatrix).xyz); wn = normalize(wn + vec3(-pvG.x, 0.0, -pvG.y)); normal = normalize((viewMatrix * vec4(wn, 0.0)).xyz); }`)
+      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += diffuseColor.rgb * 0.06;');
   };
   const TILE = 40, out = [];
-  const colAt = (i, j) => { const n = 0.94 + 0.12 * nmHash(i, j); return [0.50 * n, 0.49 * n, 0.47 * n]; };
+  const colAt = (i, j) => { const n = 0.94 + 0.12 * nmHash(i, j); return [0.60 * n, 0.59 * n, 0.57 * n]; };
   for (let tj = 0; tj < ch; tj += TILE) for (let ti = 0; ti < cw; ti += TILE) {
     const i1 = Math.min(cw, ti + TILE), j1 = Math.min(ch, tj + TILE); let any = false;
     for (let j = tj; j < j1 && !any; j++) for (let i = ti; i < i1; i++) if (cland[j * cw + i]) { any = true; break; }
     if (!any) continue;
-    const ox = R.x0 + ti * NM_CS, oz = R.z0 + tj * NM_CS, P = [], C = [], X = [], vm = new Map();
-    const V = (i, j) => { const k = j * vw + i; let v = vm.get(k); if (v === undefined) { v = P.length / 3; vm.set(k, v); P.push(i * NM_CS - (ti * NM_CS), hgt[k] - 0.1, j * NM_CS - (tj * NM_CS)); C.push(...colAt(i, j)); } return v; };
+    const ox = R.x0 + ti * NM_CS, oz = R.z0 + tj * NM_CS, P = [], C = [], X = [], Nn = [], vm = new Map();
+    const hN = (ii, jj) => hgt[Math.min(vh - 1, Math.max(0, jj)) * vw + Math.min(vw - 1, Math.max(0, ii))];
+    const V = (i, j) => { const k = j * vw + i; let v = vm.get(k); if (v === undefined) { v = P.length / 3; vm.set(k, v); P.push(i * NM_CS - (ti * NM_CS), hgt[k] - 0.1, j * NM_CS - (tj * NM_CS)); C.push(...colAt(i, j));
+      const nx = -(hN(i + 1, j) - hN(i - 1, j)) / (2 * NM_CS), nz = -(hN(i, j + 1) - hN(i, j - 1)) / (2 * NM_CS), nl = Math.hypot(nx, 1, nz); Nn.push(nx / nl, 1 / nl, nz / nl); } return v; };
     const skirt = (a, b) => { const v0 = V(a[0], a[1]), v1 = V(b[0], b[1]), n = P.length / 3;
-      P.push(P[v0 * 3], -4, P[v0 * 3 + 2], P[v1 * 3], -4, P[v1 * 3 + 2]); C.push(0.08, 0.09, 0.11, 0.08, 0.09, 0.11); X.push(v0, v1, n + 1, v0, n + 1, n); };
+      P.push(P[v0 * 3], -4, P[v0 * 3 + 2], P[v1 * 3], -4, P[v1 * 3 + 2]); C.push(0.08, 0.09, 0.11, 0.08, 0.09, 0.11); Nn.push(0, 1, 0, 0, 1, 0); X.push(v0, v1, n + 1, v0, n + 1, n); };
     for (let j = tj; j < j1; j++) for (let i = ti; i < i1; i++) {
       if (!cland[j * cw + i]) continue;
       const a = V(i, j), b = V(i + 1, j), c = V(i, j + 1), d2 = V(i + 1, j + 1); X.push(a, c, b, b, c, d2);
@@ -1787,7 +1839,7 @@ function nmBuildTerrain(R) {
       if (nl(i, j - 1)) skirt([i, j], [i + 1, j]); if (nl(i, j + 1)) skirt([i + 1, j + 1], [i, j + 1]);
       if (nl(i - 1, j)) skirt([i, j + 1], [i, j]); if (nl(i + 1, j)) skirt([i + 1, j], [i + 1, j + 1]);
     }
-    const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(P, 3)); g.setAttribute('color', new THREE.Float32BufferAttribute(C, 3));
+    const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(P, 3)); g.setAttribute('color', new THREE.Float32BufferAttribute(C, 3)); g.setAttribute('normal', new THREE.Float32BufferAttribute(Nn, 3));
     g.setIndex(X.length > 0 ? new THREE.Uint32BufferAttribute(X, 1) : null); g.computeBoundingSphere();
     const m = new THREE.Mesh(g, mat); m.name = 'NM_Ground'; m.position.set(ox, 0, oz); scene.add(m); NM.cellMeshes.push({ mesh: m, x: ox + 200, z: oz + 200, ground: true });
   }
@@ -2222,7 +2274,7 @@ function nrNearRoad(x, z) {
   let best = null, bd = 1e9; const cx = Math.floor(x / 8), cz = Math.floor(z / 8);
   for (let a = -2; a <= 2; a++) for (let b = -2; b <= 2; b++) { const l = NR.roadGrid.get(nrRgKey(cx + a, cz + b)); if (!l) continue;
     for (let q = 0; q < l.length; q += 5) { const d = Math.hypot(l[q] - x, l[q + 1] - z); if (d < bd) { bd = d; best = q; best_l = l; } } }
-  return best !== null ? { dx: best_l[best] - x, dz: best_l[best + 1] - z, d: bd } : null;
+  return best !== null ? { dx: best_l[best] - x, dz: best_l[best + 1] - z, d: bd, hw: best_l[best + 4] } : null;
 }
 let best_l = null;
 function nrProps(P) {
@@ -2237,7 +2289,15 @@ function nrProps(P) {
         nrBox(B, C, x + sx * 1.5, y + 7.25, z + sz * 1.5, 0.3, 0.1, 0.8, rot, [70, 70, 74], so, 0.5);
         nrLh(L, C, x + sx * 1.5, y + 7.17, z + sz * 1.5, 0.26, 0.7, rot, [255, 214, 140]); break; }
       case 2: { const d = P.sc[i] / 10, s = d > 1 ? Math.max(0.6, Math.min(1.8, d / 5.2)) : 0.75 + 0.6 * h; C.tr.push([x, y, z, s, h * 6.283, nrH(z, x)]); break; }
-      case 3: nrBox(B, C, x, y + 0.45, z, 1.7, 0.1, 0.5, rot + Math.PI / 2, [92, 62, 38], so, 0.5); nrBox(B, C, x, y + 0.2, z, 1.5, 0.4, 0.4, rot + Math.PI / 2, [50, 50, 54], so, 0.5); break;
+      case 3: {   // 벤치: 긴 방향이 도로와 평행, 등받이는 도로 반대쪽, 앉는 면은 도로를 향함. 경사면에서는 가장 낮은 지면에 다리를 맞춤
+        if (nr && nr.hw && nr.d < nr.hw - 0.3) break;   // 차도 위면 생략
+        const cs = Math.cos(rot), sn = Math.sin(rot), W = (a, b) => [x + a * cs + b * sn, z - a * sn + b * cs];
+        let gy = y; for (const [a, b] of [[-0.85, 0], [0.85, 0], [0, 0.25], [0, -0.25]]) { const q = W(a, b); gy = Math.min(gy, nmGroundAt(q[0], q[1])); }
+        const WOOD = [104, 74, 46], IRON = [38, 40, 44]; let q;
+        q = W(0, 0.02); nrBox(B, C, q[0], gy + 0.44, q[1], 1.7, 0.07, 0.46, rot, WOOD, so, 0.5);
+        q = W(0, -0.21); nrBox(B, C, q[0], gy + 0.70, q[1], 1.7, 0.34, 0.05, rot, WOOD, so, 0.5);
+        for (const sd of [-1, 1]) { q = W(sd * 0.74, 0); nrBox(B, C, q[0], gy + 0.18, q[1], 0.07, 0.46, 0.44, rot, IRON, so, 0.5); q = W(sd * 0.74, -0.21); nrBox(B, C, q[0], gy + 0.55, q[1], 0.07, 0.5, 0.06, rot, IRON, so, 0.5); }
+        break; }
       case 4: nrBox(B, C, x, y + 0.45, z, 0.7, 0.9, 0.05, rot, [130, 130, 136], so, 0.5); break;
       case 5: nrBox(B, C, x, y + 0.38, z, 0.28, 0.76, 0.28, 0, [190, 28, 22], so, 0.5); break;
       case 6: nrBox(B, C, x, y + 0.48, z, 0.5, 0.96, 0.5, 0, [40, 72, 46], so, 0.5); break;
@@ -4519,7 +4579,7 @@ function gfxBloomInit() {
         vec4 pc = prevVP * vec4(wp, 1.0);
         vec2 vel = vec2(0.0);
         if (pc.w > 0.01) vel = (uv - (pc.xy / pc.w * 0.5 + 0.5)) * mbK;
-        float vl = length(vel); vel *= smoothstep(0.0025, 0.012, vl); if (vl > 0.03) vel *= 0.03 / vl;
+        float vl = length(vel); vel *= smoothstep(0.0025, 0.012, vl); if (vl > 0.012) vel *= 0.012 / vl;
         vec3 c = vec3(0.0);
         for (int i = 0; i < 8; i++) { float t = float(i) / 7.0 - 0.5; c += sampleCA(uv + vel * t); }
         c /= 8.0;
@@ -5066,7 +5126,7 @@ function gfx2Prep(u, W, H) {
   u.tanHalf.value = Math.tan(THREE.MathUtils.degToRad(camera.fov) * 0.5);
   u.camWorld.value.copy(camera.matrixWorld); u.camPos.value.copy(camera.position); u.prevVP.value.copy(GFX2.prev);
   GFX2.prev.copy(GFX2.cur);
-  u.wet.value = GFX2.wet; u.fogK.value = fogK; u.mbK.value = 0.35; u.sunI.value = GFX.sunI;
+  u.wet.value = GFX2.wet; u.fogK.value = fogK; u.mbK.value = 0.10; u.sunI.value = GFX.sunI;
   u.fogCol.value.copy(scene.fog.color); u.sunDirW.value.copy(GFX.sunDir); u.sunCol.value.setHex(P.sun); u.skyTop.value.setHex(P.top); u.skyHor.value.copy(scene.fog.color);
 }
 // ---------- 2단 캐스케이드 그림자(근거리 = 기존 고해상도, 원거리 = 넓은 범위 보조 맵) ----------
@@ -6314,6 +6374,16 @@ window.LUX = LUX;
 
 
 window.onload = init;
+</script>
+<script>
+(function () {   // 좁은 화면: HUD 높이에 맞춰 상단 버튼 줄을 HUD 바로 아래로 배치 (글씨 가림 방지)
+  const hp = document.getElementById('hud-panel'), bar = document.querySelector('.top-right-bar');
+  if (!hp || !bar) return;
+  const fit = () => { bar.style.top = window.innerWidth <= 640 ? (hp.offsetTop + hp.offsetHeight + 8) + 'px' : ''; };
+  window.addEventListener('resize', fit); window.addEventListener('orientationchange', fit);
+  if (window.ResizeObserver) new ResizeObserver(fit).observe(hp);
+  fit();
+})();
 </script>
 </body>
 </html>
