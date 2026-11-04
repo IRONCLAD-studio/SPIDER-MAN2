@@ -597,7 +597,7 @@ function nmRoofColor(i, pi, ci) {
   return [Math.min(255, c[0] * v), Math.min(255, c[1] * v), Math.min(255, c[2] * v)];
 }
 // 건물(청크) 1동의 정점/삼각형을 게임 좌표로 복원
-function nmChunk(d, i) {
+function nmChunk(d, i, raw) {
   const nu = d.nup[i], nt = d.ntri[i], u0 = d.uo[i], t0 = d.to[i], xo = d.xo[i], yo = d.yo[i], Su = d.Su, St = d.St;
   const ox = d.org[i * 3] - NM_OX, oy = d.org[i * 3 + 1], oz = d.org[i * 3 + 2] - NM_OZ, sx = d.sc[i * 3], sy = d.sc[i * 3 + 1], sz = d.sc[i * 3 + 2];
   const ux = new Float32Array(nu), uy = new Float32Array(nu), uz = new Float32Array(nu); let id = 0;
@@ -607,6 +607,7 @@ function nmChunk(d, i) {
   }
   const T = new Uint16Array(nt * 3); let prev = 0;
   for (let t = 0; t < nt; t++) for (let k = 0; k < 3; k++) { const j = (t0 + t) * 3 + k; prev = (prev + (d.TI[j] | d.TI[St * 3 + j] << 8)) & 65535; T[t * 3 + k] = prev; }
+  if (!raw) nmSeatBuilding(ux, uy, uz, nu);   // 매끈해진 지면에 건물 바닥을 맞춘다(공중부양/매몰 방지)
   return { nu, nt, ux, uy, uz, T, C: d.TC.subarray(t0, t0 + nt) };
 }
 
@@ -1598,6 +1599,19 @@ function fcUpdate(dt) {
   for (const [k, e] of FC.cells) if (Math.hypot(e.x - cx, e.z - cz) > R + 260) { for (const me of e.meshes) { scene.remove(me); me.geometry.dispose(); } FC.cells.delete(k); }
 }
 
+function nmMinY(ch) { let m = 1e9; for (let u = 0; u < ch.nu; u++) if (ch.uy[u] < m) m = ch.uy[u]; return m; }
+// 지형 래스터(건물 바닥 고도·지붕 높이)를 먼저 만든다 — 지형이 건물 메시보다 먼저 만들어져야 건물을 지면에 앉힐 수 있다.
+async function nmPreRaster(d, R, prog) {
+  for (let i = 0; i < d.N; i++) {
+    const ch = nmChunk(d, i, true), baseY = d.org[i * 3 + 1];
+    for (let t = 0; t < ch.nt; t++) {
+      const cl = d.cls[ch.C[t]]; if (cl === 2) continue; const a = ch.T[t * 3], b = ch.T[t * 3 + 1], c = ch.T[t * 3 + 2];
+      if (cl === 1) { const my = Math.min(ch.uy[a], ch.uy[b], ch.uy[c]); if (my <= baseY + 4) nmRast(R, ch.ux[a], ch.uz[a], ch.ux[b], ch.uz[b], ch.ux[c], ch.uz[c], my, 0); }
+      else nmRast(R, ch.ux[a], ch.uz[a], ch.ux[b], ch.uz[b], ch.ux[c], ch.uz[c], Math.max(ch.uy[a], ch.uy[b], ch.uy[c]), 1);
+    }
+    if ((i & 1023) === 1023) { if (prog) prog(i / d.N); await nmYield(); }
+  }
+}
 async function nmBuildPart(P, pi, R, mat, prog) {
   const d = P.d, K = d.K, N = d.N, cls = d.cls, cells = new Map();
   for (let i = 0; i < N; i++) {
@@ -1610,7 +1624,7 @@ async function nmBuildPart(P, pi, R, mat, prog) {
     let bv = 0, nI = 0; for (const i of list) { bv += Math.min(d.nup[i] * K, d.ntri[i] * 3); nI += d.ntri[i] * 3; }
     const Pp = new Float32Array(bv * 3), Cc = new Uint8Array(bv * 3), X = new Uint32Array(nI), Sa = new Uint8Array(bv * 4), Tp = new Uint16Array(bv * 4), Tr = new Uint16Array(bv * 2), Bc = new Int16Array(bv * 2), Wn = new Int16Array(bv * 2).fill(-1); let nv = 0, pi2 = 0;
     for (const i of list) {
-      const ch = nmChunk(d, i), baseY = d.org[i * 3 + 1], HH = d.sc[i * 3 + 1] * 65535, k0 = 0.9 + 0.2 * nmHash(i + 1, pi * 7 + 3);
+      const ch = nmChunk(d, i), baseY = nmMinY(ch), HH = d.sc[i * 3 + 1] * 65535, k0 = 0.9 + 0.2 * nmHash(i + 1, pi * 7 + 3);
       const inf = nycBldInfo(ch, cls, i, pi + ':' + i), sB = inf.style, sS = Math.round(inf.seed * 255), sL = Math.max(1, Math.round(inf.lit * 255)), sP = inf.code * 16, tT = Math.round((inf.topY + 64) / 1024 * 65535), tB = Math.round((inf.baseY + 64) / 1024 * 65535);
       const tq = [0, 0, 0, 0]; for (let q = 0; q < inf.tiers.length; q++) tq[q] = Math.round((inf.tiers[q] + 64) / 1024 * 65535);
       // 건물 기준점(바운딩 중심, 셀 로컬 0.0125m 격자): 창 격자 좌표를 작은 수로 계산하기 위한 앵커
@@ -1639,9 +1653,6 @@ async function nmBuildPart(P, pi, R, mat, prog) {
             if (s0 < 0) Wn[v * 2] = wq;
             else { let d0 = Math.abs(s0 - wq); d0 = Math.min(d0, 32768 - d0); if (d0 > 10 && s1 < 0) Wn[v * 2 + 1] = wq; } }
         }
-        if (cl !== 2) { const a = ch.T[t * 3], b = ch.T[t * 3 + 1], c = ch.T[t * 3 + 2];
-          if (cl === 1) { const my = Math.min(ch.uy[a], ch.uy[b], ch.uy[c]); if (my <= baseY + 4) nmRast(R, ch.ux[a], ch.uz[a], ch.ux[b], ch.uz[b], ch.ux[c], ch.uz[c], my, 0); }
-          else nmRast(R, ch.ux[a], ch.uz[a], ch.ux[b], ch.uz[b], ch.ux[c], ch.uz[c], Math.max(ch.uy[a], ch.uy[b], ch.uy[c]), 1); }
       }
       // 건물 인덱스(충돌체 지연 생성용)
       const gi = NM.bx.length, mnx = ch.ux.reduce((a, b) => Math.min(a, b), 1e9), mxx = ch.ux.reduce((a, b) => Math.max(a, b), -1e9),
@@ -1686,6 +1697,51 @@ function nmTerrainFit(R, E, dist) {
   }
   return T;
 }
+// ---------------- 지형 평탄화: 건물 바닥 고도의 잡음을 걸러낸 완만한 지면 ----------------
+// 건물 바닥 고도(래스터)에는 건물마다 ±1~2m 의 측정 잡음이 있다. 이를 그대로 따라가면 지형이 울퉁불퉁해지므로
+//  1) 주변 평균과 3.5m 이상 어긋나는 셀은 이상치로 버리고  2) 나머지로 지면을 채워  3) 100m 급 창으로 두 번 저주파 필터링한다.
+// 실제 언덕(수십 m 파장의 완만한 경사)은 선형 경사가 평균 필터에서 보존되므로 그대로 남는다.
+// 건물은 이 매끈한 지면에 맞춰 nmChunk 에서 바닥을 내리거나(공중부양 방지) 올린다(지하 매몰 방지).
+function nmFillElevMask(R, mask) {
+  const W = R.W, H = R.H, N = W * H, E = new Float32Array(N), K = new Float32Array(N);
+  for (let q = 0; q < N; q++) if (mask[q]) { E[q] = R.elev[q]; K[q] = 1; }
+  for (const r of [3, 6, 12, 24, 48, 96]) {
+    const num = new Float32Array(N); for (let q = 0; q < N; q++) num[q] = E[q] * K[q];
+    const bn = nmBoxBlur(num, W, H, r), bd = nmBoxBlur(K, W, H, r), add = [];
+    for (let q = 0; q < N; q++) if (!K[q] && bd[q] > 0.04) add.push(q);
+    for (const q of add) { E[q] = bn[q] / bd[q]; K[q] = 1; }
+  }
+  for (let q = 0; q < N; q++) if (!K[q]) E[q] = 0;
+  return E;
+}
+function nmGroundField(R) {
+  const W = R.W, H = R.H, N = W * H;
+  const E0 = nmFillElevMask(R, R.occ), bl = nmBoxBlur(E0, W, H, 4), inl = new Uint8Array(N);
+  for (let q = 0; q < N; q++) if (R.occ[q] && Math.abs(R.elev[q] - bl[q]) <= 3.5) inl[q] = 1;
+  let g = nmFillElevMask(R, inl);
+  g = nmBoxBlur(g, W, H, 2); g = nmBoxBlur(g, W, H, 2);
+  return g;
+}
+// 지형 메시 위 높이(m). 물/격자 밖이면 NaN (nmGroundAt 은 같은 값에서 0.1 을 뺀다)
+function nmTerSample(x, z) {
+  const T = NM.ter; if (!T) return NaN;
+  const fx = (x - T.x0) / NM_CS, fz = (z - T.z0) / NM_CS, i = Math.floor(fx), j = Math.floor(fz);
+  if (i < 0 || j < 0 || i >= T.w - 1 || j >= T.h - 1 || !T.land[j * (T.w - 1) + i]) return NaN;
+  const u = fx - i, v = fz - j, H = T.hgt, w = T.w;
+  const a = H[j * w + i], b = H[j * w + i + 1], c = H[(j + 1) * w + i], d = H[(j + 1) * w + i + 1];
+  return (u + v <= 1) ? a + (b - a) * u + (c - a) * v : d + (b - d) * (1 - v) + (c - d) * (1 - u);
+}
+// 건물 1동을 매끈한 지면에 앉힌다: 바닥이 떠 있으면 바닥 정점들만 지면까지 내려 벽을 늘리고(기초), 땅속에 묻혔으면 통째로 올린다.
+function nmSeatBuilding(ux, uy, uz, nu) {
+  if (!NM.ter || !nu) return;
+  let b0 = 1e9; for (let u = 0; u < nu; u++) if (uy[u] < b0) b0 = uy[u];
+  let gmin = 1e9; for (let u = 0; u < nu; u++) if (uy[u] < b0 + 0.35) { const g = nmTerSample(ux[u], uz[u]); if (g === g && g < gmin) gmin = g; }
+  if (gmin > 1e8) return;
+  const want = gmin - 0.4;
+  if (b0 > want + 0.05) { for (let u = 0; u < nu; u++) if (uy[u] < b0 + 0.35) uy[u] = want; }
+  else if (b0 < want - 0.4) { const dy = Math.min(4, want - b0); for (let u = 0; u < nu; u++) uy[u] += dy; }
+}
+
 function nmFilterOcc(R) {
   const W = R.W, H = R.H, rm = [];
   for (let j = 4; j < H - 4; j++) for (let i = 4; i < W - 4; i++) {
@@ -1758,7 +1814,7 @@ function nmBuildTerrain(R) {
   }
   cg.putImageData(im, 0, 0); NM.mapCv = cv; NM.mw = W * G; NM.mh = H * G; MAP_X0 = R.x0; MAP_Z0 = R.z0;
   // 지형 메시(10m 격자): 건물 바닥 고도에 맞춰 보정한 높이장 사용
-  const TF = nmSmoothRoadTerrain(R, nmTerrainFit(R, E, dist));
+  const TF = nmSmoothRoadTerrain(R, nmGroundField(R));   // 건물 바닥 잡음을 거른 매끈한 지면(건물이 지면에 맞춰 앉는다)
   const cw = W, ch = H, vw = cw + 1, vh = ch + 1, hgt = new Float32Array(vw * vh), cland = new Uint8Array(cw * ch);
   for (let j = 0; j < vh; j++) for (let i = 0; i < vw; i++) {
     let sum = 0, n = 0, mo = 1e9, mx = -1e9;
@@ -1766,7 +1822,7 @@ function nmBuildTerrain(R) {
       const ci = i + di, cj = j + dj; if (ci < 0 || cj < 0 || ci >= W || cj >= H) continue;
       const q = cj * W + ci; sum += TF[q]; n++; if (R.occ[q]) { if (R.elev[q] < mo) mo = R.elev[q]; if (R.elev[q] > mx) mx = R.elev[q]; }
     }
-    let h = n ? sum / n : 0; if (mo < 1e8) { const m = (mo + mx) * 0.5; if (h < m - 0.35) h = m - 0.35; }   // 접한 건물 바닥 높이 아래로 지면이 크게 꺼져 틈이 생기지 않게(0.35m 이내만 허용)
+    const h = n ? sum / n : 0;
     hgt[j * vw + i] = h;
   }
   for (let q = 0; q < W * H; q++) cland[q] = land[q];
@@ -2068,6 +2124,16 @@ function nrDecodeWay(D, off, i) {
   for (let k = 0; k < n; k++) { ax += D.pts[o + k * 2]; az += D.pts[o + k * 2 + 1]; xs[k] = ax / 10; zs[k] = az / 10; }
   return { xs, zs };
 }
+// 램프 종단 형상: 양끝은 포물선으로 부드럽게 받고 가운데는 일정 경사(최대 경사 = 평균의 1.28배)
+function nrRampF(t) {
+  t = Math.max(0, Math.min(1, t)); const a = 0.22, k = 1 / (1 - a);
+  if (t < a) return k * t * t / (2 * a);
+  if (t > 1 - a) { const u = 1 - t; return 1 - k * u * u / (2 * a); }
+  return k * (t - a / 2);
+}
+// 실제 뉴욕 고가도로처럼: ① 상판 밑 통행 여유 ≥ 5m(층이 올라갈수록 +5.9m)  ② 접근 램프는 평균 4% 일정 경사(최대 5.1%)로 지면에서 올라탄다
+// ③ 짧은 구간(주변 지면에서 올라갈 길이가 모자란 교량)은 억지로 솟구치지 않고 지면에 붙는다  ④ 이어지는 구간끼리는 연결점 높이를 맞춘다(계단·턱 방지)
+// ⑤ 지면이 상판 쪽으로 올라오는 곳은 최소 여유가 확보되도록 상판을 완만히 들어 올린다
 function nrPlanBridges(D, off) {
   const plan = new Map(), nodes = new Map(), edges = [], nk = (x, z) => Math.round(x * 2) + '_' + Math.round(z * 2);
   for (let i = 0; i < D.nW; i++) {
@@ -2076,8 +2142,9 @@ function nrPlanBridges(D, off) {
     for (let k = 0; k < n; k++) { const x = S.p[k * 2], z = S.p[k * 2 + 1]; if (nrLand(x, z)) g[k] = nmGroundAt(x, z); else { g[k] = 0; water++; } }
     const e = { i, S, g, L: S.s[n - 1], wf: water / n, A: nk(S.p[0], S.p[1]), B: nk(S.p[(n - 1) * 2], S.p[(n - 1) * 2 + 1]) };
     for (const [key, x, z] of [[e.A, S.p[0], S.p[1]], [e.B, S.p[(n - 1) * 2], S.p[(n - 1) * 2 + 1]]]) {
-      let nd = nodes.get(key); if (!nd) { const l = nrLand(x, z); nd = { deg: 0, dist: Infinity, ref: 0, land: l, g: l ? nmGroundAt(x, z) : 0 }; nodes.set(key, nd); } nd.deg++;
+      let nd = nodes.get(key); if (!nd) { const l = nrLand(x, z); nd = { deg: 0, dist: Infinity, ref: 0, land: l, g: l ? nmGroundAt(x, z) : 0, inc: [], comp: key }; nodes.set(key, nd); } nd.deg++;
     }
+    nodes.get(e.A).inc.push([e, 0]); nodes.get(e.B).inc.push([e, 1]);
     edges.push(e);
   }
   for (const nd of nodes.values()) if (nd.deg === 1 && nd.land) { nd.dist = 0; nd.ref = nd.g; }
@@ -2090,23 +2157,110 @@ function nrPlanBridges(D, off) {
     }
     if (!ch) break;
   }
+  // 이어진 교량 묶음(연결 성분)마다 '지면에서 가장 먼 점까지의 거리'를 구해, 램프가 그 안에 끝나도록 올라갈 수 있는 높이 상한을 정한다
+  const par = new Map(); for (const k of nodes.keys()) par.set(k, k);
+  const find = k => { while (par.get(k) !== k) { par.set(k, par.get(par.get(k))); k = par.get(k); } return k; };
+  for (const e of edges) { const ra = find(e.A), rb = find(e.B); if (ra !== rb) par.set(ra, rb); }
+  const maxD = new Map();
+  for (const [k, nd] of nodes) if (isFinite(nd.dist)) { const r = find(k); maxD.set(r, Math.max(maxD.get(r) || 0, nd.dist)); }
+  for (const e of edges) {   // 짧은 단일 교량은 가운데 점이 (L/2)
+    const r = find(e.A), a = nodes.get(e.A), b = nodes.get(e.B);
+    if (isFinite(a.dist) && isFinite(b.dist)) maxD.set(r, Math.max(maxD.get(r) || 0, (a.dist + b.dist + e.L) / 2));
+  }
+  const GR = 0.04, SMAX = 0.055;
   for (const e of edges) {
     const a = nodes.get(e.A), b = nodes.get(e.B), name = D.names[D.nm[e.i]], layer = D.layer[e.i], tab = nrBridgeH(name), n = e.S.n, landy = e.wf < 0.5;
+    const th = (D.hw[e.i] <= 1 || D.kind[e.i] === 4) ? 1.4 : 0.9, ga = a.land ? a.g : (isFinite(a.dist) ? a.ref : 0), gb = b.land ? b.g : (isFinite(b.dist) ? b.ref : 0);   // 물 위 끝점은 가장 가까운 지상 연결점의 지면 높이를 기준으로
     let abs = (tab !== null && e.wf > 0.25) ? tab : null;
     if (abs === null && !landy && layer > 0) abs = layer === 1 ? 14 : layer === 2 ? 26 : 36;   // 물 위 교량: 해수면 기준 높이(이름 모르는 다리)
-    const rel = abs !== null ? 0 : layer <= 0 ? 0 : layer === 1 ? 5.5 : layer === 2 ? 10.5 : 15;
-    const y = new Float32Array(n); let up = 0;
-    for (let k = 0; k < n; k++) {
-      const s = e.S.s[k], dA = a.dist + s, dB = b.dist + e.L - s, dmin = Math.min(dA, dB); let ref;
-      if (isFinite(dmin)) ref = dA <= dB ? a.ref : b.ref; else ref = abs !== null ? 0 : e.g[k];
-      const peak = abs !== null ? Math.max(abs, ref + 2) : ref + rel;
-      let Lr = Math.max(12, Math.abs(peak - ref) / 0.055); Lr = Math.min(Lr, Math.max(e.L * 0.5, 10));
-      y[k] = ref + (peak - ref) * nrSmooth(isFinite(dmin) ? dmin / Lr : 1);
-      up = Math.max(up, y[k] - e.g[k]);
+    const rel = abs !== null ? 0 : layer <= 0 ? 0 : 5.0 + th + (layer - 1) * 5.9;                // 지면 위 상판 윗면 높이 = 통행 여유 5m + 상판 두께
+    const gm = (ga + gb) / 2, cap = 0.045 * (maxD.get(find(e.A)) || 1e9);
+    const dh = Math.min(abs !== null ? Math.max(2, abs - gm) : rel, cap), Lr = Math.max(15, dh / GR);
+    // 기준선 Bs: 중심선 아래 지면(물 위는 양쪽 육지 값으로 보간)을 약 66m 창으로 평활하고 양끝을 연결점 높이에 맞춘다 → 상판은 거리 지형의 오르내림을 부드럽게 따라간다
+    const gF = new Float32Array(n), isL = new Uint8Array(n), Bs = new Float32Array(n); let first = -1, last = -1;
+    for (let k = 0; k < n; k++) if (nrLand(e.S.p[k * 2], e.S.p[k * 2 + 1])) { isL[k] = 1; if (first < 0) first = k; last = k; }
+    if (first < 0) { for (let k = 0; k < n; k++) gF[k] = ga + (gb - ga) * (n > 1 ? k / (n - 1) : 0); }
+    else {
+      let prev = -1;
+      for (let k = 0; k < n; k++) if (isL[k]) {
+        if (prev >= 0 && k - prev > 1) for (let q = prev + 1; q < k; q++) gF[q] = e.g[prev] + (e.g[k] - e.g[prev]) * (q - prev) / (k - prev);
+        gF[k] = e.g[k]; prev = k;
+      }
+      for (let k = 0; k < first; k++) gF[k] = e.g[first]; for (let k = last + 1; k < n; k++) gF[k] = e.g[last];
     }
-    e.y = y; e.elev = up >= 1.2 && (abs !== null || rel > 0); plan.set(e.i, e);
+    { const w = 5, pre = new Float64Array(n + 1); for (let k = 0; k < n; k++) pre[k + 1] = pre[k] + gF[k];
+      const sm = new Float32Array(n); for (let k = 0; k < n; k++) { const k0 = Math.max(0, k - w), k1 = Math.min(n, k + w + 1); sm[k] = (pre[k1] - pre[k0]) / (k1 - k0); }
+      const dA = ga - sm[0], dB = gb - sm[n - 1];
+      for (let k = 0; k < n; k++) { const s = e.S.s[k]; Bs[k] = sm[k] + dA * Math.max(0, 1 - s / 40) + dB * Math.max(0, 1 - (e.L - s) / 40); } }
+    if (abs !== null) for (let k = 0; k < n; k++) Bs[k] = ga + (gb - ga) * (e.L > 0 ? e.S.s[k] / e.L : 0);   // 수면 위 교량: 상판은 지형이 아니라 양끝 연결점 높이를 기준으로 절대 높이까지 올라간다
+    const y = new Float32Array(n), fr = new Float32Array(n), sc = abs !== null ? dh / Math.max(2, abs - gm) : 1;
+    for (let k = 0; k < n; k++) {
+      const s = e.S.s[k], B = Bs[k], dmin = Math.min(a.dist + s, b.dist + e.L - s), f = isFinite(dmin) ? nrRampF(dmin / Lr) : 1;
+      const peak = abs !== null ? B + Math.max(2, abs - B) * sc : B + dh;
+      y[k] = B + (peak - B) * f; fr[k] = f;
+    }
+    if (abs === null && landy) {   // 지면이 올라오는 곳: 최소 여유(상판 밑 4.6m) 확보 — 계획한 상승량(dh)보다 더 요구하지는 않는다. 끝(f=0)에서는 지면 높이 그대로.
+      const w = 3, req = Math.min(th + 4.6, dh);
+      for (let k = 0; k < n; k++) {
+        if (!isL[k]) continue; let gx = -1e9; for (let q = Math.max(0, k - w); q <= Math.min(n - 1, k + w); q++) if (isL[q] && e.g[q] > gx) gx = e.g[q];
+        y[k] = Math.max(y[k], e.g[k] + fr[k] * (gx - e.g[k] + req));
+      }
+    }
+    // 종단 경사 제한: 기준선(Bs)에서 떨어진 '들어올림량'의 기울기가 5.5%를 넘지 않게 한다(지면 경사 자체는 그대로 따라간다)
+    const lift = new Float32Array(n), pinA = a.deg === 1 && a.land, pinB = b.deg === 1 && b.land;
+    for (let k = 0; k < n; k++) lift[k] = y[k] - Bs[k];
+    for (let k = 1; k < n; k++) { if (k === n - 1 && pinB) continue; lift[k] = Math.max(lift[k], lift[k - 1] - SMAX * (e.S.s[k] - e.S.s[k - 1])); }
+    for (let k = n - 2; k >= 0; k--) { if (k === 0 && pinA) continue; lift[k] = Math.max(lift[k], lift[k + 1] - SMAX * (e.S.s[k + 1] - e.S.s[k])); }
+    for (let k = 0; k < n; k++) y[k] = Bs[k] + lift[k];
+    e.y = y; e.th = th; e.abs = abs; e.rel = rel;
+  }
+  // 이어지는 구간의 연결점 높이를 평균에 맞춘다(최소 30m 에 걸쳐 코사인으로 서서히 보정)
+  for (let it = 0; it < 4; it++) {
+    for (const nd of nodes.values()) {
+      if (nd.inc.length < 2) continue;
+      let sum = 0; for (const [e, end] of nd.inc) sum += end ? e.y[e.S.n - 1] : e.y[0];
+      const m = sum / nd.inc.length;
+      for (const [e, end] of nd.inc) {
+        const n = e.S.n, dlt = m - (end ? e.y[n - 1] : e.y[0]); if (Math.abs(dlt) < 0.005) continue;
+        const win = Math.max(30, Math.abs(dlt) * 28);   // 보정량이 클수록 길게 풀어 경사가 6%를 넘지 않게
+        for (let k = 0; k < n; k++) { const d = end ? e.L - e.S.s[k] : e.S.s[k]; if (d < win) e.y[k] += dlt * 0.5 * (1 + Math.cos(Math.PI * d / win)); }
+      }
+    }
+  }
+  for (const e of edges) {
+    let up = 0; for (let k = 0; k < e.S.n; k++) up = Math.max(up, e.y[k] - e.g[k]);
+    e.elev = up >= 2.0 && (e.abs !== null || e.rel > 0); plan.set(e.i, e);
   }
   return plan;
+}
+// 교각 위치 회피용: 고가 구간 근처의 지상 차도 선분 격자(20m)
+const nrAvKey = (cx, cz) => (cx + 3000) * 20011 + cz + 4000;
+function nrBuildAvoid(D, off, plan) {
+  const near = new Set(), grid = new Map();
+  for (const e of plan.values()) { if (!e.elev) continue; for (let k = 0; k < e.S.n; k++) { const cx = Math.floor(e.S.p[k * 2] / 20), cz = Math.floor(e.S.p[k * 2 + 1] / 20); for (let dx = -2; dx <= 2; dx++) for (let dz = -2; dz <= 2; dz++) near.add(nrAvKey(cx + dx, cz + dz)); } }
+  for (let i = 0; i < D.nW; i++) {
+    if (D.kind[i] !== 0 || (D.flags[i] & 2) || D.layer[i] < 0 || D.hw[i] === 8) continue;
+    const { xs, zs } = nrDecodeWay(D, off, i), hw = D.wd[i] / 8;
+    for (let k = 1; k < xs.length; k++) {
+      const ax = xs[k - 1], az = zs[k - 1], bx = xs[k], bz = zs[k], L = Math.hypot(bx - ax, bz - az), m = Math.max(1, Math.ceil(L / 10)), seen = new Set();
+      for (let t = 0; t <= m; t++) {
+        const key = nrAvKey(Math.floor((ax + (bx - ax) * t / m) / 20), Math.floor((az + (bz - az) * t / m) / 20)); if (seen.has(key) || !near.has(key)) continue; seen.add(key);
+        let a = grid.get(key); if (!a) grid.set(key, a = []); a.push(ax, az, bx, bz, hw);
+      }
+    }
+  }
+  NR.avoid = grid;
+}
+function nrOnRoad(x, z, mg) {
+  const g = NR.avoid; if (!g) return false; const cx = Math.floor(x / 20), cz = Math.floor(z / 20);
+  for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
+    const a = g.get(nrAvKey(cx + dx, cz + dz)); if (!a) continue;
+    for (let q = 0; q < a.length; q += 5) {
+      const ax = a[q], az = a[q + 1], vx = a[q + 2] - ax, vz = a[q + 3] - az, l2 = vx * vx + vz * vz; let t = l2 > 0 ? ((x - ax) * vx + (z - az) * vz) / l2 : 0; t = Math.max(0, Math.min(1, t));
+      if (Math.hypot(x - ax - vx * t, z - az - vz * t) < a[q + 4] + mg) return true;
+    }
+  }
+  return false;
 }
 // ---------- 선형 요소 하나 생성 ----------
 const NR_BAR = [[1.9, NR_S.FENCE], [1.8, NR_S.WALL], [1.6, NR_S.WALL], [1.3, NR_S.HEDGE], [0.85, NR_S.WALL], [0.75, NR_S.WALL]];
@@ -2158,14 +2312,51 @@ function nrWay(D, off, i, plan) {
       strips.push({ A, B: Bb, v: z0, u0: sol, u1: sol, col: nrCol(0.58), nA: nin, b: 'dk' }, { A: Bb, B: Cc, v: z0, u0: sol, u1: sol, col: nrCol(0.62), nrm: [0, 1, 0], b: 'dk' });
     }
     nrEmit(Et.cen, strips); nrRegDeck(Et, hw, Y, n, info.g);
-    // 교각
-    const sp = (info.wf > 0.5 && hwy && Y[(n / 2) | 0] - info.g[(n / 2) | 0] > 12) ? 60 : hwy ? 26 : 20;
-    for (let s0 = sp * 0.5; s0 < S.s[n - 1]; s0 += sp) {
-      let q = 0; while (q < n - 1 && S.s[q] < s0) q++;
-      const x = S.p[q * 2], z = S.p[q * 2 + 1], gb = nrLand(x, z) ? info.g[q] : -2.5, top = Y[q] - th, hgt = top - gb; if (hgt < 2.0) continue;
-      const C = nrChunk(nrKeyC(x, z), x, z), a = Math.atan2(Et.nr[q * 2], Et.nr[q * 2 + 1]) + Math.PI / 2, offs = wd > 16 ? [-wd * 0.28, wd * 0.28] : [0];
-      for (const o of offs) nrBox(C.dk, C, x + Et.nr[q * 2] * o, (top + gb) / 2, z + Et.nr[q * 2 + 1] * o, 1.7, hgt, 1.5, a, nrCol(0.5), nrU(NR_S.SOLID, 0.5), 0.5);
-      if (wd > 8) nrBox(C.dk, C, x, top - 0.45, z, wd * 0.8, 0.9, 1.4, a, nrCol(0.46), nrU(NR_S.SOLID, 0.5), 0.5);
+    // ----- 접근 램프 옹벽: 상판 밑 여유가 3.4m 미만인 구간은 상판 옆면을 지면까지 내려 '성토 램프 + 콘크리트 옹벽'으로 만든다 -----
+    const gLf = new Float32Array(n), gRt = new Float32Array(n), WC = 3.4;
+    for (let q = 0; q < n; q++) {
+      const xl = Et.L[q * 3], zl = Et.L[q * 3 + 2], xr = Et.R[q * 3], zr = Et.R[q * 3 + 2];
+      gLf[q] = nrLand(xl, zl) ? nmGroundAt(xl, zl) - 0.3 : NaN; gRt[q] = nrLand(xr, zr) ? nmGroundAt(xr, zr) - 0.3 : NaN;
+    }
+    const wallOk = q => gLf[q] === gLf[q] && gRt[q] === gRt[q] && Y[q] - th - Math.max(gLf[q], gRt[q]) < WC;
+    const cap = (q, sgn) => {   // 옹벽이 끝나는 단면을 막아 속이 비어 보이지 않게
+      const tx = Et.nr[q * 2 + 1] * sgn, tz = -Et.nr[q * 2] * sgn, L3 = Eb.L.subarray(q * 3, q * 3 + 3), R3 = Eb.R.subarray(q * 3, q * 3 + 3);
+      nrEmit(new Float32Array([Et.cen[q * 3], Et.cen[q * 3 + 1], Et.cen[q * 3 + 2], Et.cen[q * 3], Et.cen[q * 3 + 1] - 1, Et.cen[q * 3 + 2]]),
+        [{ A: new Float32Array([L3[0], L3[1], L3[2], L3[0], gLf[q], L3[2]]), B: new Float32Array([R3[0], R3[1], R3[2], R3[0], gRt[q], R3[2]]), v: new Float32Array(2), u0: sol, u1: sol, col: nrCol(0.40), nrm: [tx, 0, tz], b: 'dk' }]);
+    };
+    for (let q0 = 0; q0 < n;) {
+      if (!wallOk(q0)) { q0++; continue; }
+      let q1 = q0; while (q1 + 1 < n && wallOk(q1 + 1)) q1++;
+      if (q1 > q0) {
+        const m = q1 - q0 + 1, sl = (arr, st) => arr.subarray(q0 * st, (q1 + 1) * st), bL = new Float32Array(m * 3), bR = new Float32Array(m * 3);
+        for (let k = 0; k < m; k++) { const q = q0 + k; for (let c = 0; c < 3; c++) { bL[k * 3 + c] = Eb.L[q * 3 + c]; bR[k * 3 + c] = Eb.R[q * 3 + c]; } bL[k * 3 + 1] = gLf[q]; bR[k * 3 + 1] = gRt[q]; }
+        nrEmit(sl(Et.cen, 3), [
+          { A: sl(Eb.L, 3), B: bL, v: z0.subarray(0, m), u0: sol, u1: sol, col: nrCol(0.42), nA: sl(nl, 3), b: 'dk' },
+          { A: sl(Eb.R, 3), B: bR, v: z0.subarray(0, m), u0: sol, u1: sol, col: nrCol(0.42), nA: sl(nrr, 3), b: 'dk' }]);
+        if (q1 < n - 1) cap(q1, 1); if (q0 > 0) cap(q0, -1);
+      }
+      q0 = q1 + 1;
+    }
+    // ----- 교각(벤트): 기초 + 기둥(넓은 상판은 2개) + 상부 캡 보. 차도·건물 위에 서지 않도록 위치를 앞뒤로 비껴 놓는다 -----
+    const sp = (info.wf > 0.5 && hwy && Y[(n / 2) | 0] - info.g[(n / 2) | 0] > 12) ? 60 : hwy ? 27 : 21, twoCol = wd > 9, colO = twoCol ? wd * 0.30 : 0, tot = S.s[n - 1];
+    for (let s0 = sp * 0.5; s0 < tot; s0 += sp) {
+      let best = -1, bestPen = 1e9;
+      for (const sh of [0, 2, -2, 4, -4, 6, -6, 8, -8, 10, -10]) {
+        const s1 = s0 + sh; if (s1 < 3 || s1 > tot - 3) continue;
+        let q = 0; while (q < n - 1 && S.s[q] < s1) q++;
+        const x = S.p[q * 2], z = S.p[q * 2 + 1]; let pen = Math.abs(sh) * 0.01;
+        if (nrLand(x, z)) for (const o of (twoCol ? [-colO, colO] : [0])) { const px = x + Et.nr[q * 2] * o, pz = z + Et.nr[q * 2 + 1] * o; if (nrOnRoad(px, pz, 0.9)) pen += 1; if (nrOcc(px, pz)) pen += 3; }
+        if (pen < bestPen) { bestPen = pen; best = q; if (pen < 0.1) break; }
+      }
+      if (best < 0) continue; const q = best;
+      const x = S.p[q * 2], z = S.p[q * 2 + 1], gb = nrLand(x, z) ? info.g[q] : -2.5, top = Y[q] - th, hgt = top - gb; if (hgt < 2.6) continue;
+      const C = nrChunk(nrKeyC(x, z), x, z), a = Math.atan2(Et.nr[q * 2], Et.nr[q * 2 + 1]) + Math.PI / 2, cw = twoCol ? 1.9 : 2.2, sol5 = nrU(NR_S.SOLID, 0.5);
+      for (const o of (twoCol ? [-colO, colO] : [0])) {
+        const px = x + Et.nr[q * 2] * o, pz = z + Et.nr[q * 2 + 1] * o;
+        nrBox(C.dk, C, px, (top + gb) / 2, pz, cw, hgt, 1.3, a, nrCol(0.5), sol5, 0.5);
+        if (nrLand(x, z)) nrBox(C.dk, C, px, gb + 0.35, pz, cw + 0.7, 0.7, 2.0, a, nrCol(0.42), sol5, 0.5);
+      }
+      if (wd > 4) nrBox(C.dk, C, x, top - 0.55, z, Math.min(wd * 0.92, wd - 0.2), 1.1, 1.5, a, nrCol(0.46), sol5, 0.5);
     }
     return;
   }
@@ -2521,7 +2712,7 @@ float lcWave(vec2 w) { return lcF(w * 0.45 + vec2(uLcT * 0.06, uLcT * 0.045)) + 
   NR.mTr = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0 });
   nycLoadStatus('공원·물·운동장 지표 생성 중…', 0.91); await nmYield(); await nrLandcover(L);
   const off = new Uint32Array(D.nW + 1); for (let i = 0; i < D.nW; i++) off[i + 1] = off[i] + D.np[i];
-  nycLoadStatus('교량·고가도로 높이 계산 중…', 0.93); await nmYield(); const plan = nrPlanBridges(D, off);
+  nycLoadStatus('교량·고가도로 높이 계산 중…', 0.93); await nmYield(); const plan = nrPlanBridges(D, off); nrBuildAvoid(D, off, plan);
   const rank = { 8: 0, 6: 1, 5: 2, 4: 3, 3: 4, 2: 5, 9: 5, 7: 6, 1: 7, 0: 8 }, order = [];
   for (let i = 0; i < D.nW; i++) { const k = D.kind[i]; order.push([k === 0 ? rank[D.hw[i]] : k === 3 ? 10 : k === 4 ? 11 : k === 2 ? 12 : k === 1 ? 13 : 14, i]); }
   order.sort((a, b) => a[0] - b[0]);
@@ -2529,6 +2720,7 @@ float lcWave(vec2 w) { return lcF(w * 0.45 + vec2(uLcT * 0.06, uLcT * 0.045)) + 
     try { nrWay(D, off, order[q][1], plan); } catch (e) { if (!NR.err) { NR.err = 1; console.warn('road', e); } }
     if ((q % 700) === 699) { nycLoadStatus('도로·보도·철도·담장 생성 중… ' + Math.round(q / order.length * 100) + '%', 0.94 + 0.03 * q / order.length); await nmYield(); }
   }
+  NR.avoid = null;
   nycLoadStatus('가로수·신호등·거리 시설물 배치 중…', 0.97); await nmYield(); nrProps(P);
   const tg = nrTreeGeo(), tm = new THREE.Matrix4(), tq = new THREE.Quaternion(), tp = new THREE.Vector3(), ts = new THREE.Vector3(), tc = new THREE.Color(), up = new THREE.Vector3(0, 1, 0);
   let nT = 0, nV = 0;
@@ -2564,12 +2756,13 @@ async function nmLoadWorld() {
     const x0 = Math.floor(mnx / NM_G) * NM_G - 160, z0 = Math.floor(mnz / NM_G) * NM_G - 160, W = Math.ceil((mxx - x0) / NM_G) + 17, H = Math.ceil((mxz - z0) / NM_G) + 17;
     const R = { x0, z0, W, H, occ: new Uint8Array(W * H), elev: new Float32Array(W * H), top: new Float32Array(W * H).fill(-1e9) };
     const mat = nmMakeMaterial();
-    for (let k = 0; k < 6; k++) {
-      await nmBuildPart(NM.parts[k], k, R, mat, p => nycLoadStatus('건물 메시 생성 중… 구간 ' + (k + 1) + '/6 (' + Math.round(p * 100) + '%)', 0.12 + 0.7 * (k + p) / 6));
-    }
-    nycLoadStatus('지형·바다·지도 생성 중…', 0.88); await nmYield();
+    for (let k = 0; k < 6; k++) await nmPreRaster(NM.parts[k].d, R, p => nycLoadStatus('지형 래스터 생성 중… 구간 ' + (k + 1) + '/6', 0.12 + 0.08 * (k + p) / 6));
+    nycLoadStatus('지형·바다·지도 생성 중…', 0.2); await nmYield();
     try { await nrPrepRoads(R); } catch (e) { console.warn('도로 마스크 준비 실패', e); }
     nmBuildTerrain(R);
+    for (let k = 0; k < 6; k++) {
+      await nmBuildPart(NM.parts[k], k, R, mat, p => nycLoadStatus('건물 메시 생성 중… 구간 ' + (k + 1) + '/6 (' + Math.round(p * 100) + '%)', 0.22 + 0.66 * (k + p) / 6));
+    }
     try { await nrBuild(R); } catch (e) { console.error('도로·지물 생성 실패', e); }
     NM.ready = true;
     nycLoadStatus('충돌체·웹 앵커 준비 중…', 0.95); await nmYield();
