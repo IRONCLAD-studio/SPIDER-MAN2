@@ -1623,7 +1623,7 @@ async function nmBuildPart(P, pi, R, mat, prog) {
             else { let d0 = Math.abs(s0 - wq); d0 = Math.min(d0, 32768 - d0); if (d0 > 10 && s1 < 0) Wn[v * 2 + 1] = wq; } }
         }
         if (cl !== 2) { const a = ch.T[t * 3], b = ch.T[t * 3 + 1], c = ch.T[t * 3 + 2];
-          if (cl === 1) nmRast(R, ch.ux[a], ch.uz[a], ch.ux[b], ch.uz[b], ch.ux[c], ch.uz[c], Math.min(ch.uy[a], ch.uy[b], ch.uy[c]), 0);
+          if (cl === 1) { const my = Math.min(ch.uy[a], ch.uy[b], ch.uy[c]); if (my <= baseY + 4) nmRast(R, ch.ux[a], ch.uz[a], ch.ux[b], ch.uz[b], ch.ux[c], ch.uz[c], my, 0); }
           else nmRast(R, ch.ux[a], ch.uz[a], ch.ux[b], ch.uz[b], ch.ux[c], ch.uz[c], Math.max(ch.uy[a], ch.uy[b], ch.uy[c]), 1); }
       }
       // 건물 인덱스(충돌체 지연 생성용)
@@ -1669,7 +1669,20 @@ function nmTerrainFit(R, E, dist) {
   }
   return T;
 }
+function nmFilterOcc(R) {
+  const W = R.W, H = R.H, rm = [];
+  for (let j = 4; j < H - 4; j++) for (let i = 4; i < W - 4; i++) {
+    const q = j * W + i; if (!R.occ[q]) continue; const e = R.elev[q]; let sim = 0, mn = 1e9;
+    for (let dj = -4; dj <= 4; dj++) for (let di = -4; di <= 4; di++) {
+      const p = q + dj * W + di; if (!R.occ[p]) continue; const v = R.elev[p]; if (v < mn) mn = v;
+      if (Math.abs(dj) <= 3 && Math.abs(di) <= 3 && Math.abs(v - e) < 3) sim++;
+    }
+    if (e > mn + 10 && sim < 12) rm.push(q);
+  }
+  for (const q of rm) { R.occ[q] = 0; R.elev[q] = 0; }
+}
 function nmBuildTerrain(R) {
+  nmFilterOcc(R);
   const W = R.W, H = R.H, G = NM_G, E = nmFillElev(R), dist = nmDist(R.occ, W, H), land = nmLandMask(R.occ, W, H);
   // 지도 이미지
   const cv = document.createElement('canvas'); cv.width = W; cv.height = H; const cg = cv.getContext('2d'), im = cg.createImageData(W, H), px = im.data;
@@ -1695,9 +1708,23 @@ function nmBuildTerrain(R) {
   for (let q = 0; q < W * H; q++) cland[q] = land[q];
   NM.ter = { x0: R.x0, z0: R.z0, cs: NM_CS, w: vw, h: vh, hgt, land: cland };
   const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.92, metalness: 0.0, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 2 });
+  mat.extensions = Object.assign({}, mat.extensions, { derivatives: true });
+  mat.onBeforeCompile = function (sh) {   // 차도가 없는 지면 = 인도: 5ft 콘크리트 슬랩 + 줄눈 (월드좌표, 거리에 따라 페이드)
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vPvW;').replace('#include <begin_vertex>', '#include <begin_vertex>\nvPvW = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vPvW;\nfloat pvH(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }')
+      .replace('#include <color_fragment>', `#include <color_fragment>
+      {
+        vec2 q = vPvW.xz / 1.524; vec2 f = fract(q), id = floor(q);
+        float fw = max(max(fwidth(q.x), fwidth(q.y)), 1e-4);
+        float fade = 1.0 - smoothstep(0.10, 0.40, fw);
+        vec2 e = min(f, 1.0 - f); float dd = min(e.x, e.y);
+        float joint = 1.0 - smoothstep(0.010, 0.010 + fw, dd);
+        diffuseColor.rgb *= mix(1.0, 0.93 + 0.14 * pvH(id), fade);
+        diffuseColor.rgb *= 1.0 - 0.40 * joint * fade;
+      }`);
+  };
   const TILE = 40, out = [];
-  const colAt = (i, j) => { const q = Math.min(H - 1, j) * W + Math.min(W - 1, i), t = Math.min(1, Math.max(0, (dist[q] - 4.5) / 4.0)), s = t * t * (3 - 2 * t), n = 0.92 + 0.16 * nmHash(i, j);
-    return [(0.17 + (0.10 - 0.17) * s) * n, (0.19 + (0.30 - 0.19) * s) * n, (0.22 + (0.15 - 0.22) * s) * n]; };
+  const colAt = (i, j) => { const n = 0.94 + 0.12 * nmHash(i, j); return [0.50 * n, 0.49 * n, 0.47 * n]; };
   for (let tj = 0; tj < ch; tj += TILE) for (let ti = 0; ti < cw; ti += TILE) {
     const i1 = Math.min(cw, ti + TILE), j1 = Math.min(ch, tj + TILE); let any = false;
     for (let j = tj; j < j1 && !any; j++) for (let i = ti; i < i1; i++) if (cland[j * cw + i]) { any = true; break; }
@@ -1825,14 +1852,22 @@ function nrAtlas() {
   const vline = (x, w, col) => { g.fillStyle = col; g.fillRect(x - w / 2, 0, w, H); };
   const dash = (x, col, frac = 0.25) => { g.fillStyle = col; g.fillRect(x - 0.9, 0, 1.8, H * frac); };
   const WH = 'rgb(214,214,206)', YL = 'rgb(214,172,40)';
+  const asph = x0 => {   // 아스팔트: 골재 알갱이 + 보수 패치 + 균열
+    for (let i = 0; i < 2600; i++) { const v = (28 + rnd() * 62) | 0; g.fillStyle = 'rgba(' + v + ',' + v + ',' + (v + 3) + ',' + (0.25 + rnd() * 0.35) + ')'; g.fillRect(x0 + rnd() * W, rnd() * H, 1, 1 + rnd() * 1.5); }
+    for (let i = 0; i < 5; i++) { g.fillStyle = 'rgba(18,18,20,' + (0.10 + rnd() * 0.12) + ')'; g.fillRect(x0 + rnd() * W * 0.8, rnd() * H, W * (0.1 + rnd() * 0.3), 8 + rnd() * 30); }
+    g.strokeStyle = 'rgba(14,14,15,0.55)'; g.lineWidth = 0.8;
+    for (let i = 0; i < 3; i++) { g.beginPath(); let cx = x0 + 4 + rnd() * (W - 8), cy = rnd() * H; g.moveTo(cx, cy); for (let k = 0; k < 6; k++) { cx += (rnd() - 0.5) * 14; cy += rnd() * 22; g.lineTo(Math.max(x0 + 3, Math.min(x0 + W - 3, cx)), cy); } g.stroke(); }
+  };
+  const curb = x0 => { g.fillStyle = 'rgb(150,148,141)'; g.fillRect(x0, 0, 3, H); g.fillRect(x0 + W - 3, 0, 3, H); g.fillStyle = 'rgb(58,56,52)'; g.fillRect(x0 + 3, 0, 1.5, H); g.fillRect(x0 + W - 4.5, 0, 1.5, H); };
   const road = (s, o) => {
-    const x0 = s * W; base(x0, o.c || '58,59,63'); noise(x0, 0.07);
+    const x0 = s * W; base(x0, o.c || '46,47,50'); noise(x0, 0.10); asph(x0);
     for (let k = 0; k < 3; k++) { g.fillStyle = 'rgba(0,0,0,0.10)'; g.fillRect(x0 + W * (0.28 + 0.44 * k / 2) - 4, 0, 8, H); }   // 타이어 자국
     const n = o.n || 1;
     if (o.ow) { for (let k = 1; k < n; k++) dash(x0 + W * k / n, WH); }
     else if (n >= 2) { vline(x0 + W * 0.5 - 2, 1.6, YL); vline(x0 + W * 0.5 + 2, 1.6, YL); const h = Math.max(1, Math.floor(n / 2)); for (let k = 1; k < h; k++) { dash(x0 + W * 0.5 * k / h, WH); dash(x0 + W * (0.5 + 0.5 * k / h), WH); } }
     if (o.hw) { if (o.ow) { vline(x0 + 4, 2, YL); vline(x0 + W - 4, 2, WH); } else { vline(x0 + 4, 2, WH); vline(x0 + W - 4, 2, WH); } }
     if (o.link) { vline(x0 + 4, 1.8, WH); vline(x0 + W - 4, 1.8, WH); }
+    if (!o.hw && !o.link) curb(x0);
   };
   road(0, { c: '60,60,63' });
   road(1, { n: 2 }); road(2, { n: 4 }); road(3, { n: 6 });
@@ -1840,7 +1875,7 @@ function nrAtlas() {
   road(9, { n: 2, ow: 1, hw: 1, c: '48,49,53' }); road(10, { n: 3, ow: 1, hw: 1, c: '48,49,53' }); road(11, { n: 4, ow: 1, hw: 1, c: '48,49,53' }); road(12, { n: 4, hw: 1, c: '48,49,53' });
   road(13, { n: 1, ow: 1, link: 1, c: '52,53,57' }); road(14, { n: 2, ow: 1, link: 1, c: '52,53,57' });
   let x0 = 15 * W; g.clearRect(x0, 0, W, H); g.fillStyle = 'rgb(222,222,214)'; g.fillRect(x0 + 2, 0, W - 4, H * 0.5);           // 횡단보도
-  x0 = 16 * W; base(x0, '150,148,141'); noise(x0, 0.08); g.fillStyle = 'rgb(105,103,98)'; g.fillRect(x0, 0, W, 2); g.fillStyle = 'rgb(120,118,112)'; g.fillRect(x0, 0, 3, H); g.fillRect(x0 + W - 3, 0, 3, H);   // 보도
+  x0 = 16 * W; base(x0, '128,125,120'); noise(x0, 0.06); g.fillStyle = 'rgb(112,110,105)'; g.fillRect(x0, 0, 2, H); g.fillRect(x0 + W - 2, 0, 2, H);   // 보도
   x0 = 17 * W; base(x0, '44,112,76'); noise(x0, 0.06); dash(x0 + 4, WH, 0.5); dash(x0 + W - 4, WH, 0.5);                    // 자전거길
   x0 = 18 * W; base(x0, '140,136,128'); noise(x0, 0.08); g.fillStyle = 'rgba(0,0,0,0.25)'; g.fillRect(x0, 0, W, 2); for (let k = 1; k < 4; k++) g.fillRect(x0 + W * k / 4, 0, 1.5, H);   // 보행자 광장
   x0 = 19 * W; base(x0, '128,128,126'); noise(x0, 0.05);                                                                   // 단색 콘크리트
@@ -1865,7 +1900,7 @@ function nrGeo(B) {
 }
 function nrChunk(key, x, z) {
   let C = NR.chunks.get(key);
-  if (!C) { C = { x0: Math.floor(x / NR_CH) * NR_CH, z0: Math.floor(z / NR_CH) * NR_CH, gr: nrB(), dk: nrB(), lc: nrB(), pr: nrB(), pl: nrB(), tr: [] }; NR.chunks.set(key, C); }
+  if (!C) { C = { x0: Math.floor(x / NR_CH) * NR_CH, z0: Math.floor(z / NR_CH) * NR_CH, g0: nrB(), g1: nrB(), g2: nrB(), g3: nrB(), dk: nrB(), lc: nrB(), pr: nrB(), pl: nrB(), tr: [] }; NR.chunks.set(key, C); }
   return C;
 }
 // 두 점열(A[i],B[i]) 사이 띠. st: {A,B (flat xyz), v[], u0,u1, col, nrm | nA, b:'gr'|'dk'}
@@ -2004,7 +2039,7 @@ function nrWay(D, off, i, plan) {
   }
   const slot = k === 0 ? nrRoadSlot(hwv, lanes, ow) : k === 1 ? NR_S.SIDE : k === 2 ? NR_S.CROSS : k === 3 ? NR_S.CYCLE : NR_S.RAIL;
   const tint = nrCol(k === 0 ? 0.74 + 0.26 * h0 : k === 1 ? 0.82 + 0.18 * h0 : k === 2 ? 0.92 : 0.85 + 0.15 * h0), tl = NR_TL[slot];
-  const dy = k === 0 ? 0.07 : k === 1 ? 0.14 : k === 2 ? 0.085 : k === 3 ? 0.08 : 0.1;
+  const dy = k === 0 ? 0.03 : k === 1 ? 0.03 : k === 2 ? 0.035 : k === 3 ? 0.032 : 0.04;
   const info = plan.get(i);
   if (info && info.elev && (k === 0 || k === 4)) {   // ----- 고가도로/교량 상판 -----
     const S = info.S, n = S.n, Y = info.y, hw = wd / 2, hwy = hwv <= 1 || k === 4, th = hwy ? 1.4 : 0.9, vs = new Float32Array(n);
@@ -2035,7 +2070,9 @@ function nrWay(D, off, i, plan) {
     return;
   }
   // ----- 지면 위 요소 -----
-  const S = nrResample(xs, zs, k === 1 ? 8 : 6), n = S.n, ok = new Uint8Array(n), Y = new Float32Array(n); let onDeck = false;
+  const lyr = k === 0 ? 'g0' : (k === 3 || k === 4) ? 'g1' : k === 2 ? 'g2' : 'g3', hwR = wd / 2;
+  let S = nrResample(xs, zs, k === 1 ? 8 : 6); if (!(br && k === 1)) S = nrRefine(S, hwR, 0.03);
+  const n = S.n, ok = new Uint8Array(n), Y = new Float32Array(n); let onDeck = false;
   for (let q = 0; q < n; q++) {
     const x = S.p[q * 2], z = S.p[q * 2 + 1]; if (!nrLand(x, z)) continue;
     if (k === 0 && nrOcc(x, z)) continue; ok[q] = 1; Y[q] = nmGroundAt(x, z);
@@ -2043,11 +2080,47 @@ function nrWay(D, off, i, plan) {
   }
   if (br && k === 1) for (let q = 0; q < n; q++) if (!ok[q]) { const d = nrDeckAt(S.p[q * 2], S.p[q * 2 + 1], 1e9); if (d !== null) { ok[q] = 1; Y[q] = d; onDeck = true; } }
   nrRuns(S, ok, Y, (P, m, y, s) => {
-    const E = nrEdges(P, m, y, wd / 2, dy), vs = new Float32Array(m); for (let q = 0; q < m; q++) vs[q] = s[q] / tl;
-    nrEmit(E.cen, [{ A: E.L, B: E.R, v: vs, u0: nrU(slot, 0), u1: nrU(slot, 1), col: tint, nrm: [0, 1, 0], b: onDeck ? 'dk' : 'gr' }]);
-    if (k === 0 && hwv < 8) for (let q = 0; q < m; q += 2) NR.roadGrid.set((Math.floor(P[q * 2] / 8) + 3000) * 20011 + Math.floor(P[q * 2 + 1] / 8) + 4000, [P[q * 2], P[q * 2 + 1]]);
+    const E = nrEdges(P, m, y, hwR, onDeck ? dy : 0), vs = new Float32Array(m); for (let q = 0; q < m; q++) vs[q] = s[q] / tl;
+    nrEmit(E.cen, nrDrape(E, m, y, vs, nrU(slot, 0), nrU(slot, 1), tint, dy, hwR, onDeck, lyr));
+    if (k === 0 && hwv < 8) for (let q = 0; q < m; q++) nrRgAdd(P[q * 2], P[q * 2 + 1], E.nr[q * 2 + 1], -E.nr[q * 2], hwR);
   });
 }
+// 노면 요소를 지형 삼각형에 맞춰 붙이기: 모서리·폭 방향 모두 지면 높이를 샘플(필요한 곳만 세분) → 고도를 올리지 않고도 코플래너 충돌 제거
+function nrRefine(S, hw, tol) {
+  const G = (x, z) => nrLand(x, z) ? nmGroundAt(x, z) : NaN, p = [S.p[0], S.p[1]], s = [0]; let acc = 0;
+  const rec = (x0, z0, x1, z1, d) => {
+    const L = Math.hypot(x1 - x0, z1 - z0);
+    if (d < 3 && L > 1.8) {
+      const mx = (x0 + x1) / 2, mz = (z0 + z1) / 2, tx = (x1 - x0) / L, tz = (z1 - z0) / L; let bad = false;
+      for (const t of [-1, 0, 1]) { const ox = -tz * hw * t, oz = tx * hw * t, gm = G(mx + ox, mz + oz), g0 = G(x0 + ox, z0 + oz), g1 = G(x1 + ox, z1 + oz);
+        if (gm === gm && g0 === g0 && g1 === g1 && Math.abs(gm - (g0 + g1) / 2) > tol) { bad = true; break; } }
+      if (bad) { rec(x0, z0, mx, mz, d + 1); rec(mx, mz, x1, z1, d + 1); return; }
+    }
+    acc += L; p.push(x1, z1); s.push(acc);
+  };
+  for (let i = 1; i < S.n; i++) rec(S.p[(i - 1) * 2], S.p[(i - 1) * 2 + 1], S.p[i * 2], S.p[i * 2 + 1], 0);
+  return { p, s, n: s.length };
+}
+function nrDrape(E, m, Y, vs, u0, u1, col, dy, hw, onDeck, lyr) {
+  const nrm = [0, 1, 0];
+  if (onDeck) return [{ A: E.L, B: E.R, v: vs, u0, u1, col, nrm, b: 'dk' }];
+  const G = (x, z, fb) => nrLand(x, z) ? nmGroundAt(x, z) : fb; let dev = 0;
+  for (let i = 0; i < m; i++) { const a = G(E.L[i * 3], E.L[i * 3 + 2], Y[i]), b = G(E.R[i * 3], E.R[i * 3 + 2], Y[i]); dev = Math.max(dev, Math.abs(Y[i] - (a + b) / 2)); }
+  const rows = dev < 0.03 ? 1 : Math.max(2, Math.min(6, Math.ceil(hw * 2 / 3.5))), out = [];
+  for (let r = 0; r < rows; r++) {
+    const t0 = r / rows, t1 = (r + 1) / rows, A = new Float32Array(m * 3), B = new Float32Array(m * 3);
+    for (let i = 0; i < m; i++) {
+      const lx = E.L[i * 3], lz = E.L[i * 3 + 2], rx = E.R[i * 3], rz = E.R[i * 3 + 2];
+      const ax = lx + (rx - lx) * t0, az = lz + (rz - lz) * t0, bx = lx + (rx - lx) * t1, bz = lz + (rz - lz) * t1;
+      A[i * 3] = ax; A[i * 3 + 1] = G(ax, az, Y[i]) + dy; A[i * 3 + 2] = az; B[i * 3] = bx; B[i * 3 + 1] = G(bx, bz, Y[i]) + dy; B[i * 3 + 2] = bz;
+    }
+    out.push({ A, B, v: vs, u0: u0 + (u1 - u0) * t0, u1: u0 + (u1 - u0) * t1, col, nrm, b: lyr });
+  }
+  return out;
+}
+// 도로 샘플 격자(위치·방향·반폭): 신호등 세트 배치용
+const nrRgKey = (cx, cz) => (cx + 3000) * 20011 + cz + 4000;
+function nrRgAdd(x, z, tx, tz, hw) { const k = nrRgKey(Math.floor(x / 8), Math.floor(z / 8)); let a = NR.roadGrid.get(k); if (!a) NR.roadGrid.set(k, a = []); a.push(x, z, tx, tz, hw); }
 // ok=1 인 연속 구간만 잘라 콜백(점열, 개수, 높이, 누적거리)
 function nrRuns(S, ok, Y, fn) {
   const n = S.n; let a = -1;
@@ -2075,7 +2148,7 @@ function nrTri(cls, ax, az, bx, bz, cx, cz, depth) {
   const gx = (ax + bx + cx) / 3, gz = (az + bz + cz) / 3; if (cls !== 13 && !nrLand(gx, gz)) return;
   const C = nrChunk(nrKeyC(gx, gz), gx, gz), B = C.lc, col = NR_LC[cls] || NR_LC[1], f = 0.9 + 0.2 * nrH(gx * 0.31, gz * 0.31), c = [Math.min(255, col[0] * f * 255) | 0, Math.min(255, col[1] * f * 255) | 0, Math.min(255, col[2] * f * 255) | 0];
   for (const [x, z] of [[ax, az], [bx, bz], [cx, cz]]) {
-    let y = nrLand(x, z) ? nmGroundAt(x, z) + 0.07 : 0.07; if (cls === 13) y = Math.max(y, 1.2);
+    let y = nrLand(x, z) ? nmGroundAt(x, z) + 0.03 : 0.03; if (cls === 13) y = Math.max(y, 1.2);
     nrV(B, x - C.x0, y, z - C.z0, 0.5, 0.5, c, 0, 1, 0);
   }
   const k = B.v - 3; B.i.push(k, k + 1, k + 2);
@@ -2098,24 +2171,18 @@ async function nrLandcover(L) {
 }
 // ---------- 점 지물 ----------
 function nrNearRoad(x, z) {
-  let best = null, bd = 1e9; const cx = Math.floor(x / 8) + 3000, cz = Math.floor(z / 8) + 4000;
-  for (let a = -2; a <= 2; a++) for (let b = -2; b <= 2; b++) { const p = NR.roadGrid.get((cx + a) * 20011 + cz + b); if (p) { const d = Math.hypot(p[0] - x, p[1] - z); if (d < bd) { bd = d; best = p; } } }
-  return best ? { dx: best[0] - x, dz: best[1] - z, d: bd } : null;
+  let best = null, bd = 1e9; const cx = Math.floor(x / 8), cz = Math.floor(z / 8);
+  for (let a = -2; a <= 2; a++) for (let b = -2; b <= 2; b++) { const l = NR.roadGrid.get(nrRgKey(cx + a, cz + b)); if (!l) continue;
+    for (let q = 0; q < l.length; q += 5) { const d = Math.hypot(l[q] - x, l[q + 1] - z); if (d < bd) { bd = d; best = q; best_l = l; } } }
+  return best !== null ? { dx: best_l[best] - x, dz: best_l[best + 1] - z, d: bd } : null;
 }
+let best_l = null;
 function nrProps(P) {
-  const DG = [44, 46, 50], RED = [255, 40, 30], GRN = [40, 255, 90], AMB = [255, 170, 30], so = nrU(NR_S.SOLID, 0.5);
+  const DG = [44, 46, 50], RED = [255, 40, 30], GRN = [40, 255, 90], AMB = [255, 170, 30], so = nrU(NR_S.SOLID, 0.5), sig = [];
   for (let i = 0; i < P.n; i++) {
-    const x = P.p[i * 2] / 10, z = P.p[i * 2 + 1] / 10, kd = P.kind[i]; if (!nrLand(x, z) || nrOcc(x, z)) continue;
+    const x = P.p[i * 2] / 10, z = P.p[i * 2 + 1] / 10, kd = P.kind[i]; if (kd === 0) { sig.push([x, z]); continue; } if (!nrLand(x, z) || nrOcc(x, z)) continue;
     const y = nmGroundAt(x, z), C = nrChunk(nrKeyC(x, z), x, z), h = nrH(x, z), nr = nrNearRoad(x, z), rot = nr ? Math.atan2(nr.dx, nr.dz) : h * 6.283, B = C.pr, L = C.pl;
     switch (kd) {
-      case 0: {   // 신호등
-        nrBox(B, C, x, y + 2.3, z, 0.16, 4.6, 0.16, 0, DG, so, 0.5);
-        for (let s = 0; s < 2; s++) {
-          const a = rot + s * Math.PI / 2, sx = Math.sin(a), sz = Math.cos(a), hx = x + sx * 0.3, hz = z + sz * 0.3, lit = nrH(x + s, z) < 0.45 ? RED : nrH(x + s, z) < 0.9 ? GRN : AMB;
-          nrBox(B, C, hx, y + 4.1, hz, 0.34, 1.0, 0.3, a, [24, 24, 26], so, 0.5);
-          const off = lit === RED ? 0.3 : lit === AMB ? 0 : -0.3;
-          nrLq(L, C, hx + sx * 0.16, y + 4.1 + off, hz + sz * 0.16, 0.2, 0.2, a, lit);
-        } break; }
       case 1: {   // 가로등
         nrBox(B, C, x, y + 3.7, z, 0.18, 7.4, 0.18, 0, DG, so, 0.5); const sx = Math.sin(rot), sz = Math.cos(rot);
         nrBox(B, C, x + sx * 0.8, y + 7.3, z + sz * 0.8, 0.1, 0.1, 1.6, rot, DG, so, 0.5);
@@ -2135,6 +2202,86 @@ function nrProps(P) {
       case 10: nrBox(B, C, x, y + 5.0, z, 0.12, 10, 0.12, 0, [225, 225, 228], so, 0.5); nrBox(B, C, x + 0.85, y + 9.0, z, 1.6, 0.95, 0.03, 0, [178, 30, 46], so, 0.5); break;
       case 11: nrBox(B, C, x, y + 0.6, z, 0.55, 1.2, 0.55, 0, [24, 52, 140], so, 0.5); break;
       case 12: nrBox(B, C, x, y + 1.15, z, 0.08, 2.3, 0.08, 0, [130, 130, 136], so, 0.5); nrBox(B, C, x, y + 2.15, z, 0.7, 0.7, 0.04, rot, [200, 14, 14], so, 0.5); break;
+    }
+  }
+  nrSignalSites(sig);
+}
+
+// ---------- 신호등 세트(차량용 + 보행자용): 교차로 4개 모서리(인도 쪽)에 기둥·암·신호기 ----------
+const nrAng = a => { a %= Math.PI; return a < 0 ? a + Math.PI : a; };
+function nrSignalSites(nodes) {
+  const sites = [];
+  for (const [x, z] of nodes) {
+    const ents = [], cx = Math.floor(x / 8), cz = Math.floor(z / 8);
+    for (let a = -3; a <= 3; a++) for (let b = -3; b <= 3; b++) { const l = NR.roadGrid.get(nrRgKey(cx + a, cz + b)); if (!l) continue;
+      for (let q = 0; q < l.length; q += 5) { const d = Math.hypot(l[q] - x, l[q + 1] - z); if (d < 26) ents.push([d, l[q], l[q + 1], l[q + 2], l[q + 3], l[q + 4]]); } }
+    if (!ents.length) continue; ents.sort((p, q) => p[0] - q[0]);
+    const cl = [];
+    for (const e of ents) {
+      const an = nrAng(Math.atan2(e[4], e[3])); let c = null;
+      for (const k of cl) { let d = Math.abs(k.an - an); d = Math.min(d, Math.PI - d); if (d < 0.45) { c = k; break; } }
+      if (!c) { c = { an, d: e[0], px: e[1], pz: e[2], hw: e[5], sx: 0, sy: 0 }; cl.push(c); }
+      c.sx += Math.cos(2 * an); c.sy += Math.sin(2 * an); c.hw = Math.max(c.hw, e[5]);
+    }
+    for (const k of cl) k.an = nrAng(0.5 * Math.atan2(k.sy, k.sx));
+    const A = cl[0]; let B = null;
+    for (const k of cl) if (k !== A && Math.abs(Math.sin(k.an - A.an)) > 0.5 && k.d < 22) { B = k; break; }
+    const a = [Math.cos(A.an), Math.sin(A.an)]; let c;
+    if (B) {
+      const b = [Math.cos(B.an), Math.sin(B.an)], den = a[0] * b[1] - a[1] * b[0], s = ((B.px - A.px) * b[1] - (B.pz - A.pz) * b[0]) / den;
+      c = [A.px + a[0] * s, A.pz + a[1] * s]; if (Math.hypot(c[0] - x, c[1] - z) > 32) B = null;
+    }
+    if (!B) { const t = (x - A.px) * a[0] + (z - A.pz) * a[1]; c = [A.px + a[0] * t, A.pz + a[1] * t]; }
+    let dup = false; for (const s of sites) if (Math.hypot(s[0] - c[0], s[1] - c[1]) < 10) { dup = true; break; }
+    if (dup) continue; sites.push(c);
+    try { nrSignalSet(c[0], c[1], A, B); } catch (e) { if (!NR.err2) { NR.err2 = 1; console.warn('signal', e); } }
+  }
+  NR.stats2 = { signals: sites.length };
+}
+function nrSignalSet(cx, cz, A, B) {
+  const DG = [44, 46, 50], HS = [22, 22, 24], so = nrU(NR_S.SOLID, 0.5);
+  const COL = { r: [255, 40, 30], a: [255, 175, 30], g: [40, 255, 100], rd: [70, 14, 12], ad: [70, 46, 8], gd: [10, 56, 24], W: [255, 255, 255], O: [255, 120, 10] };
+  const a = [Math.cos(A.an), Math.sin(A.an)], na = [-a[1], a[0]], ph = nrH(cx * 0.37, cz * 0.53), phase = ph < 0.42 ? 0 : ph < 0.5 ? 1 : ph < 0.92 ? 2 : 3;
+  let b = null, nb = null; if (B) { b = [Math.cos(B.an), Math.sin(B.an)]; nb = [-b[1], b[0]]; }
+  const corners = [];
+  if (B) { const det = na[0] * nb[1] - na[1] * nb[0];
+    for (const sa of [1, -1]) for (const sb of [1, -1]) { const ea = sa * (A.hw + 0.9), eb = sb * (B.hw + 0.9); corners.push({ vx: (ea * nb[1] - eb * na[1]) / det, vz: (na[0] * eb - nb[0] * ea) / det, sa, sb }); } }
+  else for (const sa of [1, -1]) corners.push({ vx: na[0] * sa * (A.hw + 0.9), vz: na[1] * sa * (A.hw + 0.9), sa, sb: 0 });
+  const lite = !!window.__LITE;
+  for (const cn of corners) {
+    if (lite && B && cn.sa * cn.sb < 0) continue;
+    let vx = cn.vx, vz = cn.vz; if (Math.hypot(vx, vz) > 45) continue;
+    let px = cx + vx, pz = cz + vz;
+    if (!nrLand(px, pz)) continue;
+    if (nrOcc(px, pz)) { vx *= 0.6; vz *= 0.6; px = cx + vx; pz = cz + vz; if (nrOcc(px, pz) || !nrLand(px, pz)) continue; }
+    const y = nmGroundAt(px, pz), C = nrChunk(nrKeyC(px, pz), px, pz), Bp = C.pr, L = C.pl;
+    nrBox(Bp, C, px, y + 3.1, pz, 0.15, 6.2, 0.15, 0, DG, so, 0.5);   // 기둥
+    const heads = []; // 차량 신호기가 달릴 도로
+    if (!B) heads.push({ r: a, n: na, hw: A.hw, side: cn.sa, st: phase === 0 ? 'g' : phase === 1 ? 'a' : 'r', face: cn.sa });
+    else {
+      const wantA = lite || cn.sa * cn.sb > 0, wantB = lite || cn.sa * cn.sb < 0;
+      if (wantA) heads.push({ r: a, n: na, hw: A.hw, side: cn.sa, st: phase === 0 ? 'g' : phase === 1 ? 'a' : 'r', face: Math.sign(vx * a[0] + vz * a[1]) || 1 });
+      if (wantB) heads.push({ r: b, n: nb, hw: B.hw, side: cn.sb, st: phase === 2 ? 'g' : phase === 3 ? 'a' : 'r', face: Math.sign(vx * b[0] + vz * b[1]) || 1 });
+    }
+    for (const h of heads) {   // 차량 신호기: 도로 위로 뻗은 암 끝에 매달림, 접근 차량 쪽을 향함
+      const dx = -h.side * h.n[0], dz = -h.side * h.n[1], len = (h.hw + 0.9) * 0.72;
+      nrBox(Bp, C, px + dx * len / 2, y + 5.8, pz + dz * len / 2, 0.1, 0.1, len, Math.atan2(dx, dz), DG, so, 0.5);
+      const tx = px + dx * (len - 0.25), tz = pz + dz * (len - 0.25), fx = h.r[0] * h.face, fz = h.r[1] * h.face, ang = Math.atan2(fx, fz), hy = y + 5.2;
+      nrBox(Bp, C, tx, hy, tz, 0.36, 1.05, 0.3, ang, HS, so, 0.5);
+      const lx = tx + fx * 0.16, lz = tz + fz * 0.16;
+      nrLq(L, C, lx, hy + 0.32, lz, 0.24, 0.24, ang, h.st === 'r' ? COL.r : COL.rd);
+      nrLq(L, C, lx, hy, lz, 0.24, 0.24, ang, h.st === 'a' ? COL.a : COL.ad);
+      nrLq(L, C, lx, hy - 0.32, lz, 0.24, 0.24, ang, h.st === 'g' ? COL.g : COL.gd);
+    }
+    const pedAll = [{ n: na, side: cn.sa, walk: phase === 2 }]; if (B) pedAll.push({ n: nb, side: cn.sb, walk: phase === 0 });
+    const peds = B ? [pedAll[cn.sa > 0 ? 0 : 1]] : pedAll;
+    for (const pd of peds) {   // 보행자 신호기: 기둥 중간 높이, 횡단보도 건너편을 향함
+      const fx = -pd.side * pd.n[0], fz = -pd.side * pd.n[1], ang = Math.atan2(fx, fz), cx2 = px + fx * 0.17, cz2 = pz + fz * 0.17, hy = y + 2.9;
+      nrBox(Bp, C, cx2, hy, cz2, 0.38, 0.44, 0.18, ang, HS, so, 0.5);
+      const fxp = cx2 + fx * 0.1, fzp = cz2 + fz * 0.1, cs = Math.cos(ang), sn = Math.sin(ang);
+      const q = (dx, dy, w, h, col) => nrLq(L, C, fxp + dx * cs, hy + dy, fzp - dx * sn, w, h, ang, col);
+      if (pd.walk) { q(0, 0.14, 0.07, 0.07, COL.W); q(0, 0.03, 0.08, 0.16, COL.W); q(-0.04, -0.12, 0.045, 0.14, COL.W); q(0.04, -0.12, 0.045, 0.14, COL.W); }
+      else { q(0, -0.05, 0.15, 0.12, COL.O); q(-0.055, 0.06, 0.035, 0.12, COL.O); q(0, 0.075, 0.035, 0.14, COL.O); q(0.055, 0.06, 0.035, 0.12, COL.O); }
     }
   }
 }
@@ -2164,9 +2311,9 @@ async function nrBuild(R) {
   nycLoadStatus('도로·지물 데이터 해제 중…', 0.9); await nmYield();
   const D = nrParseRoads(await nmInflate('nr001')), P = nrParseProps(await nmInflate('nr002')), L = nrParseLC(await nmInflate('nr003'));
   const tex = nrAtlas();
-  NR.mGr = new THREE.MeshStandardMaterial({ map: tex, vertexColors: true, roughness: 0.9, metalness: 0, alphaTest: 0.45, side: THREE.DoubleSide, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+  NR.mG = [0, 1, 2, 3].map(i => new THREE.MeshStandardMaterial({ map: tex, vertexColors: true, roughness: 0.88, metalness: 0, alphaTest: 0.45, side: THREE.DoubleSide, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -(6 + i * 2) })); NR.mGr = NR.mG[0];
   NR.mDk = new THREE.MeshStandardMaterial({ map: tex, vertexColors: true, roughness: 0.9, metalness: 0, alphaTest: 0.45, side: THREE.DoubleSide });
-  NR.mLc = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0, side: THREE.DoubleSide, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });
+  NR.mLc = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0, side: THREE.DoubleSide, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4 });
   NR.mPr = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.7, metalness: 0.1 });
   NR.mPl = new THREE.MeshBasicMaterial({ vertexColors: true });
   NR.mTr = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0 });
@@ -2185,7 +2332,7 @@ async function nrBuild(R) {
   let nT = 0, nV = 0;
   for (const [key, C] of NR.chunks) {
     const mk = (B, mat, ro, nm, r) => { if (!B.v) return; const m = new THREE.Mesh(nrGeo(B), mat); m.name = nm; m.position.set(C.x0, 0, C.z0); m.renderOrder = ro; scene.add(m); NM.cellMeshes.push({ mesh: m, x: C.x0 + NR_CH / 2, z: C.z0 + NR_CH / 2, r }); nV += B.v; };
-    mk(C.lc, NR.mLc, 1, 'NR_Land', 0); mk(C.gr, NR.mGr, 2, 'NR_Road', 0); mk(C.dk, NR.mDk, 3, 'NR_Deck', 0); mk(C.pr, NR.mPr, 0, 'NR_Props', 1300); mk(C.pl, NR.mPl, 0, 'NR_Lights', 1300);
+    const sq = (NR._seq = (NR._seq || 0) + 1) * 1e-5; mk(C.lc, NR.mLc, 1 + sq, 'NR_Land', 0); mk(C.g0, NR.mG[0], 2 + sq, 'NR_Road', 0); mk(C.g1, NR.mG[1], 2.1 + sq, 'NR_Road1', 0); mk(C.g2, NR.mG[2], 2.2 + sq, 'NR_Cross', 0); mk(C.g3, NR.mG[3], 2.3 + sq, 'NR_Walk', 0); mk(C.dk, NR.mDk, 3, 'NR_Deck', 0); mk(C.pr, NR.mPr, 0, 'NR_Props', 1300); mk(C.pl, NR.mPl, 0, 'NR_Lights', 1300);
     if (C.tr.length) {
       const im = new THREE.InstancedMesh(tg, NR.mTr, C.tr.length); im.name = 'NR_Trees'; im.frustumCulled = false;
       C.tr.forEach((t, i) => {
@@ -2195,7 +2342,7 @@ async function nrBuild(R) {
       });
       im.instanceMatrix.needsUpdate = true; if (im.instanceColor) im.instanceColor.needsUpdate = true; scene.add(im); NM.cellMeshes.push({ mesh: im, x: C.x0 + NR_CH / 2, z: C.z0 + NR_CH / 2, r: 1500 }); nT += C.tr.length;
     }
-    C.gr = C.dk = C.lc = C.pr = C.pl = null; C.tr = null;
+    C.g0 = C.g1 = C.g2 = C.g3 = C.dk = C.lc = C.pr = C.pl = null; C.tr = null;
   }
   NR.roadGrid = null; NR.ready = true; NR.stats = { verts: nV, trees: nT, decks: NR.decks.size };
   console.log('[NR] roads built', NR.stats);
@@ -5045,7 +5192,7 @@ function updateCameraAndHUD(dt) {
       camera.rotateZ(msm2CamRoll);
     }
   }
-  camera.near = (isBirdEyeMode || camera.position.y > 45) ? 2.0 : 0.12;
+  camera.near = (isBirdEyeMode || camera.position.y > 45) ? 2.0 : camera.position.y > 18 ? 0.6 : isPOVMode ? 0.12 : 0.3;
   const targetFov = isPOVMode
     ? THREE.MathUtils.clamp(78 + Math.max(0, speed - 22) * 0.45, 78, 104)
     : THREE.MathUtils.clamp(64 + Math.max(0, speed - 10) * 0.62, 64, 98);
