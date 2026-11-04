@@ -539,7 +539,7 @@ function nycBldInfo(ch, cls, bi, key) {
 const NM_OX = 673.47, NM_OZ = 3676.86;
 const NM_IDS = ['001', '002', '003', '004', '005', '006'];
 const NM_G = 10;            // 래스터 해상도(m)
-const NM_CS = 20;           // 지형 메시 격자(m)
+const NM_CS = 10;           // 지형 메시 격자(m) — 래스터(NM_G)와 같은 격자라 건물 바닥 고도를 그대로 따라간다
 const NM = { parts: [], bx: [], ready: false, idx: new Map(), cellDone: new Set(), anchDone: new Set(), cellMeshes: [], ter: null,
   mapCv: null, mw: 0, mh: 0, camT: 0, tot: 0, nBuilt: 0 };
 let MAP_X0 = -3000, MAP_Z0 = -14800;
@@ -591,6 +591,27 @@ function nmChunk(d, i) {
 }
 
 // ---------------- 지붕 단(tier) 외곽선 → 충돌체 ----------------
+// 바깥 윤곽 + 구멍들을 '키홀 다리'로 이어 하나의 다각형으로 만든다 (짝-홀 판정이 구멍을 정확히 비워 준다)
+function nmKeyhole(outer, holes) {
+  const sgn = r => { let a = 0; for (let i = 0; i < r.length; i++) { const p = r[i], q = r[(i + 1) % r.length]; a += p.x * q.z - q.x * p.z; } return a; };
+  const cross = (ax, az, bx, bz, cx, cz, dx, dz) => { const d1 = (bx - ax) * (cz - az) - (bz - az) * (cx - ax), d2 = (bx - ax) * (dz - az) - (bz - az) * (dx - ax), d3 = (dx - cx) * (az - cz) - (dz - cz) * (ax - cx), d4 = (dx - cx) * (bz - cz) - (dz - cz) * (bx - cx); return d1 * d2 < 0 && d3 * d4 < 0; };
+  let ring = outer.slice(), so = sgn(outer);
+  holes = holes.slice().sort((a, b) => Math.abs(sgn(b)) - Math.abs(sgn(a)));
+  for (let hi = 0; hi < holes.length; hi++) {
+    let h = holes[hi]; if (sgn(h) * so > 0) h = h.slice().reverse();
+    const cand = []; for (let i = 0; i < ring.length; i++) for (let k = 0; k < h.length; k++) cand.push([Math.hypot(ring[i].x - h[k].x, ring[i].z - h[k].z), i, k]);
+    cand.sort((a, b) => a[0] - b[0]);
+    const edgesOK = (A, P, Q, skipA) => { for (let e = 0; e < A.length; e++) { const a = A[e], b = A[(e + 1) % A.length]; if (a === P || a === Q || b === P || b === Q) continue; if (cross(P.x, P.z, Q.x, Q.z, a.x, a.z, b.x, b.z)) return false; } return true; };
+    let done = false;
+    for (let c = 0; c < Math.min(cand.length, 40) && !done; c++) {
+      const i = cand[c][1], k = cand[c][2], P = ring[i], Q = h[k]; let ok = edgesOK(ring, P, Q) && edgesOK(h, P, Q);
+      for (let o = hi + 1; ok && o < holes.length; o++) ok = edgesOK(holes[o], P, Q);
+      if (!ok) continue;
+      ring = [...ring.slice(0, i + 1), ...h.slice(k), ...h.slice(0, k + 1), P, ...ring.slice(i + 1)]; done = true;
+    }
+  }
+  return ring;
+}
 function nmExtractRings(d, i) {
   const ch = nmChunk(d, i), T = ch.T, cls = d.cls, out = [];
   const roof = []; for (let t = 0; t < ch.nt; t++) if (cls[ch.C[t]] === 0) roof.push(t);
@@ -608,13 +629,24 @@ function nmExtractRings(d, i) {
     }
   }
   const maxY = new Float32Array(n).fill(-1e9);
-  for (let k = 0; k < n; k++) { const r = find(k), t = roof[k] * 3; for (let e = 0; e < 3; e++) { const y = ch.uy[T[t + e]]; if (y > maxY[r]) maxY[r] = y; } }
+  const totA = new Float32Array(n), flatBins = new Map();   // 단(root)별 전체 면적 / 수평 지붕면 높이 빈(0.25m)
+  for (let k = 0; k < n; k++) {
+    const r = find(k), t = roof[k] * 3; let lo = 1e9, hi = -1e9;
+    for (let e = 0; e < 3; e++) { const y = ch.uy[T[t + e]]; if (y > maxY[r]) maxY[r] = y; if (y < lo) lo = y; if (y > hi) hi = y; }
+    const a = T[t], b = T[t + 1], c = T[t + 2];
+    const ar = Math.abs((ch.ux[b] - ch.ux[a]) * (ch.uz[c] - ch.uz[a]) - (ch.ux[c] - ch.ux[a]) * (ch.uz[b] - ch.uz[a])) * 0.5;
+    totA[r] += ar;
+    if (hi - lo < 0.05) { const key = r * 100000 + Math.round(hi * 4); let e = flatBins.get(key); if (!e) flatBins.set(key, e = { r, a: 0, ys: 0 }); e.a += ar; e.ys += hi * ar; }
+  }
+  const flatY = new Float32Array(n).fill(-1e9), flatBest = new Float32Array(n);
+  for (const e of flatBins.values()) if (e.a > flatBest[e.r]) { flatBest[e.r] = e.a; flatY[e.r] = e.ys / e.a; }
+  const topY = r => (maxY[r] - flatY[r] > 0.35 && flatY[r] > -1e8 && flatBest[r] >= 0.35 * totA[r]) ? flatY[r] : maxY[r];
   const adj = new Map();
   for (const [key, c] of ecount) if (c === 1) {
     const a = Math.floor(key / 65536), b = key % 65536;
     if (!adj.has(a)) adj.set(a, []); if (!adj.has(b)) adj.set(b, []); adj.get(a).push(b); adj.get(b).push(a);
   }
-  const used = new Set(), best = new Map();
+  const used = new Set(), best = new Map(), allL = new Map();
   const ek = (a, b) => a < b ? a * 65536 + b : b * 65536 + a;
   for (const [key, c] of ecount) {
     if (c !== 1 || used.has(key)) continue;
@@ -627,12 +659,16 @@ function nmExtractRings(d, i) {
     if (!ok || loop.length < 3) continue;
     let ar = 0; for (let q = 0; q < loop.length; q++) { const p = loop[q], r = loop[(q + 1) % loop.length]; ar += ch.ux[p] * ch.uz[r] - ch.ux[r] * ch.uz[p]; }
     ar = Math.abs(ar) / 2;
-    const root = find(emap.get(key)), cb = best.get(root);
-    if (!cb || ar > cb.ar) best.set(root, { ar, loop, y: maxY[root] });
+    const root = find(emap.get(key)), cb = best.get(root), ent = { ar, loop, y: topY(root), root };
+    let al = allL.get(root); if (!al) allL.set(root, al = []); al.push(ent);
+    if (!cb || ar > cb.ar) best.set(root, ent);
   }
   for (const b of best.values()) {
-    if (b.ar < 1.0) continue;
-    out.push({ ar: b.ar, y: b.y, ring: b.loop.map(p => ({ x: ch.ux[p], z: ch.uz[p] })) });
+    if (b.ar < 1.0) continue; b.root = b.root;
+    const ring = b.loop.map(p => ({ x: ch.ux[p], z: ch.uz[p] }));
+    // 같은 지붕 단의 안쪽 루프(중정·채광정·지붕 개구부) → 충돌 윤곽에서 빼기 위해 키홀 다각형 생성
+    const holes = []; for (const l of (allL.get(b.root) || [])) if (l !== b && l.ar >= 4 && l.ar < b.ar * 0.9) { const hp = l.loop.map(p => ({ x: ch.ux[p], z: ch.uz[p] })); if (pointInPolygonXZ(hp[0].x, hp[0].z, ring)) holes.push(hp); }
+    out.push({ ar: b.ar, y: b.y, ring, cring: holes.length ? nmKeyhole(ring, holes) : null });
   }
   return { base, rings: out, ch };
 }
@@ -649,7 +685,7 @@ function nmBuildCols(g) {
   const P = NM.parts[bx.p], r = nmExtractRings(P.d, bx.i);
   let mi = -1, ma = -1;   // 가장 넓은 단(=지상 외벽)을 주 외곽선으로 표시 (비상계단·어닝용)
   r.rings.forEach((q, k) => { let a = 0; const rg = q.ring; for (let t = 0; t < rg.length; t++) { const p = rg[t], s = rg[(t + 1) % rg.length]; a += p.x * s.z - s.x * p.z; } a = Math.abs(a); if (a > ma) { ma = a; mi = k; } });
-  r.rings.forEach((q, k) => { nmRegister({ name: 'NYC building #' + g, ringXZ: q.ring, minY: r.base, maxY: q.y, nm: true, winProf: bx.prof, btypeHint: bx.shop ? '' : 'apartments', bx, main: k === mi }); NM.nBuilt++; });
+  r.rings.forEach((q, k) => { nmRegister({ name: 'NYC building #' + g, ringXZ: q.ring, cring: q.cring || q.ring, minY: r.base, maxY: q.y, nm: true, winProf: bx.prof, btypeHint: bx.shop ? '' : 'apartments', bx, main: k === mi }); NM.nBuilt++; });
 }
 function nmEnsureCell(k) {
   if (NM.cellDone.has(k)) return; NM.cellDone.add(k);
@@ -689,8 +725,10 @@ function nmGroundAt(x, z) {
   const fx = (x - T.x0) / NM_CS, fz = (z - T.z0) / NM_CS, i = Math.floor(fx), j = Math.floor(fz);
   if (i < 0 || j < 0 || i >= T.w - 1 || j >= T.h - 1 || !T.land[j * (T.w - 1) + i]) return 0;
   const u = fx - i, v = fz - j, H = T.hgt, w = T.w;
-  const y = (H[j * w + i] * (1 - u) + H[j * w + i + 1] * u) * (1 - v) + (H[(j + 1) * w + i] * (1 - u) + H[(j + 1) * w + i + 1] * u) * v;
-  return y > 0 ? y : 0;
+  const a = H[j * w + i], b = H[j * w + i + 1], c = H[(j + 1) * w + i], d = H[(j + 1) * w + i + 1];
+  // 렌더 메시와 같은 삼각분할(a,c,b / b,c,d)로 보간해서 캐릭터가 보이는 지면 위에 정확히 선다
+  const y = (u + v <= 1) ? a + (b - a) * u + (c - a) * v : d + (b - d) * (1 - v) + (c - d) * (1 - u);
+  return y - 0.1;
 }
 function nmTerrainPass() {
   const gy = nmGroundAt(player.pos.x, player.pos.z); GROUND_Y = gy;
@@ -1607,6 +1645,25 @@ async function nmBuildPart(P, pi, R, mat, prog) {
 }
 
 // ---------------- 지형 · 바다 · 지도 이미지 ----------------
+// 건물 바닥 고도(고도 = 건물 바닥 − 보간 지형)를 계산해 지형을 건물에 맞춘다.
+// 건물 발자국 안은 정확히 건물 바닥 높이, 바깥은 높이차에 비례한 거리(차이×3, 12~80m)에 걸쳐 부드럽게 원래 지형으로 돌아온다.
+function nmTerrainFit(R, E, dist) {
+  const W = R.W, H = R.H, N = W * H, D = new Float32Array(N), K = new Float32Array(N);
+  for (let q = 0; q < N; q++) if (R.occ[q]) { D[q] = R.elev[q] - E[q]; K[q] = 1; }
+  for (const r of [1, 2, 4, 8, 16]) {
+    const num = new Float32Array(N); for (let q = 0; q < N; q++) num[q] = D[q] * K[q];
+    const bn = nmBoxBlur(num, W, H, r), bd = nmBoxBlur(K, W, H, r), add = [];
+    for (let q = 0; q < N; q++) if (!K[q] && bd[q] > 0.04) add.push(q);
+    for (const q of add) { D[q] = bn[q] / bd[q]; K[q] = 1; }
+  }
+  const T = new Float32Array(N);
+  for (let q = 0; q < N; q++) {
+    if (R.occ[q]) { T[q] = R.elev[q]; continue; }
+    const dv = D[q] * K[q], Lm = Math.min(80, Math.max(12, Math.abs(dv) * 3)), x = Math.min(1, dist[q] * NM_G / Lm), w = 1 - x * x * (3 - 2 * x);
+    T[q] = E[q] + dv * w;
+  }
+  return T;
+}
 function nmBuildTerrain(R) {
   const W = R.W, H = R.H, G = NM_G, E = nmFillElev(R), dist = nmDist(R.occ, W, H), land = nmLandMask(R.occ, W, H);
   // 지도 이미지
@@ -1618,14 +1675,23 @@ function nmBuildTerrain(R) {
     px[q * 4] = r; px[q * 4 + 1] = g; px[q * 4 + 2] = b; px[q * 4 + 3] = 255;
   }
   cg.putImageData(im, 0, 0); NM.mapCv = cv; NM.mw = W * G; NM.mh = H * G; MAP_X0 = R.x0; MAP_Z0 = R.z0;
-  // 지형 메시(20m 격자)
-  const cw = Math.floor(W / 2), ch = Math.floor(H / 2), vw = cw + 1, vh = ch + 1, hgt = new Float32Array(vw * vh), cland = new Uint8Array(cw * ch);
-  for (let j = 0; j < vh; j++) for (let i = 0; i < vw; i++) hgt[j * vw + i] = E[Math.min(H - 1, j * 2) * W + Math.min(W - 1, i * 2)];
-  for (let j = 0; j < ch; j++) for (let i = 0; i < cw; i++) { const q = j * 2 * W + i * 2; cland[j * cw + i] = (land[q] | land[q + 1] | land[q + W] | land[q + W + 1]); }
+  // 지형 메시(10m 격자): 건물 바닥 고도에 맞춰 보정한 높이장 사용
+  const TF = nmTerrainFit(R, E, dist);
+  const cw = W, ch = H, vw = cw + 1, vh = ch + 1, hgt = new Float32Array(vw * vh), cland = new Uint8Array(cw * ch);
+  for (let j = 0; j < vh; j++) for (let i = 0; i < vw; i++) {
+    let sum = 0, n = 0, mo = 1e9, mx = -1e9;
+    for (let dj = -1; dj <= 0; dj++) for (let di = -1; di <= 0; di++) {
+      const ci = i + di, cj = j + dj; if (ci < 0 || cj < 0 || ci >= W || cj >= H) continue;
+      const q = cj * W + ci; sum += TF[q]; n++; if (R.occ[q]) { if (R.elev[q] < mo) mo = R.elev[q]; if (R.elev[q] > mx) mx = R.elev[q]; }
+    }
+    let h = n ? sum / n : 0; if (mo < 1e8) { const m = (mo + mx) * 0.5; if (h < m) h = m; }   // 접한 건물 바닥 높이 아래로 지면이 꺼져 틈이 생기지 않게
+    hgt[j * vw + i] = h;
+  }
+  for (let q = 0; q < W * H; q++) cland[q] = land[q];
   NM.ter = { x0: R.x0, z0: R.z0, cs: NM_CS, w: vw, h: vh, hgt, land: cland };
   const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.92, metalness: 0.0, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 2 });
-  const TILE = 20, out = [];
-  const colAt = (i, j) => { const q = Math.min(H - 1, j * 2) * W + Math.min(W - 1, i * 2), t = Math.min(1, Math.max(0, (dist[q] - 4.5) / 4.0)), s = t * t * (3 - 2 * t), n = 0.92 + 0.16 * nmHash(i, j);
+  const TILE = 40, out = [];
+  const colAt = (i, j) => { const q = Math.min(H - 1, j) * W + Math.min(W - 1, i), t = Math.min(1, Math.max(0, (dist[q] - 4.5) / 4.0)), s = t * t * (3 - 2 * t), n = 0.92 + 0.16 * nmHash(i, j);
     return [(0.17 + (0.10 - 0.17) * s) * n, (0.19 + (0.30 - 0.19) * s) * n, (0.22 + (0.15 - 0.22) * s) * n]; };
   for (let tj = 0; tj < ch; tj += TILE) for (let ti = 0; ti < cw; ti += TILE) {
     const i1 = Math.min(cw, ti + TILE), j1 = Math.min(ch, tj + TILE); let any = false;
@@ -1769,7 +1835,7 @@ function isWebLineClearToSpot(from, spot) {
       if (spot.userData && spot.userData.ringXZ && col.ringXZ === spot.userData.ringXZ) continue;
       if (y <= 0.8 || y >= col.maxY - 0.35) continue;
       if (x < col.minX - 0.05 || x > col.maxX + 0.05 || z < col.minZ - 0.05 || z > col.maxZ + 0.05) continue;
-      if (pointInPolygonXZ(x, z, col.ringXZ)) return false;
+      if (pointInPolygonXZ(x, z, col.cring || col.ringXZ)) return false;
     }
   }
   return true;
@@ -1927,6 +1993,15 @@ function pointInPolygonXZ(px, pz, ring) {
   return inside;
 }
 
+// 충돌 윤곽의 벽 법선: '빈 공간' 쪽을 가리키도록 벽 중점에서 살짝 밀어 내부/외부를 직접 판정한다.
+// (건물 중심 기준 방향 추정은 L자·ㄷ자 건물과 중정 안쪽 벽에서 반대로 뒤집히곤 했다)
+function colEdgeNormal(col, a, b, nx, nz) {
+  const ring = col.cring || col.ringXZ, mx = (a.x + b.x) * 0.5, mz = (a.z + b.z) * 0.5;
+  const f = pointInPolygonXZ(mx + nx * 0.06, mz + nz * 0.06, ring), g = pointInPolygonXZ(mx - nx * 0.06, mz - nz * 0.06, ring);
+  if (f && !g) return [-nx, -nz];
+  if (f === g && nx * (mx - col.centX) + nz * (mz - col.centZ) < 0) return [-nx, -nz];
+  return [nx, nz];
+}
 function handleWallContact(col, nx, nz, hSpeed) {
   const vInto = -(player.vel.x * nx + player.vel.z * nz);
   if (vInto > 0) {
@@ -1973,7 +2048,7 @@ function resolvePolygonBuildingCollisions(prev) {
 
   for (let c = 0; c < nearbyCols.length; c++) {
     const col = nearbyCols[c];
-    const ring = col.ringXZ;
+    const ring = col.cring || col.ringXZ;
     const px = player.pos.x, py = player.pos.y, pz = player.pos.z;
     // 높이 범위와 AABB를 먼저 검사해 실제 충돌 가능성이 없는 건물은 정밀 다각형 계산을 건너뛴다.
     if (py + player.height <= col.minY + 0.1 || py >= col.maxY + 0.05) continue;
@@ -2003,7 +2078,7 @@ function resolvePolygonBuildingCollisions(prev) {
           let nx = dz / el, nz = -dx / el;
           // 법선이 항상 건물 중심(centX, centZ) 바깥쪽을 향하도록 보장
           const midX = (a.x + b.x) * 0.5, midZ = (a.z + b.z) * 0.5;
-          if (nx * (midX - col.centX) + nz * (midZ - col.centZ) < 0) { nx = -nx; nz = -nz; }
+          { const _n = colEdgeNormal(col, a, b, nx, nz); nx = _n[0]; nz = _n[1]; }
           edgeNx = nx; edgeNz = nz;
         }
       }
@@ -2051,7 +2126,7 @@ function resolvePolygonBuildingCollisions(prev) {
         const ex = b.x - a.x, ez = b.z - a.z, el = Math.hypot(ex, ez) || 1;
         nx = ez / el; nz = -ex / el;
         const midX = (a.x + b.x) * 0.5, midZ = (a.z + b.z) * 0.5;
-        if (nx * (midX - col.centX) + nz * (midZ - col.centZ) < 0) { nx = -nx; nz = -nz; }
+        { const _n = colEdgeNormal(col, a, b, nx, nz); nx = _n[0]; nz = _n[1]; }
       } else {
         // 샘플 지점이 다각형 내부라면 가장 가까운 외벽을 찾아 바깥 방향으로 밀어낸다.
         let minD = Infinity;
@@ -2066,7 +2141,7 @@ function resolvePolygonBuildingCollisions(prev) {
             const el = Math.sqrt(lenSq);
             nx = dz / el; nz = -dx / el;
             const midX = (a.x + b.x) * 0.5, midZ = (a.z + b.z) * 0.5;
-            if (nx * (midX - col.centX) + nz * (midZ - col.centZ) < 0) { nx = -nx; nz = -nz; }
+            { const _n = colEdgeNormal(col, a, b, nx, nz); nx = _n[0]; nz = _n[1]; }
           }
         }
       }
@@ -2105,7 +2180,7 @@ function resolvePolygonBuildingCollisions(prev) {
         let nx = dz / len, nz = -dx / len;
         // 건물 중심(centX, centZ)에서 바깥쪽을 향하는 법선으로 통일
         const midX = (a.x + b.x) * 0.5, midZ = (a.z + b.z) * 0.5;
-        if (nx * (midX - col.centX) + nz * (midZ - col.centZ) < 0) { nx = -nx; nz = -nz; }
+        { const _n = colEdgeNormal(col, a, b, nx, nz); nx = _n[0]; nz = _n[1]; }
         bestNx = nx; bestNz = nz;
       }
     }
@@ -2971,12 +3046,12 @@ function nearbyColliders(x, z) {
   return out;
 }
 function nearestEdge(col, px, pz) {
-  const ring = col.ringXZ; let best = Infinity, cx=px, cz=pz, nx=0, nz=1;
+  const ring = col.cring || col.ringXZ; let best = Infinity, cx=px, cz=pz, nx=0, nz=1;
   for (let i=0;i<ring.length;i++) {
     const a=ring[i], b=ring[(i+1)%ring.length], dx=b.x-a.x, dz=b.z-a.z, lenSq=dx*dx+dz*dz||1;
     const t=Math.max(0,Math.min(1,((px-a.x)*dx+(pz-a.z)*dz)/lenSq)), ex=a.x+t*dx, ez=a.z+t*dz, dSq=(px-ex)*(px-ex)+(pz-ez)*(pz-ez);
     if (dSq<best) { best=dSq; cx=ex; cz=ez; const el=Math.sqrt(lenSq); nx=dz/el; nz=-dx/el;
-      if (nx*((a.x+b.x)*0.5-col.centX)+nz*((a.z+b.z)*0.5-col.centZ) < 0) { nx=-nx; nz=-nz; } }
+      { const _n = colEdgeNormal(col, a, b, nx, nz); nx = _n[0]; nz = _n[1]; } }
   }
   return {d:Math.sqrt(best), cx, cz, nx, nz, inside: pointInPolygonXZ(px,pz,ring)};
 }
@@ -2991,7 +3066,7 @@ function hardCollisionPass(prev) {
   if (dist > 25) for (const c of nearbyColliders(prev.x, prev.z)) if (cols.indexOf(c) < 0) cols.push(c);
   const bot = Math.min(prev.y, p.y), top = Math.max(prev.y, p.y);
   for (const col of cols) {
-    const ring = col.ringXZ;
+    const ring = col.cring || col.ringXZ;
     if (Math.max(prev.x,p.x) < col.minX-1 || Math.min(prev.x,p.x) > col.maxX+1 || Math.max(prev.z,p.z) < col.minZ-1 || Math.min(prev.z,p.z) > col.maxZ+1) continue;
     if (bot >= col.maxY-0.4 && p.y >= col.maxY-0.4) continue;
     if (top + player.height <= col.minY) continue;
@@ -3029,7 +3104,7 @@ function clipCameraToBuildings(tgt) {
     const t=k/steps, x=tgt.x+dx*t, y=tgt.y+dy*t, z=tgt.z+dz*t;
     for (const col of cols) {
       if (y >= col.maxY-0.3 || y <= col.minY || x<col.minX || x>col.maxX || z<col.minZ || z>col.maxZ) continue;
-      if (pointInPolygonXZ(x,z,col.ringXZ)) {
+      if (pointInPolygonXZ(x,z,col.cring || col.ringXZ)) {
         const tt = Math.max(0.1, (k-1)/steps - 0.4/L);
         cp.set(tgt.x+dx*tt, tgt.y+dy*tt, tgt.z+dz*tt); return;
       }
@@ -3039,7 +3114,7 @@ function clipCameraToBuildings(tgt) {
 function pointBlocked(x, y, z) {
   for (const col of nearbyColliders(x, z)) {
     if (y >= col.maxY || y <= col.minY || x<col.minX || x>col.maxX || z<col.minZ || z>col.maxZ) continue;
-    if (pointInPolygonXZ(x, z, col.ringXZ)) return true;
+    if (pointInPolygonXZ(x, z, col.cring || col.ringXZ)) return true;
   }
   return false;
 }
