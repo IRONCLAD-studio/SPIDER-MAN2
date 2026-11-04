@@ -1681,6 +1681,53 @@ function nmFilterOcc(R) {
   }
   for (const q of rm) { R.occ[q] = 0; R.elev[q] = 0; }
 }
+
+// ---------------- 도로 주변 지형 평탄화 ----------------
+// 도로 중심선 반경(반폭+여유) 안의 지형 셀을 '도로 네트워크 위 셀들만' 가지고 저주파 필터링한다.
+//  - 짧은 파장의 울퉁불퉁함(건물 바닥 고도 노이즈)은 제거, 일정하게 이어지는 완만한 경사는 그대로 유지(선형 경사는 평균해도 보존됨)
+//  - 필터 결과가 원래 지형과 3m 이상 어긋나는 곳(= 실제 가파른 오르막·턱·절벽)은 원래 지형을 살린다
+const NM_ROAD_SMOOTH_R = 4;       // 평탄화 창 반경(셀, 1셀=10m) — 클수록 더 매끈
+const NM_ROAD_KEEP_DEV = 3.0;     // 필터 결과와 원본이 이만큼(m) 이상 다르면 '진짜 경사/지형'으로 보고 보존 시작
+async function nrPrepRoads(R) {
+  const D = nrParseRoads(await nmInflate('nr001')); NR.preD = D;
+  const off = new Uint32Array(D.nW + 1); for (let i = 0; i < D.nW; i++) off[i + 1] = off[i] + D.np[i];
+  const W = R.W, H = R.H, mask = new Uint8Array(W * H), G = NM_G;
+  for (let i = 0; i < D.nW; i++) {
+    if (D.kind[i] !== 0 || (D.flags[i] & 2) || D.hw[i] === 8) continue;   // 차도만(교량·고가·광장 제외)
+    const { xs, zs } = nrDecodeWay(D, off, i), rad = Math.max(6, (D.wd[i] / 4) / 2 + 4);
+    for (let k = 1; k < xs.length; k++) {
+      const ax = xs[k - 1], az = zs[k - 1], bx = xs[k], bz = zs[k], L = Math.hypot(bx - ax, bz - az), m = Math.max(1, Math.ceil(L / 4));
+      for (let t = 0; t <= m; t++) {
+        const x = ax + (bx - ax) * t / m, z = az + (bz - az) * t / m;
+        const i0 = Math.floor((x - rad - R.x0) / G), i1 = Math.floor((x + rad - R.x0) / G), j0 = Math.floor((z - rad - R.z0) / G), j1 = Math.floor((z + rad - R.z0) / G);
+        for (let j = Math.max(0, j0); j <= Math.min(H - 1, j1); j++) for (let ii = Math.max(0, i0); ii <= Math.min(W - 1, i1); ii++) {
+          const cx = R.x0 + (ii + 0.5) * G, cz = R.z0 + (j + 0.5) * G; if (Math.hypot(cx - x, cz - z) <= rad) mask[j * W + ii] = 1;
+        }
+      }
+    }
+    if ((i & 1023) === 1023) await nmYield();
+  }
+  R.road = mask;
+}
+function nmSmoothRoadTerrain(R, T) {
+  const mask = R.road; if (!mask) return T;
+  const W = R.W, H = R.H, N = W * H, K = new Float32Array(N), soft = new Float32Array(N);
+  for (let q = 0; q < N; q++) { if (mask[q] && !R.occ[q]) K[q] = 1; soft[q] = mask[q] && !R.occ[q] ? 1 : 0; }
+  const num = new Float32Array(N); for (let q = 0; q < N; q++) num[q] = T[q] * K[q];
+  let bn = num, bd = K;
+  const r1 = NM_ROAD_SMOOTH_R, r2 = Math.max(1, Math.round(NM_ROAD_SMOOTH_R / 2));
+  bn = nmBoxBlur(bn, W, H, r1); bd = nmBoxBlur(bd, W, H, r1);
+  bn = nmBoxBlur(bn, W, H, r2); bd = nmBoxBlur(bd, W, H, r2);
+  const wm = nmBoxBlur(soft, W, H, 1), out = new Float32Array(T);
+  for (let q = 0; q < N; q++) {
+    if (R.occ[q] || bd[q] < 0.02 || wm[q] <= 0.01) continue;
+    const lp = bn[q] / bd[q], dev = Math.abs(lp - T[q]);
+    let keep = Math.min(1, Math.max(0, (dev - NM_ROAD_KEEP_DEV) / 3)); keep = keep * keep * (3 - 2 * keep);   // 큰 차이 = 실제 경사 → 보존
+    const a = Math.min(1, wm[q] * 1.5) * (1 - keep);
+    out[q] = T[q] + (lp - T[q]) * a;
+  }
+  return out;
+}
 function nmBuildTerrain(R) {
   nmFilterOcc(R);
   const W = R.W, H = R.H, G = NM_G, E = nmFillElev(R), dist = nmDist(R.occ, W, H), land = nmLandMask(R.occ, W, H);
@@ -1694,7 +1741,7 @@ function nmBuildTerrain(R) {
   }
   cg.putImageData(im, 0, 0); NM.mapCv = cv; NM.mw = W * G; NM.mh = H * G; MAP_X0 = R.x0; MAP_Z0 = R.z0;
   // 지형 메시(10m 격자): 건물 바닥 고도에 맞춰 보정한 높이장 사용
-  const TF = nmTerrainFit(R, E, dist);
+  const TF = nmSmoothRoadTerrain(R, nmTerrainFit(R, E, dist));
   const cw = W, ch = H, vw = cw + 1, vh = ch + 1, hgt = new Float32Array(vw * vh), cland = new Uint8Array(cw * ch);
   for (let j = 0; j < vh; j++) for (let i = 0; i < vw; i++) {
     let sum = 0, n = 0, mo = 1e9, mx = -1e9;
@@ -1702,7 +1749,7 @@ function nmBuildTerrain(R) {
       const ci = i + di, cj = j + dj; if (ci < 0 || cj < 0 || ci >= W || cj >= H) continue;
       const q = cj * W + ci; sum += TF[q]; n++; if (R.occ[q]) { if (R.elev[q] < mo) mo = R.elev[q]; if (R.elev[q] > mx) mx = R.elev[q]; }
     }
-    let h = n ? sum / n : 0; if (mo < 1e8) { const m = (mo + mx) * 0.5; if (h < m) h = m; }   // 접한 건물 바닥 높이 아래로 지면이 꺼져 틈이 생기지 않게
+    let h = n ? sum / n : 0; if (mo < 1e8) { const m = (mo + mx) * 0.5; if (h < m - 0.35) h = m - 0.35; }   // 접한 건물 바닥 높이 아래로 지면이 크게 꺼져 틈이 생기지 않게(0.35m 이내만 허용)
     hgt[j * vw + i] = h;
   }
   for (let q = 0; q < W * H; q++) cland[q] = land[q];
@@ -1793,6 +1840,7 @@ function nmEsbRoof() {
 
 // ---------------- 프레임 업데이트 ----------------
 function nmFrame(dt) {
+  if (NR.lcT) NR.lcT.value += dt;
   fcUpdate(dt);
   if (!NM.ready) return; NM.camT += dt; if (NM.camT < 0.3) return; NM.camT = 0;
   const cx = camera.position.x, cz = camera.position.z, R = (GFXU.chunk || 2300) + 250;
@@ -2149,7 +2197,7 @@ function nrTri(cls, ax, az, bx, bz, cx, cz, depth) {
   const C = nrChunk(nrKeyC(gx, gz), gx, gz), B = C.lc, col = NR_LC[cls] || NR_LC[1], f = 0.9 + 0.2 * nrH(gx * 0.31, gz * 0.31), c = [Math.min(255, col[0] * f * 255) | 0, Math.min(255, col[1] * f * 255) | 0, Math.min(255, col[2] * f * 255) | 0];
   for (const [x, z] of [[ax, az], [bx, bz], [cx, cz]]) {
     let y = nrLand(x, z) ? nmGroundAt(x, z) + 0.03 : 0.03; if (cls === 13) y = Math.max(y, 1.2);
-    nrV(B, x - C.x0, y, z - C.z0, 0.5, 0.5, c, 0, 1, 0);
+    nrV(B, x - C.x0, y, z - C.z0, (cls + 0.5) / 32, 0.5, c, 0, 1, 0);
   }
   const k = B.v - 3; B.i.push(k, k + 1, k + 2);
 }
@@ -2309,11 +2357,105 @@ function nrTreeGeo() {
 async function nrBuild(R) {
   NR.R = R;
   nycLoadStatus('도로·지물 데이터 해제 중…', 0.9); await nmYield();
-  const D = nrParseRoads(await nmInflate('nr001')), P = nrParseProps(await nmInflate('nr002')), L = nrParseLC(await nmInflate('nr003'));
+  const D = NR.preD || nrParseRoads(await nmInflate('nr001')), P = nrParseProps(await nmInflate('nr002')), L = nrParseLC(await nmInflate('nr003'));
   const tex = nrAtlas();
   NR.mG = [0, 1, 2, 3].map(i => new THREE.MeshStandardMaterial({ map: tex, vertexColors: true, roughness: 0.88, metalness: 0, alphaTest: 0.45, side: THREE.DoubleSide, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -(6 + i * 2) })); NR.mGr = NR.mG[0];
   NR.mDk = new THREE.MeshStandardMaterial({ map: tex, vertexColors: true, roughness: 0.9, metalness: 0, alphaTest: 0.45, side: THREE.DoubleSide });
   NR.mLc = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0, side: THREE.DoubleSide, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4 });
+
+  NR.lcT = { value: 0 };
+  NR.mLc.extensions = Object.assign({}, NR.mLc.extensions, { derivatives: true });
+  NR.mLc.onBeforeCompile = function (sh) {   // 지표 종류별 절차적 사실 텍스처 (잔디·숲·모래·흙·아스팔트·운동장·부두·물결)
+    sh.uniforms.uLcT = NR.lcT;
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying float vLcC;\nvarying vec3 vPvW;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvLcC = uv.x; vPvW = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
+varying float vLcC;
+varying vec3 vPvW;
+uniform float uLcT;
+float lcBump = 0.0;
+float lcR = 0.95;
+vec2 lcG = vec2(0.0);
+float lcH(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float lcN(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(lcH(i), lcH(i + vec2(1.0, 0.0)), f.x), mix(lcH(i + vec2(0.0, 1.0)), lcH(i + vec2(1.0, 1.0)), f.x), f.y); }
+float lcF(vec2 p) { float a = 0.5, s = 0.0; for (int i = 0; i < 4; i++) { s += a * lcN(p); p = p * 2.03 + vec2(17.1, 9.2); a *= 0.5; } return s; }
+float lcWave(vec2 w) { return lcF(w * 0.45 + vec2(uLcT * 0.06, uLcT * 0.045)) + 0.35 * lcN(w * 1.7 + vec2(-uLcT * 0.10, uLcT * 0.08)); }
+`)
+    .replace('#include <color_fragment>', `#include <color_fragment>
+{
+  float C = floor(vLcC * 32.0 + 0.001);
+  vec2 w = vPvW.xz;
+  float px = max(fwidth(w.x), fwidth(w.y));
+  float f1 = 1.0 - smoothstep(0.25, 1.1, px);
+  float f2 = 1.0 - smoothstep(1.2, 5.0, px);
+  vec3 b = diffuseColor.rgb;
+  vec3 col = b;
+  float big = lcF(w / 22.0 + 3.7);
+  if (C < 3.5 || (C > 19.5 && C < 20.5)) {            // 잔디·공원·정원·경기장 잔디
+    float mid = lcF(w / 3.3 + 11.0);
+    float fn = lcN(w / 0.24) * 0.6 + lcN(w / 0.07) * 0.4;
+    float dry = smoothstep(0.58, 0.9, lcF(w / 9.0 + 30.0));
+    col = b * (0.62 + 0.7 * big);
+    col = mix(col, vec3(0.40, 0.36, 0.17) * (0.7 + 0.5 * mid), dry * 0.55);
+    col *= 0.84 + 0.32 * mid * (0.5 + 0.5 * f2);
+    col *= mix(1.0, 0.8 + 0.4 * fn, f1);
+    if (C > 19.5) col *= 0.92 + 0.14 * step(0.5, fract(w.x / 5.0));
+    float h0 = lcN(w / 0.3), hx = lcN((w + vec2(0.03, 0.0)) / 0.3), hz = lcN((w + vec2(0.0, 0.03)) / 0.3);
+    lcG = vec2(hx - h0, hz - h0) / 0.1; lcBump = 0.28 * f1; lcR = 0.96;
+  } else if (C < 4.5 || (C > 7.5 && C < 8.5)) {       // 숲·습지
+    float lf = lcF(w / 2.4);
+    col = b * (0.45 + 0.95 * lf) * mix(1.0, 0.75 + 0.5 * lcN(w / 0.35), f1);
+    col = mix(col, vec3(0.16, 0.11, 0.06) * (0.6 + lf), 0.28 * smoothstep(0.5, 0.8, lcF(w / 5.0 + 40.0)));
+    lcR = 0.97;
+  } else if (C > 4.5 && C < 5.5 || (C > 20.5 && C < 21.5)) {   // 물·분수
+    float h0 = lcWave(w), hx = lcWave(w + vec2(0.05, 0.0)), hz = lcWave(w + vec2(0.0, 0.05));
+    lcG = vec2(hx - h0, hz - h0) / 0.05; lcBump = 0.55 * (0.35 + 0.65 * f2); lcR = 0.07;
+    col = mix(vec3(0.025, 0.09, 0.15), vec3(0.07, 0.20, 0.26), smoothstep(0.3, 0.8, big));
+    col = mix(col, b * 1.4, 0.2);
+    col += 0.5 * pow(lcN(w * 2.2 + vec2(uLcT * 0.2, -uLcT * 0.15)), 10.0) * f2;
+  } else if (C > 5.5 && C < 6.5) {                    // 모래
+    float gr = lcH(floor(w * 20.0));
+    col = b * (0.88 + 0.24 * big) * mix(1.0, 0.9 + 0.2 * gr, f1);
+    col *= 1.0 + 0.05 * sin(w.x * 2.5 + lcF(w / 3.0) * 8.0);
+    lcR = 0.98;
+  } else if (C > 13.5 && C < 15.5) {                  // 맨흙·자갈
+    float pb = step(0.965, lcH(floor(w * 9.0)));
+    col = b * (0.7 + 0.6 * lcF(w / 1.6)) * (0.85 + 0.3 * big);
+    col = mix(col, col * 1.5, pb * f1 * 0.7);
+    col *= mix(1.0, 0.9 + 0.2 * lcH(floor(w * 24.0)), f1);
+    lcR = 0.98;
+  } else if (C > 6.5 && C < 7.5) {                    // 포장 광장
+    vec2 q = w / 1.2; vec2 fq = fract(q), e = min(fq, 1.0 - fq);
+    float jt = 1.0 - smoothstep(0.012, 0.012 + max(fwidth(q.x), fwidth(q.y)), min(e.x, e.y));
+    col = b * (0.9 + 0.2 * lcH(floor(q))) * (1.0 - 0.4 * jt * f2) * (0.92 + 0.16 * lcF(w / 1.5));
+    lcR = 0.9;
+  } else if (C > 10.5 && C < 11.5) {                  // 주차장 아스팔트
+    float cr = 1.0 - smoothstep(0.0, 0.014, abs(lcN(w / 2.4) - 0.5));
+    float oil = smoothstep(0.62, 0.8, lcF(w / 4.0 + 70.0));
+    col = b * (0.9 + 0.5 * lcF(w / 1.1)) * mix(1.0, 0.85 + 0.3 * lcH(floor(w * 30.0)), f1);
+    col *= (1.0 - 0.5 * cr * f2) * (1.0 - 0.3 * oil);
+    lcR = 0.85;
+  } else if (C > 11.5 && C < 12.5) {                  // 수영장
+    float cs = 1.0 - smoothstep(0.0, 0.1, abs(lcN(w * 1.6 + vec2(uLcT * 0.3, uLcT * 0.1)) - lcN(w * 1.6 - vec2(uLcT * 0.2, uLcT * 0.3) + 9.0)));
+    col = mix(vec3(0.04, 0.38, 0.55), vec3(0.2, 0.8, 0.9), cs * 0.7);
+    lcR = 0.1;
+  } else if (C > 12.5 && C < 13.5) {                  // 부두 판재
+    float bd = floor(w.y / 0.16), bf = fract(w.y / 0.16), rowOff = lcH(vec2(bd, 3.0)) * 2.4;
+    float bt = 1.0 - smoothstep(0.0, 0.06, fract((w.x + rowOff) / 2.4));
+    col = b * (0.75 + 0.5 * lcH(vec2(bd, floor((w.x + rowOff) / 2.4)))) * (1.0 - 0.5 * (1.0 - smoothstep(0.0, 0.07, bf)) * f2) * (1.0 - 0.4 * bt * f2);
+    lcR = 0.75;
+  } else {                                            // 운동장·놀이터·코트 (고무/점토)
+    float gr = lcH(floor(w * 16.0));
+    col = b * (0.85 + 0.3 * big) * mix(1.0, 0.88 + 0.24 * gr, f1) * (0.94 + 0.12 * lcF(w / 2.0));
+    lcR = 0.8;
+  }
+  diffuseColor.rgb = col;
+}`)
+      .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = lcR;')
+      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+{ vec3 nn = normalize(vec3(-lcG.x * lcBump, 1.0, -lcG.y * lcBump)); normal = normalize((viewMatrix * vec4(nn, 0.0)).xyz); }`);
+  };
   NR.mPr = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.7, metalness: 0.1 });
   NR.mPl = new THREE.MeshBasicMaterial({ vertexColors: true });
   NR.mTr = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0 });
@@ -2344,7 +2486,7 @@ async function nrBuild(R) {
     }
     C.g0 = C.g1 = C.g2 = C.g3 = C.dk = C.lc = C.pr = C.pl = null; C.tr = null;
   }
-  NR.roadGrid = null; NR.ready = true; NR.stats = { verts: nV, trees: nT, decks: NR.decks.size };
+  NR.preD = null; NR.roadGrid = null; NR.ready = true; NR.stats = { verts: nV, trees: nT, decks: NR.decks.size };
   console.log('[NR] roads built', NR.stats);
 }
 
@@ -2366,6 +2508,7 @@ async function nmLoadWorld() {
       await nmBuildPart(NM.parts[k], k, R, mat, p => nycLoadStatus('건물 메시 생성 중… 구간 ' + (k + 1) + '/6 (' + Math.round(p * 100) + '%)', 0.12 + 0.7 * (k + p) / 6));
     }
     nycLoadStatus('지형·바다·지도 생성 중…', 0.88); await nmYield();
+    try { await nrPrepRoads(R); } catch (e) { console.warn('도로 마스크 준비 실패', e); }
     nmBuildTerrain(R);
     try { await nrBuild(R); } catch (e) { console.error('도로·지물 생성 실패', e); }
     NM.ready = true;
