@@ -2158,6 +2158,7 @@ const nrSmooth = t => { t = Math.max(0, Math.min(1, t)); return t * t * (3 - 2 *
 function nrDecodeWay(D, off, i) {
   const n = D.np[i], xs = new Float64Array(n), zs = new Float64Array(n); let ax = 0, az = 0, o = off[i] * 2;
   for (let k = 0; k < n; k++) { ax += D.pts[o + k * 2]; az += D.pts[o + k * 2 + 1]; xs[k] = ax / 10; zs[k] = az / 10; }
+  const sp = NR.snap && NR.snap.get(i); if (sp && n > 1) { if (sp[0] !== null) { xs[0] = sp[0]; zs[0] = sp[1]; } if (sp[2] !== null) { xs[n - 1] = sp[2]; zs[n - 1] = sp[3]; } }   // 끊긴 도로 끝점 이어붙이기
   return { xs, zs };
 }
 // 램프 종단 형상: 양끝은 포물선으로 부드럽게 받고 가운데는 일정 경사(최대 경사 = 평균의 1.28배)
@@ -2170,7 +2171,59 @@ function nrRampF(t) {
 // 실제 뉴욕 고가도로처럼: ① 상판 밑 통행 여유 ≥ 5m(층이 올라갈수록 +5.9m)  ② 접근 램프는 평균 4% 일정 경사(최대 5.1%)로 지면에서 올라탄다
 // ③ 짧은 구간(주변 지면에서 올라갈 길이가 모자란 교량)은 억지로 솟구치지 않고 지면에 붙는다  ④ 이어지는 구간끼리는 연결점 높이를 맞춘다(계단·턱 방지)
 // ⑤ 지면이 상판 쪽으로 올라오는 곳은 최소 여유가 확보되도록 상판을 완만히 들어 올린다
+
+// ---------- 끊긴 도로 잇기: 같은 층·같은 종류 도로의 끝점이 5m 이내에서 같은 방향으로 마주 보면 한 점으로 합친다 ----------
+function nrPlanSnap(D, off) {
+  const E = [], grid = new Map(), R = 5, key = (x, z) => Math.floor(x / R) + ',' + Math.floor(z / R);
+  for (let i = 0; i < D.nW; i++) {
+    if ((D.kind[i] !== 0 && D.kind[i] !== 4) || D.hw[i] === 8 || D.np[i] < 2) continue;
+    const { xs, zs } = nrDecodeWay(D, off, i), n = xs.length;
+    for (const end of [0, 1]) {
+      const a = end ? n - 1 : 0; let b = end ? n - 2 : 1, tx = 0, tz = 0;
+      for (; b >= 0 && b < n; b += end ? -1 : 1) { tx = xs[a] - xs[b]; tz = zs[a] - zs[b]; if (Math.hypot(tx, tz) > 0.5) break; }
+      const l = Math.hypot(tx, tz); if (l < 0.5) continue;
+      E.push({ i, end, x: xs[a], z: zs[a], tx: tx / l, tz: tz / l, g: D.layer[i] + ':' + (D.flags[i] & 2) + ':' + D.kind[i], par: E.length });
+      const k = key(xs[a], zs[a]); if (!grid.has(k)) grid.set(k, []); grid.get(k).push(E.length - 1);
+    }
+  }
+  const find = q => { while (E[q].par !== q) { E[q].par = E[E[q].par].par; q = E[q].par; } return q; };
+  for (let q = 0; q < E.length; q++) {
+    const e = E[q], cx = Math.floor(e.x / R), cz = Math.floor(e.z / R);
+    for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) for (const r of grid.get((cx + dx) + ',' + (cz + dz)) || []) {
+      if (r <= q) continue; const f = E[r]; if (f.i === e.i || f.g !== e.g) continue;
+      const ox = f.x - e.x, oz = f.z - e.z, d = Math.hypot(ox, oz); if (d < 0.3 || d > R) continue;
+      if (e.tx * f.tx + e.tz * f.tz > -0.7) continue;                       // 서로 마주 보는(이어지는) 방향이어야 함
+      const al = ox * e.tx + oz * e.tz; if (al < -1 || Math.abs(ox * e.tz - oz * e.tx) > 2.5) continue;   // 옆으로 어긋난 쌍(중앙분리 도로)은 제외
+      const a = find(q), b = find(r); if (a !== b) E[b].par = a;
+    }
+  }
+  const cl = new Map(); for (let q = 0; q < E.length; q++) { const r = find(q); if (!cl.has(r)) cl.set(r, []); cl.get(r).push(q); }
+  const snap = new Map(); let nJ = 0;
+  for (const m of cl.values()) {
+    if (m.length < 2) continue; let X = 0, Z = 0; for (const q of m) { X += E[q].x; Z += E[q].z; } X /= m.length; Z /= m.length;
+    let ok = true; for (const q of m) if (Math.hypot(E[q].x - X, E[q].z - Z) > R) ok = false; if (!ok) continue;
+    for (const q of m) { const e = E[q]; let a = snap.get(e.i); if (!a) snap.set(e.i, a = [null, 0, null, 0]); if (e.end) { a[2] = X; a[3] = Z; } else { a[0] = X; a[1] = Z; } } nJ++;
+  }
+  console.log('[NR] 끊긴 도로 연결: ' + nJ + '곳'); return snap;
+}
+// ---------- 분기·합류 패드: 고가 도로 3개 이상이 만나는 점에 상판 슬래브를 깔아 갈라지는 쐐기 틈을 메운다(충돌 포함) ----------
+function nrJunctionPads(plan, D) {
+  NR.pads = []; const nodes = plan.nodes; if (!nodes) return; let cnt = 0;
+  const sol = nrU(NR_S.SOLID, 0.5);
+  for (const nd of nodes.values()) {
+    const inc = nd.inc.filter(([e]) => e.elev); if (inc.length < 3) continue;
+    let sy = 0, r = 3, x = 0, z = 0, th = 0.9, ang = 0;
+    for (const [e, end] of inc) { const k = end ? e.S.n - 1 : 0; sy += e.y[k]; x += e.S.p[k * 2]; z += e.S.p[k * 2 + 1]; r = Math.max(r, D.wd[e.i] / 8 + 1.0); th = Math.max(th, e.th); }
+    x /= inc.length; z /= inc.length; const y = sy / inc.length - 0.08, e0 = inc[0][0], k0 = inc[0][1] ? e0.S.n - 1 : 0, k1 = inc[0][1] ? Math.max(0, k0 - 1) : Math.min(e0.S.n - 1, 1);
+    ang = Math.atan2(e0.S.p[k1 * 2] - e0.S.p[k0 * 2], e0.S.p[k1 * 2 + 1] - e0.S.p[k0 * 2 + 1]);
+    const C = nrChunk(nrKeyC(x, z), x, z); nrBox(C.dk, C, x, y - th / 2, z, 2 * r, th, 2 * r, ang, nrCol(0.5), sol, 0.5);
+    for (let t = -r; t <= r; t += 1.2) nrRegDeck({ cen: [x - r * 0, 0, z + t, x, 0, z + t + 0.01], nr: [1, 0, 1, 0] }, r, [y + 0.08, y + 0.08], 2, null, th);
+    NR.pads.push([x, z, r + 2, y]); cnt++;
+  }
+  console.log('[NR] 고가 분기·합류 패드: ' + cnt + '곳');
+}
 function nrPlanBridges(D, off) {
+  NR.snap = null; try { NR.snap = nrPlanSnap(D, off); } catch (err) { console.warn('도로 연결 실패', err); }
   const plan = new Map(), nodes = new Map(), edges = [], nk = (x, z) => Math.round(x * 2) + '_' + Math.round(z * 2);
   for (let i = 0; i < D.nW; i++) {
     if ((D.kind[i] !== 0 && D.kind[i] !== 4) || !(D.flags[i] & 2)) continue;
@@ -2267,7 +2320,7 @@ function nrPlanBridges(D, off) {
     let up = 0; for (let k = 0; k < e.S.n; k++) up = Math.max(up, e.y[k] - e.g[k]);
     e.elev = up >= 2.0 && (e.abs !== null || e.rel > 0); plan.set(e.i, e);
   }
-  return plan;
+  plan.nodes = nodes; return plan;
 }
 // 교각 위치 회피용: 고가 구간 근처의 지상 차도 선분 격자(20m)
 const nrAvKey = (cx, cz) => (cx + 3000) * 20011 + cz + 4000;
@@ -2454,7 +2507,7 @@ function nrWay(D, off, i, plan) {
   if (tpl && k === 0) { nrTunnelWay(i, tpl, slot, tint, tl, wd); return; }   // 지하차도
   const info = plan.get(i);
   if (info && info.elev && (k === 0 || k === 4)) {   // ----- 고가도로/교량 상판 -----
-    const S = info.S, n = S.n, Y = info.y, hw = wd / 2, hwy = hwv <= 1 || k === 4, th = hwy ? 1.4 : 0.9, vs = new Float32Array(n);
+    const S = info.S, n = S.n, zfo = ((Math.imul(i + 1, 2654435761) >>> 0) % 9) * 0.004, Y = info.y.map(v => v + zfo), hw = wd / 2, hwy = hwv <= 1 || k === 4, th = hwy ? 1.4 : 0.9, vs = new Float32Array(n);
     for (let q = 0; q < n; q++) vs[q] = S.s[q] / tl;
     const Et = nrEdges(S.p, n, Y, hw, 0), Eb = nrEdges(S.p, n, Y, hw, -th), sol = nrU(NR_S.SOLID, 0.5), z0 = new Float32Array(n), nl = new Float32Array(n * 3), nrr = new Float32Array(n * 3);
     for (let q = 0; q < n; q++) { nl[q * 3] = -Et.nr[q * 2]; nl[q * 3 + 2] = -Et.nr[q * 2 + 1]; nrr[q * 3] = Et.nr[q * 2]; nrr[q * 3 + 2] = Et.nr[q * 2 + 1]; }
@@ -2503,7 +2556,7 @@ function nrWay(D, off, i, plan) {
         const s1 = s0 + sh; if (s1 < 3 || s1 > tot - 3) continue;
         let q = 0; while (q < n - 1 && S.s[q] < s1) q++;
         const x = S.p[q * 2], z = S.p[q * 2 + 1]; let pen = Math.abs(sh) * 0.01;
-        if (nrLand(x, z)) for (const o of (twoCol ? [-colO, colO] : [0])) { const px = x + Et.nr[q * 2] * o, pz = z + Et.nr[q * 2 + 1] * o; if (nrOnRoad(px, pz, 0.9)) pen += 1; if (nrOcc(px, pz)) pen += 3; }
+        if (nrLand(x, z)) for (const o of (twoCol ? [-colO, colO] : [0])) { const px = x + Et.nr[q * 2] * o, pz = z + Et.nr[q * 2 + 1] * o; if (nrOnRoad(px, pz, 0.9)) pen += 1; if (nrOcc(px, pz)) pen += 3; if (NR.pads) for (const pd of NR.pads) if (Math.hypot(px - pd[0], pz - pd[1]) < pd[2] && Math.abs(Y[q] - pd[3]) < 1.5) { pen += 3; break; } const dkl = NR.decks.get(nrDk(px, pz)); if (dkl) for (const dy of dkl) if (dy < Y[q] - th - 0.8 && dy > (nrLand(x, z) ? info.g[q] : -2.5) + 1.0) { pen += 2; break; } }
         if (pen < bestPen) { bestPen = pen; best = q; if (pen < 0.1) break; }
       }
       if (best < 0) continue; const q = best;
@@ -2769,7 +2822,7 @@ async function nrBuild(R) {
   const D = NR.preD || nrParseRoads(await nmInflate('nr001')), P = nrParseProps(await nmInflate('nr002')), L = nrParseLC(await nmInflate('nr003'));
   const tex = nrAtlas();
   NR.mG = [0, 1, 2, 3].map(i => new THREE.MeshStandardMaterial({ map: tex, vertexColors: true, roughness: 0.88, metalness: 0, alphaTest: 0.45, side: THREE.DoubleSide, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -(6 + i * 2) })); NR.mGr = NR.mG[0];
-  NR.mDk = new THREE.MeshStandardMaterial({ map: tex, vertexColors: true, roughness: 0.9, metalness: 0, alphaTest: 0.45, side: THREE.DoubleSide });
+  NR.mDk = new THREE.MeshStandardMaterial({ map: tex, vertexColors: true, roughness: 0.9, metalness: 0, alphaTest: 0.45, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -3 });
   NR.mLc = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0, side: THREE.DoubleSide, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4 });
 
   NR.lcT = { value: 0 };
@@ -2870,7 +2923,7 @@ float lcWave(vec2 w) { return lcF(w * 0.45 + vec2(uLcT * 0.06, uLcT * 0.045)) + 
   NR.mTr = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0 });
   nycLoadStatus('공원·물·운동장 지표 생성 중…', 0.91); await nmYield(); await nrLandcover(L);
   const off = new Uint32Array(D.nW + 1); for (let i = 0; i < D.nW; i++) off[i + 1] = off[i] + D.np[i];
-  nycLoadStatus('교량·고가도로 높이 계산 중…', 0.93); await nmYield(); const plan = nrPlanBridges(D, off); nrBuildAvoid(D, off, plan); NR.tunPlan = nrPlanTunnels(D, off); nrApplyTunnelHoles();
+  nycLoadStatus('교량·고가도로 높이 계산 중…', 0.93); await nmYield(); const plan = nrPlanBridges(D, off); nrBuildAvoid(D, off, plan); NR.tunPlan = nrPlanTunnels(D, off); nrApplyTunnelHoles(); try { nrJunctionPads(plan, D); } catch (err) { console.warn('분기 패드 실패', err); }
   const rank = { 8: 0, 6: 1, 5: 2, 4: 3, 3: 4, 2: 5, 9: 5, 7: 6, 1: 7, 0: 8 }, order = [];
   for (let i = 0; i < D.nW; i++) { const k = D.kind[i]; order.push([k === 0 ? rank[D.hw[i]] : k === 3 ? 10 : k === 4 ? 11 : k === 2 ? 12 : k === 1 ? 13 : 14, i]); }
   order.sort((a, b) => a[0] - b[0]);
