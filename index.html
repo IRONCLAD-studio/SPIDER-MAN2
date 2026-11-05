@@ -751,9 +751,45 @@ function nmGroundAt(x, z) {
   const y = (u + v <= 1) ? a + (b - a) * u + (c - a) * v : d + (b - d) * (1 - v) + (c - d) * (1 - u);
   return y - 0.1;
 }
+
+// ---------- 고가도로·교량 상판 고체화: 램프 옆면·상판 아랫면·연속 이동(고속 스윙) 터널링 방지 ----------
+function nrDeckBlock(x, z, py, H) {
+  const k = nrDk(x, z), a = NR.decks.get(k); if (!a) return null; const b = NR.deckTh.get(k);
+  for (let i = 0; i < a.length; i++) { const y = a[i]; if (y > py + 0.9 && y - (b ? b[i] : 0.9) < py + H) return { y, th: b ? b[i] : 0.9 }; }
+  return null;
+}
+function nrDeckSolidPass(prev) {
+  if (!NR.ready || !prev) return;
+  const p = player.pos, H = 1.8; if (nrDeckBlock(prev.x, prev.z, prev.y, H)) return;   // 이미 끼인 상태면 건드리지 않음(갇힘 방지)
+  const dx = p.x - prev.x, dy = p.y - prev.y, dz = p.z - prev.z, m = Math.max(1, Math.ceil(Math.hypot(dx, dy, dz) / 0.8));
+  let lx = prev.x, ly = prev.y, lz = prev.z, hit = false;
+  for (let i = 1; i <= m; i++) {
+    const t = i / m, x = prev.x + dx * t, y = prev.y + dy * t, z = prev.z + dz * t, b = nrDeckBlock(x, z, y, H);
+    if (!b) { lx = x; ly = y; lz = z; continue; }
+    hit = true;
+    if (!nrDeckBlock(x, lz, y, H)) lx = x; else if (!nrDeckBlock(lx, z, y, H)) lz = z;   // 벽을 따라 미끄러짐
+    if (y + H > b.y - b.th && y < b.y - b.th) { ly = Math.min(ly, b.y - b.th - H - 0.02); if (player.vel.y > 0) player.vel.y = 0; }   // 아랫면에 머리 부딪힘
+    break;
+  }
+  if (hit) { p.set(lx, ly, lz); if (player.vel.x !== undefined) { player.vel.x *= 0.3; player.vel.z *= 0.3; } }
+}
+function nrUnderIn(x, z, y) { const u = NR.under.get(nrUk(x, z)); return !!u && (u.c === Infinity || y < nmGroundAt(x, z) - 0.3); }
+// 지하차도 옆벽: 터널/트렌치 안에서 바깥(지표 쪽)으로 새어 나가 지면 위로 순간이동하는 것을 막는다
+function nrUnderPass(prev) {
+  if (!NR.ready || !prev || !NR.under.size) return;
+  const p = player.pos; if (!nrUnderIn(prev.x, prev.z, prev.y) || nrUnderIn(p.x, p.z, p.y)) return;
+  const ok = (x, z) => nrUnderIn(x, z, p.y) || p.y >= nmGroundAt(x, z) - 0.5;
+  if (ok(p.x, p.z)) return;
+  if (ok(p.x, prev.z)) { p.z = prev.z; player.vel.z = 0; } else if (ok(prev.x, p.z)) { p.x = prev.x; player.vel.x = 0; } else { p.x = prev.x; p.z = prev.z; player.vel.x = 0; player.vel.z = 0; }
+}
 function nmTerrainPass() {
   let gy = nmGroundAt(player.pos.x, player.pos.z);
-  if (NR.ready) { const dk = nrDeckAt(player.pos.x, player.pos.z, player.pos.y); if (dk !== null && dk > gy + 0.3) gy = dk; }   // 고가도로·교량 상판
+  const gSurf = gy, py0 = player.pos.y; let onDeck = false;
+  if (NR.ready) { const dk = nrDeckAt(player.pos.x, player.pos.z, player.pos.y); if (dk !== null && dk > gy + 0.3) { gy = dk; onDeck = true; } }   // 고가도로·교량 상판
+  if (NR.ready && !onDeck && NR.under.size) {   // 지하차도: 트렌치(열린 구간)는 항상 바닥이 노면, 지붕 구간은 지표 아래에 있을 때만 터널 바닥/천장
+    const u = NR.under.get(nrUk(player.pos.x, player.pos.z));
+    if (u && (u.c === Infinity || py0 < gSurf - 0.3)) { gy = u.f; if (u.c !== Infinity && py0 + 1.8 > u.c) { player.pos.y = Math.max(u.f, u.c - 1.8); if (player.vel.y > 0) player.vel.y = 0; } }
+  }
   GROUND_Y = gy;
   if (typeof wallState !== 'undefined' && wallState.active) return;
   if (player.pos.y < gy) { player.pos.y = gy; if (player.vel.y < 0) player.vel.y = 0; if (!isSwinging) player.onGround = true; }
@@ -1876,7 +1912,7 @@ float pvF(vec2 p) { float a = 0.5, s = 0.0; for (int i = 0; i < 4; i++) { s += a
         vec3 wn = normalize((vec4(normal, 0.0) * viewMatrix).xyz); wn = normalize(wn + vec3(-pvG.x, 0.0, -pvG.y)); normal = normalize((viewMatrix * vec4(wn, 0.0)).xyz); }`)
       .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += diffuseColor.rgb * 0.06;');
   };
-  const TILE = 40, out = [];
+  NM.terMat = mat; const TILE = 40, out = [];
   const colAt = (i, j) => { const n = 0.94 + 0.12 * nmHash(i, j); return [0.60 * n, 0.59 * n, 0.57 * n]; };
   for (let tj = 0; tj < ch; tj += TILE) for (let ti = 0; ti < cw; ti += TILE) {
     const i1 = Math.min(cw, ti + TILE), j1 = Math.min(ch, tj + TILE); let any = false;
@@ -1964,7 +2000,7 @@ function nmFrame(dt) {
 //  - nr002: 신호등·가로등·가로수·벤치·소화전·쓰레기통·볼라드·지하철입구·버스정류장·깃대·우체통·정지표지
 //  - nr003: 공원·잔디·정원·숲·물·모래·운동장·놀이터·주차장·수영장·부두 등 지표 다각형
 // =============================================================================
-const NR = { ready: false, decks: new Map(), chunks: new Map(), roadGrid: new Map(), nDeck: 0 };
+const NR = { ready: false, deckTh: new Map(), decks: new Map(), chunks: new Map(), roadGrid: new Map(), nDeck: 0, under: new Map(), tunPlan: null, tunSegs: [] };
 const NR_W = 80, NR_PAD = 2, NR_ATW = 2048, NR_ATH = 512, NR_CH = 400;
 const NR_S = { PLAIN: 0, TW2: 1, TW4: 2, TW6: 3, OW1: 4, OW2: 5, OW3: 6, OW4: 7, OW5: 8, HW2: 9, HW3: 10, HW4: 11, HWTW: 12, LK1: 13, LK2: 14, CROSS: 15, SIDE: 16, CYCLE: 17, PED: 18, SOLID: 19, RAIL: 20, FENCE: 21, HEDGE: 22, WALL: 23, PLANK: 24 };
 const NR_TL = [12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 1.2, 1.6, 8, 2, 4, 1.2, 0.9, 3, 3, 1.5];
@@ -2264,14 +2300,134 @@ function nrOnRoad(x, z, mg) {
 }
 // ---------- 선형 요소 하나 생성 ----------
 const NR_BAR = [[1.9, NR_S.FENCE], [1.8, NR_S.WALL], [1.6, NR_S.WALL], [1.3, NR_S.HEDGE], [0.85, NR_S.WALL], [0.75, NR_S.WALL]];
-function nrRegDeck(E, hw, Y, n, g) {
-  for (let i = 0; i < n; i++) {
-    for (let t = -hw - 2.5; t <= hw + 2.5; t += 2.5) {
-      const x = E.cen[i * 3] + E.nr[i * 2] * t, z = E.cen[i * 3 + 2] + E.nr[i * 2 + 1] * t, k = nrDk(x, z); let a = NR.decks.get(k);
-      if (!a) NR.decks.set(k, a = []); let dup = false; for (let q = 0; q < a.length; q++) if (Math.abs(a[q] - Y[i]) < 0.35) { dup = true; if (Y[i] > a[q]) a[q] = Y[i]; break; }
-      if (!dup) a.push(Y[i]);
+function nrRegDeck(E, hw, Y, n, g, th) {
+  th = th || 0.9;
+  const put = (x, z, y) => {
+    const k = nrDk(x, z); let a = NR.decks.get(k), b = NR.deckTh.get(k);
+    if (!a) { NR.decks.set(k, a = []); NR.deckTh.set(k, b = []); }
+    for (let q = 0; q < a.length; q++) if (Math.abs(a[q] - y) < 0.35) { if (y > a[q]) { a[q] = y; b[q] = th; } return; }
+    a.push(y); b.push(th);
+  };
+  for (let i = 0; i < n - 1; i++) {   // 구간 사이를 보간: 중심선 노드 간격이 3m보다 커도 충돌 구멍이 없다
+    const ax = E.cen[i * 3], az = E.cen[i * 3 + 2], bx = E.cen[i * 3 + 3], bz = E.cen[i * 3 + 5];
+    const nx0 = E.nr[i * 2], nz0 = E.nr[i * 2 + 1], nx1 = E.nr[i * 2 + 2], nz1 = E.nr[i * 2 + 3];
+    const m = Math.max(1, Math.ceil(Math.hypot(bx - ax, bz - az) / 1.2));
+    for (let j = 0; j <= m; j++) {
+      const u = j / m, cx = ax + (bx - ax) * u, cz = az + (bz - az) * u, nx = nx0 + (nx1 - nx0) * u, nz = nz0 + (nz1 - nz0) * u, y = Y[i] + (Y[i + 1] - Y[i]) * u;
+      for (let t = -hw - 0.6; t <= hw + 0.6; t += 1.2) put(cx + nx * t, cz + nz * t, y);
     }
   }
+}
+// ---------- 지하차도(layer<0): 도로를 지면 아래로 내린다. 진입부는 개착식 트렌치(지형을 셰이더로 오려냄), 깊어지면 지붕+조명이 있는 터널 ----------
+// 종단: 포털(지상 도로와 만나는 끝/막다른 끝)에서 6% 경사로 내려가 최대 6.4m 에서 수평(p-노름 곡선으로 부드럽게). 통행 높이 4.2m 이상 + 지붕 슬래브 0.8m 확보되는 깊이(5.0m)부터 지붕을 덮는다.
+const NR_TUN = { G: 0.06, DM: 6.4, CLR: 4.2, COV: 5.0, MINL: 90, WALL: 0.5 };
+const nrUk = (x, z) => (Math.floor(x / 1.5) + 12000) * 40009 + (Math.floor(z / 1.5) + 16000);
+function nrPlanTunnels(D, off) {
+  const plan = new Map(), nodes = new Map(), edges = [], surf = new Set(), nk = (x, z) => Math.round(x * 2) + '_' + Math.round(z * 2), segs = [];
+  for (let i = 0; i < D.nW; i++) {
+    if (D.kind[i] !== 0 || (D.flags[i] & 2)) continue;
+    const { xs, zs } = nrDecodeWay(D, off, i), n = xs.length, A = nk(xs[0], zs[0]), B = nk(xs[n - 1], zs[n - 1]);
+    if (D.layer[i] >= 0) { surf.add(A); surf.add(B); continue; }
+    if (D.hw[i] === 8 || n < 2) continue;
+    edges.push({ i, xs, zs, A, B, S: nrResample(xs, zs, 4) });
+  }
+  const par = new Map(), find = k => { while (par.get(k) !== k) { par.set(k, par.get(par.get(k))); k = par.get(k); } return k; };
+  for (const e of edges) for (const k of [e.A, e.B]) { if (!nodes.has(k)) { nodes.set(k, { deg: 0, dist: Infinity }); par.set(k, k); } nodes.get(k).deg++; e.L = e.S.s[e.S.n - 1]; }
+  for (const e of edges) { const a = find(e.A), b = find(e.B); if (a !== b) par.set(a, b); }
+  const comp = new Map(); for (const e of edges) { const r = find(e.A); comp.set(r, (comp.get(r) || 0) + e.L); }
+  for (const [k, nd] of nodes) if (nd.deg === 1 || surf.has(k)) nd.dist = 0;
+  for (let pass = 0; pass < 80; pass++) {
+    let ch = false;
+    for (const e of edges) { const a = nodes.get(e.A), b = nodes.get(e.B);
+      if (a.dist + e.L < b.dist) { b.dist = a.dist + e.L; ch = true; } if (b.dist + e.L < a.dist) { a.dist = b.dist + e.L; ch = true; } }
+    if (!ch) break;
+  }
+  const { G, DM, CLR, COV, MINL, WALL } = NR_TUN, P4 = Math.pow(DM, -4);
+  for (const e of edges) {
+    if (comp.get(find(e.A)) < MINL) continue;
+    const S = e.S, n = S.n, a = nodes.get(e.A), b = nodes.get(e.B), g = new Float32Array(n); let water = 0;
+    for (let k = 0; k < n; k++) { const x = S.p[k * 2], z = S.p[k * 2 + 1]; if (nrLand(x, z)) g[k] = nmGroundAt(x, z); else { g[k] = 0; water++; } }
+    if (water > n * 0.3) continue;
+    const pre = new Float64Array(n + 1); for (let k = 0; k < n; k++) pre[k + 1] = pre[k] + g[k];
+    const Y = new Float32Array(n), dep = new Float32Array(n), cov = new Uint8Array(n);
+    for (let k = 0; k < n; k++) {
+      const s = S.s[k], k0 = Math.max(0, k - 3), k1 = Math.min(n, k + 4), sm = (pre[k1] - pre[k0]) / (k1 - k0), sm0 = (pre[Math.min(n, 4)]) / Math.min(n, 4), sm1 = (pre[n] - pre[Math.max(0, n - 4)]) / Math.min(n, 4);
+      const gs = sm + (g[0] - sm0) * Math.max(0, 1 - s / 24) + (g[n - 1] - sm1) * Math.max(0, 1 - (e.L - s) / 24);   // 양끝은 실제 지면 높이에 정확히 맞춘다(구간이 이어질 때 높이가 일치)
+      let d = Math.min(a.dist + s, b.dist + e.L - s); if (!isFinite(d)) d = 1e4;
+      const r = G * d, dp = r < 1e-6 ? 0 : Math.pow(Math.pow(r, -4) + P4, -0.25);
+      dep[k] = dp; Y[k] = gs - dp; cov[k] = dp >= COV ? 1 : 0;
+    }
+    for (let k = 0; k < n;) { if (!cov[k]) { k++; continue; } let q = k; while (q + 1 < n && cov[q + 1]) q++; if (q - k < 2) for (let t = k; t <= q; t++) cov[t] = 0; k = q + 1; }   // 너무 짧은 지붕 조각은 열어 둔다
+    const hw = D.wd[e.i] / 8, hwD = hw + WALL - 0.15, step = 2;   // 8m 단위로 묶어 유니폼 수를 줄인다(타일당 ≤ ~60개)
+    for (let k = 0; k < n - 1; k += step) {   // 지형 오려내기용 직사각형(열린 구간만)
+      const kb = Math.min(n - 1, k + step); let open = true; for (let t = k; t <= kb; t++) if (cov[t]) open = false; if (!open) continue;
+      let ax = S.p[k * 2], az = S.p[k * 2 + 1], bx = S.p[kb * 2], bz = S.p[kb * 2 + 1];
+      const dx = bx - ax, dz = bz - az, l = Math.hypot(dx, dz) || 1, ex = dx / l * 0.4, ez = dz / l * 0.4;
+      if (!(k === 0 && a.dist === 0)) { ax -= ex; az -= ez; } if (!(kb === n - 1 && b.dist === 0)) { bx += ex; bz += ez; }
+      segs.push([ax, az, bx, bz, hwD]);
+    }
+    plan.set(e.i, { S, Y, dep, cov, L: e.L });
+  }
+  NR.tunSegs = segs; return plan;
+}
+// 지형 타일(400m)마다 해당 타일에 걸린 트렌치 직사각형만 넘겨 fragment 단계에서 discard (타일 밖은 원래 재질 그대로)
+function nrApplyTunnelHoles() {
+  const segs = NR.tunSegs || []; if (!segs.length || !NM.terMat) return; let tiles = 0, ix = 0;
+  for (const c of NM.cellMeshes) {
+    if (!c.ground) continue; const ox = c.mesh.position.x, oz = c.mesh.position.z, list = [];
+    for (const s of segs) { const mx = Math.min(s[0], s[2]) - s[4], Mx = Math.max(s[0], s[2]) + s[4], mz = Math.min(s[1], s[3]) - s[4], Mz = Math.max(s[1], s[3]) + s[4]; if (Mx >= ox && mx <= ox + 400 && Mz >= oz && mz <= oz + 400) list.push(s); }
+    if (!list.length) continue;
+    const base = NM.terMat, obc = base.onBeforeCompile, N = list.length, m = base.clone(), sv = list.map(s => new THREE.Vector4(s[0], s[1], s[2], s[3])), hv = list.map(s => s[4]), id = ix++;
+    m.extensions = Object.assign({}, base.extensions);
+    m.onBeforeCompile = function (sh) {
+      obc.call(this, sh); sh.uniforms.uTunSeg = { value: sv }; sh.uniforms.uTunHw = { value: hv };
+      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nuniform vec4 uTunSeg[' + N + '];\nuniform float uTunHw[' + N + '];')
+        .replace('#include <clipping_planes_fragment>', '#include <clipping_planes_fragment>\n{ vec2 pw = vPvW.xz; for (int i = 0; i < ' + N + '; i++) { vec4 sg = uTunSeg[i]; vec2 a = sg.xy, d = sg.zw - a; float t = dot(pw - a, d) / max(dot(d, d), 1e-4); if (t >= 0.0 && t <= 1.0 && length(pw - a - d * t) < uTunHw[i]) discard; } }');
+    };
+    m.customProgramCacheKey = () => 'tunhole' + id + '_' + N;
+    c.mesh.material = m; tiles++;
+  }
+  console.log('[NR] tunnel trench cut: ' + segs.length + ' segments, ' + tiles + ' terrain tiles');
+}
+function nrRegUnder(E, hw, Y, cov, n) {
+  const put = (x, z, y, c) => { const k = nrUk(x, z), a = NR.under.get(k); if (!a) NR.under.set(k, { f: y, c }); else if (y < a.f) { a.f = y; a.c = c; } };
+  for (let i = 0; i < n - 1; i++) {
+    const ax = E.cen[i * 3], az = E.cen[i * 3 + 2], bx = E.cen[i * 3 + 3], bz = E.cen[i * 3 + 5], nx0 = E.nr[i * 2], nz0 = E.nr[i * 2 + 1], nx1 = E.nr[i * 2 + 2], nz1 = E.nr[i * 2 + 3];
+    const m = Math.max(1, Math.ceil(Math.hypot(bx - ax, bz - az) / 0.7)), closed = cov[i] && cov[i + 1];
+    for (let j = 0; j <= m; j++) {
+      const u = j / m, cx = ax + (bx - ax) * u, cz = az + (bz - az) * u, nx = nx0 + (nx1 - nx0) * u, nz = nz0 + (nz1 - nz0) * u, y = Y[i] + (Y[i + 1] - Y[i]) * u + 0.03;
+      for (let t = -hw; t <= hw + 1e-3; t += 0.7) put(cx + nx * t, cz + nz * t, y, closed ? y + NR_TUN.CLR : Infinity);
+    }
+  }
+}
+function nrTunnelWay(i, tp, slot, tint, tl, wd) {
+  const S = tp.S, n = S.n, Y = tp.Y, cov = tp.cov, hw = wd / 2, hwW = hw + NR_TUN.WALL, sol = nrU(NR_S.SOLID, 0.5), z0 = new Float32Array(n), vs = new Float32Array(n);
+  for (let q = 0; q < n; q++) vs[q] = S.s[q] / tl;
+  const Ef = nrEdges(S.p, n, Y, hw, 0.03), Ew = nrEdges(S.p, n, Y, hwW, 0.03), Ec = nrEdges(S.p, n, Y, hwW, NR_TUN.CLR), TL = new Float32Array(n * 3), TR = new Float32Array(n * 3), nin = new Float32Array(n * 3), nout = new Float32Array(n * 3);
+  for (let q = 0; q < n; q++) {
+    for (const [sd, T] of [[0, TL], [1, TR]]) {
+      const x = (sd ? Ew.R : Ew.L)[q * 3], z = (sd ? Ew.R : Ew.L)[q * 3 + 2];
+      T[q * 3] = x; T[q * 3 + 2] = z; T[q * 3 + 1] = Math.max(Y[q] + 0.6, (nrLand(x, z) ? nmGroundAt(x, z) : Y[q] + 3) + 0.1);   // 옹벽은 항상 지표면까지
+    }
+    nin[q * 3] = Ew.nr[q * 2]; nin[q * 3 + 2] = Ew.nr[q * 2 + 1]; nout[q * 3] = -Ew.nr[q * 2]; nout[q * 3 + 2] = -Ew.nr[q * 2 + 1];
+  }
+  nrEmit(Ef.cen, [
+    { A: Ef.L, B: Ef.R, v: vs, u0: nrU(slot, 0), u1: nrU(slot, 1), col: tint, nrm: [0, 1, 0], b: 'dk' },                                   // 노면
+    { A: Ew.L, B: Ef.L, v: z0, u0: sol, u1: sol, col: nrCol(0.46), nrm: [0, 1, 0], b: 'dk' }, { A: Ef.R, B: Ew.R, v: z0, u0: sol, u1: sol, col: nrCol(0.46), nrm: [0, 1, 0], b: 'dk' },   // 연석 턱
+    { A: TL, B: Ew.L, v: z0, u0: sol, u1: sol, col: nrCol(0.50), nA: nin, b: 'dk' },                                                       // 좌측 옹벽(안쪽 면)
+    { A: Ew.R, B: TR, v: z0, u0: sol, u1: sol, col: nrCol(0.50), nA: nout, b: 'dk' }]);                                                    // 우측 옹벽(안쪽 면)
+  for (let q0 = 0; q0 < n;) {   // 지붕 + 조명
+    if (!cov[q0]) { q0++; continue; } let q1 = q0; while (q1 + 1 < n && cov[q1 + 1]) q1++;
+    const m = q1 - q0 + 1, sl = (arr, st) => arr.subarray(q0 * st, (q1 + 1) * st);
+    nrEmit(sl(Ec.cen, 3), [{ A: sl(Ec.R, 3), B: sl(Ec.L, 3), v: z0.subarray(0, m), u0: sol, u1: sol, col: nrCol(0.36), nrm: [0, -1, 0], b: 'dk' }]);
+    for (let s0 = S.s[q0] + 5; s0 < S.s[q1] - 2; s0 += 12) {
+      let q = q0; while (q < q1 && S.s[q] < s0) q++;
+      const x = S.p[q * 2], z = S.p[q * 2 + 1], C = nrChunk(nrKeyC(x, z), x, z), a = Math.atan2(Ew.nr[q * 2], Ew.nr[q * 2 + 1]) + Math.PI / 2;
+      nrBox(C.dk, C, x, Y[q] + NR_TUN.CLR - 0.1, z, Math.min(1.6, hw), 0.12, 2.6, a, [255, 248, 214], sol, 0.5);
+    }
+    q0 = q1 + 1;
+  }
+  nrRegUnder(Ef, Math.max(0.5, hw - 0.3), Y, cov, n);
 }
 function nrWay(D, off, i, plan) {
   const k = D.kind[i], { xs, zs } = nrDecodeWay(D, off, i), flags = D.flags[i], ow = flags & 1, br = (flags & 2) !== 0, hwv = D.hw[i], lanes = D.lanes[i], wd = D.wd[i] / 4;
@@ -2294,6 +2450,8 @@ function nrWay(D, off, i, plan) {
   const slot = k === 0 ? nrRoadSlot(hwv, lanes, ow) : k === 1 ? NR_S.SIDE : k === 2 ? NR_S.CROSS : k === 3 ? NR_S.CYCLE : NR_S.RAIL;
   const tint = nrCol(k === 0 ? 0.74 + 0.26 * h0 : k === 1 ? 0.82 + 0.18 * h0 : k === 2 ? 0.92 : 0.85 + 0.15 * h0), tl = NR_TL[slot];
   const dy = k === 0 ? 0.03 : k === 1 ? 0.03 : k === 2 ? 0.035 : k === 3 ? 0.032 : 0.04;
+  const tpl = NR.tunPlan && NR.tunPlan.get(i);
+  if (tpl && k === 0) { nrTunnelWay(i, tpl, slot, tint, tl, wd); return; }   // 지하차도
   const info = plan.get(i);
   if (info && info.elev && (k === 0 || k === 4)) {   // ----- 고가도로/교량 상판 -----
     const S = info.S, n = S.n, Y = info.y, hw = wd / 2, hwy = hwv <= 1 || k === 4, th = hwy ? 1.4 : 0.9, vs = new Float32Array(n);
@@ -2311,7 +2469,7 @@ function nrWay(D, off, i, plan) {
       const A = sd < 0 ? Ei.L : Ei.R, Bb = sd < 0 ? Ej.L : Ej.R, Cc = sd < 0 ? Ek.L : Ek.R;
       strips.push({ A, B: Bb, v: z0, u0: sol, u1: sol, col: nrCol(0.58), nA: nin, b: 'dk' }, { A: Bb, B: Cc, v: z0, u0: sol, u1: sol, col: nrCol(0.62), nrm: [0, 1, 0], b: 'dk' });
     }
-    nrEmit(Et.cen, strips); nrRegDeck(Et, hw, Y, n, info.g);
+    nrEmit(Et.cen, strips); nrRegDeck(Et, hw, Y, n, info.g, th);
     // ----- 접근 램프 옹벽: 상판 밑 여유가 3.4m 미만인 구간은 상판 옆면을 지면까지 내려 '성토 램프 + 콘크리트 옹벽'으로 만든다 -----
     const gLf = new Float32Array(n), gRt = new Float32Array(n), WC = 3.4;
     for (let q = 0; q < n; q++) {
@@ -2712,7 +2870,7 @@ float lcWave(vec2 w) { return lcF(w * 0.45 + vec2(uLcT * 0.06, uLcT * 0.045)) + 
   NR.mTr = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0 });
   nycLoadStatus('공원·물·운동장 지표 생성 중…', 0.91); await nmYield(); await nrLandcover(L);
   const off = new Uint32Array(D.nW + 1); for (let i = 0; i < D.nW; i++) off[i + 1] = off[i] + D.np[i];
-  nycLoadStatus('교량·고가도로 높이 계산 중…', 0.93); await nmYield(); const plan = nrPlanBridges(D, off); nrBuildAvoid(D, off, plan);
+  nycLoadStatus('교량·고가도로 높이 계산 중…', 0.93); await nmYield(); const plan = nrPlanBridges(D, off); nrBuildAvoid(D, off, plan); NR.tunPlan = nrPlanTunnels(D, off); nrApplyTunnelHoles();
   const rank = { 8: 0, 6: 1, 5: 2, 4: 3, 3: 4, 2: 5, 9: 5, 7: 6, 1: 7, 0: 8 }, order = [];
   for (let i = 0; i < D.nW; i++) { const k = D.kind[i]; order.push([k === 0 ? rank[D.hw[i]] : k === 3 ? 10 : k === 4 ? 11 : k === 2 ? 12 : k === 1 ? 13 : 14, i]); }
   order.sort((a, b) => a[0] - b[0]);
@@ -4001,6 +4159,8 @@ function updatePhysics(dt) {
   nmTerrainPass();
   resolvePolygonBuildingCollisions(prevPos);
   hardCollisionPass(prevPos);
+  nrDeckSolidPass(prevPos);
+  nrUnderPass(prevPos);
   nmTerrainPass();
 }
 
