@@ -2222,8 +2222,65 @@ function nrJunctionPads(plan, D) {
   }
   console.log('[NR] 고가 분기·합류 패드: ' + cnt + '곳');
 }
+
+// ---------- 도로 위에 도로가 겹친 곳(교차점에 노드가 없는 지상 교차)은 위쪽 도로를 고가로 승격한다 ----------
+function nrPromoteCrossings(D, off) {
+  const R = 12, grid = new Map(), ways = new Map(); let nP = 0;
+  const key = (x, z) => Math.floor(x / R) + ',' + Math.floor(z / R);
+  for (let i = 0; i < D.nW; i++) {
+    if (D.kind[i] !== 0 || (D.flags[i] & 2) || D.layer[i] < 0 || D.hw[i] === 8 || D.np[i] < 2 || D.wd[i] / 4 < 5) continue;
+    const { xs, zs } = nrDecodeWay(D, off, i); let L = 0; for (let k = 1; k < xs.length; k++) L += Math.hypot(xs[k] - xs[k - 1], zs[k] - zs[k - 1]);
+    ways.set(i, { xs, zs, L });
+    for (let k = 1; k < xs.length; k++) {
+      const l = Math.hypot(xs[k] - xs[k - 1], zs[k] - zs[k - 1]), m = Math.max(1, Math.ceil(l / 6)), seen = new Set();
+      for (let t = 0; t <= m; t++) { const c = key(xs[k - 1] + (xs[k] - xs[k - 1]) * t / m, zs[k - 1] + (zs[k] - zs[k - 1]) * t / m); if (seen.has(c)) continue; seen.add(c); let a = grid.get(c); if (!a) grid.set(c, a = []); a.push(i, k); }
+    }
+  }
+  const done = new Set(), nearV = (w, x, z) => { for (let k = 0; k < w.xs.length; k++) if (Math.hypot(w.xs[k] - x, w.zs[k] - z) < 3) return true; return false; };
+  for (const a of grid.values()) {
+    for (let p = 0; p < a.length; p += 2) for (let q = p + 2; q < a.length; q += 2) {
+      const i = a[p], j = a[q]; if (i === j) continue; const pk = i < j ? i * 100003 + j : j * 100003 + i; if (done.has(pk)) continue;
+      const A = ways.get(i), B = ways.get(j), k = a[p + 1], m = a[q + 1];
+      const x1 = A.xs[k - 1], z1 = A.zs[k - 1], x2 = A.xs[k], z2 = A.zs[k], x3 = B.xs[m - 1], z3 = B.zs[m - 1], x4 = B.xs[m], z4 = B.zs[m];
+      const d1x = x2 - x1, d1z = z2 - z1, d2x = x4 - x3, d2z = z4 - z3, den = d1x * d2z - d1z * d2x; if (Math.abs(den) < 1e-6) continue;
+      const t = ((x3 - x1) * d2z - (z3 - z1) * d2x) / den, u = ((x3 - x1) * d1z - (z3 - z1) * d1x) / den; if (t < 0.02 || t > 0.98 || u < 0.02 || u > 0.98) continue;
+      if (Math.abs(den) / (Math.hypot(d1x, d1z) * Math.hypot(d2x, d2z)) < 0.42) continue;   // 거의 평행하면 제외(교각 25° 이상만)
+      const X = x1 + d1x * t, Z = z1 + d1z * t; if (nearV(A, X, Z) || nearV(B, X, Z)) { done.add(pk); continue; }   // 교차점 근처에 노드가 있으면 정상 교차로
+      done.add(pk);
+      const ok = w => w.L >= 220 && w.L <= 900, ia = ok(A), ib = ok(B); if (!ia && !ib) continue;
+      let up = i; if (ia && ib) up = D.hw[i] !== D.hw[j] ? (D.hw[i] < D.hw[j] ? i : j) : (A.L >= B.L ? i : j); else up = ia ? i : j;
+      if (D.flags[up] & 2) continue; D.flags[up] |= 2; if (D.layer[up] < 1) D.layer[up] = 1; nP++;
+    }
+  }
+  console.log('[NR] 겹친 도로 → 고가 승격: ' + nP + '개');
+}
+// ---------- 지상 차도 점유 격자: 보도(인도) 조각이 차도 위에 깔리지 않게 판정 ----------
+function nrBuildRoadOcc(D, off) {
+  const g = new Map(), key = (cx, cz) => (cx + 3000) * 20011 + cz + 4000;
+  for (let i = 0; i < D.nW; i++) {
+    if (D.kind[i] !== 0 || (D.flags[i] & 2) || D.layer[i] < 0 || D.hw[i] === 8) continue;
+    const { xs, zs } = nrDecodeWay(D, off, i), hw = D.wd[i] / 8; if (hw < 2) continue;
+    for (let k = 1; k < xs.length; k++) {
+      const ax = xs[k - 1], az = zs[k - 1], bx = xs[k], bz = zs[k], m = Math.max(1, Math.ceil(Math.hypot(bx - ax, bz - az) / 8)), seen = new Set();
+      for (let t = 0; t <= m; t++) for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
+        const c = key(Math.floor((ax + (bx - ax) * t / m) / 10) + dx, Math.floor((az + (bz - az) * t / m) / 10) + dz); if (seen.has(c)) continue; seen.add(c);
+        let a = g.get(c); if (!a) g.set(c, a = []); a.push(ax, az, bx, bz, hw);
+      }
+    }
+  }
+  NR.roadOcc = g; NR.roadOccKey = key;
+}
+function nrOnCarriage(x, z) {
+  const g = NR.roadOcc; if (!g) return false; const a = g.get(NR.roadOccKey(Math.floor(x / 10), Math.floor(z / 10))); if (!a) return false;
+  for (let q = 0; q < a.length; q += 5) {
+    const ax = a[q], az = a[q + 1], vx = a[q + 2] - ax, vz = a[q + 3] - az, l2 = vx * vx + vz * vz; let t = l2 > 0 ? ((x - ax) * vx + (z - az) * vz) / l2 : 0; t = Math.max(0, Math.min(1, t));
+    if (Math.hypot(x - ax - vx * t, z - az - vz * t) < a[q + 4] - 0.5) return true;
+  }
+  return false;
+}
 function nrPlanBridges(D, off) {
   NR.snap = null; try { NR.snap = nrPlanSnap(D, off); } catch (err) { console.warn('도로 연결 실패', err); }
+  try { nrPromoteCrossings(D, off); } catch (err) { console.warn('겹침 승격 실패', err); }
   const plan = new Map(), nodes = new Map(), edges = [], nk = (x, z) => Math.round(x * 2) + '_' + Math.round(z * 2);
   for (let i = 0; i < D.nW; i++) {
     if ((D.kind[i] !== 0 && D.kind[i] !== 4) || !(D.flags[i] & 2)) continue;
@@ -2577,7 +2634,7 @@ function nrWay(D, off, i, plan) {
   const n = S.n, ok = new Uint8Array(n), Y = new Float32Array(n); let onDeck = false;
   for (let q = 0; q < n; q++) {
     const x = S.p[q * 2], z = S.p[q * 2 + 1]; if (!nrLand(x, z)) continue;
-    if (k === 0 && nrOcc(x, z)) continue; ok[q] = 1; Y[q] = nmGroundAt(x, z);
+    if (k === 0 && nrOcc(x, z)) continue; if (k === 1 && !br && nrOnCarriage(x, z)) continue; ok[q] = 1; Y[q] = nmGroundAt(x, z);
     if (br && k === 1) { const d = nrDeckAt(x, z, 1e9); if (d !== null && d > Y[q] + 1.2) { Y[q] = d; onDeck = true; } }
   }
   if (br && k === 1) for (let q = 0; q < n; q++) if (!ok[q]) { const d = nrDeckAt(S.p[q * 2], S.p[q * 2 + 1], 1e9); if (d !== null) { ok[q] = 1; Y[q] = d; onDeck = true; } }
@@ -2923,7 +2980,7 @@ float lcWave(vec2 w) { return lcF(w * 0.45 + vec2(uLcT * 0.06, uLcT * 0.045)) + 
   NR.mTr = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0 });
   nycLoadStatus('공원·물·운동장 지표 생성 중…', 0.91); await nmYield(); await nrLandcover(L);
   const off = new Uint32Array(D.nW + 1); for (let i = 0; i < D.nW; i++) off[i + 1] = off[i] + D.np[i];
-  nycLoadStatus('교량·고가도로 높이 계산 중…', 0.93); await nmYield(); const plan = nrPlanBridges(D, off); nrBuildAvoid(D, off, plan); NR.tunPlan = nrPlanTunnels(D, off); nrApplyTunnelHoles(); try { nrJunctionPads(plan, D); } catch (err) { console.warn('분기 패드 실패', err); }
+  nycLoadStatus('교량·고가도로 높이 계산 중…', 0.93); await nmYield(); const plan = nrPlanBridges(D, off); nrBuildAvoid(D, off, plan); try { nrBuildRoadOcc(D, off); } catch (err) { console.warn('차도 점유 격자 실패', err); } NR.tunPlan = nrPlanTunnels(D, off); nrApplyTunnelHoles(); try { nrJunctionPads(plan, D); } catch (err) { console.warn('분기 패드 실패', err); }
   const rank = { 8: 0, 6: 1, 5: 2, 4: 3, 3: 4, 2: 5, 9: 5, 7: 6, 1: 7, 0: 8 }, order = [];
   for (let i = 0; i < D.nW; i++) { const k = D.kind[i]; order.push([k === 0 ? rank[D.hw[i]] : k === 3 ? 10 : k === 4 ? 11 : k === 2 ? 12 : k === 1 ? 13 : 14, i]); }
   order.sort((a, b) => a[0] - b[0]);
