@@ -4580,11 +4580,11 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
 // =============================================================================
 const GFX_PRESETS = {
   low:    { label: '낮음 (최적화)',          maxPR: 1.0, shadow: 0,    bShadow: false, bloom: false },
-  medium: { label: '보통 (권장)',            maxPR: 1.5, shadow: 2048, bShadow: true,  bloom: false, shR: 150 },
-  high:   { label: '높음 (고화질 그림자+블룸)', maxPR: 1.5, shadow: 2048, bShadow: true,  bloom: true, loadR: 900, shR: 190 },
+  medium: { label: '보통 (권장)',            maxPR: 2.0, shadow: 2048, bShadow: true,  bloom: false, shR: 150 },
+  high:   { label: '높음 (고화질 그림자+블룸)', maxPR: 2.0, shadow: 2048, bShadow: true,  bloom: true, loadR: 900, shR: 190 },
   ultra:  { label: '최고급 (울트라: 반사·빛줄기·시네마 후처리)', maxPR: 2.0, shadow: 4096, bShadow: true, bloom: true, ultra: true, loadR: 1200, shR: 230 },
   cinema: { label: '시네마틱 (SSR·볼류메트릭·모션블러·AO·2단 그림자)', maxPR: 2.0, shadow: 4096, bShadow: true, bloom: true, ultra: true, cinema: true, loadR: 1200, shR: 230 },
-  realistic: { label: '리얼리스틱 (PCSS+SSRT 그림자·SSAO·대기·날씨·글레어)', maxPR: 1.5, shadow: 0, bShadow: false, bloom: true, ultra: true, cinema: true, realistic: true, loadR: 1200, shR: 230 }
+  realistic: { label: '리얼리스틱 (PCSS+SSRT 그림자·SSAO·대기·날씨·글레어)', maxPR: 2.0, shadow: 0, bShadow: false, bloom: true, ultra: true, cinema: true, realistic: true, loadR: 1200, shR: 230 }
 };
 
 // ---------- 사용자 설정: 디테일 거리 · 청크 거리 · 그림자 거리/디테일 (localStorage 저장) ----------
@@ -4715,7 +4715,7 @@ const GFX_SKY = {
 };
 const GFX_MOBILE = !!(window.matchMedia && window.matchMedia('(pointer:coarse)').matches);
 const GFX = {
-  quality: 'medium', pr: 1.5, envTex: null, envKey: '', minPR: 0.75, sky: null,
+  quality: 'medium', pr: 1.5, envTex: null, envKey: '', minPR: 1.0, sky: null,
   sunDir: new THREE.Vector3(0.3, 0.85, 0.35).normalize(),
   frames: 0, acc: 0, last: 0, lockUp: 0, frozen: false
 };
@@ -4909,7 +4909,7 @@ function gfxBloomInit() {
       cinema: { value: 0.0 }, luxAO: { value: 1 }, luxCS: { value: 1 }, luxGI: { value: 1 }, tRefl: { value: null }, hrtSize: { value: new THREE.Vector2(1, 1) }, hrtOn: { value: 0 }, hrtEnc: { value: 1 }, tG: { value: null }, tEnv: { value: null }, gfl: { value: 0.0 }, hasEnv: { value: 0.0 }, gsize: { value: new THREE.Vector2(1, 1) }, tanHalf: { value: 0.65 }, wet: { value: 0.0 }, fogK: { value: 0.0015 }, mbK: { value: 0.5 }, sunI: { value: 1.0 },
       camWorld: { value: new THREE.Matrix4() }, prevVP: { value: new THREE.Matrix4() }, camPos: { value: new THREE.Vector3() }, fogCol: { value: new THREE.Color() }, sunDirW: { value: new THREE.Vector3(0, 1, 0) }, sunCol: { value: new THREE.Color() }, skyTop: { value: new THREE.Color() }, skyHor: { value: new THREE.Color() } },
     fragmentShader: `uniform sampler2D tScene, tB1, tB2; uniform float strength, ultra, sunVis, aspect, time; uniform vec2 sunUv; varying vec2 vUv;
-      float hh(vec2 p){ return fract(sin(dot(p, vec2(12.9898,78.233))) * 43758.5453); }
+      float hh(vec2 p){ p = fract(p * vec2(0.1031, 0.1030)); p += dot(p, p.yx + 33.33); return fract((p.x + p.y) * p.x); }
       uniform float luxAO, luxCS, luxGI; uniform sampler2D tG; uniform samplerCube tEnv; uniform vec2 gsize; uniform float cinema, tanHalf, wet, fogK, mbK, sunI, gfl, hasEnv;
       uniform mat4 camWorld, prevVP; uniform vec3 camPos, fogCol, sunDirW, sunCol, skyTop, skyHor;
       uniform sampler2D tRefl; uniform vec2 hrtSize; uniform float hrtOn, hrtEnc;
@@ -5098,7 +5098,7 @@ function gfxBloomInit() {
           c *= mix(vec3(0.96, 0.99, 1.05), vec3(1.05, 1.0, 0.94), smoothstep(0.1, 0.9, l));
           // 비네트 + 필름 그레인
           c *= 1.0 - 0.34 * smoothstep(0.35, 1.05, length((uv - 0.5) * vec2(aspect * 0.9, 1.1)));
-          c += (hh(uv * 900.0 + time) - 0.5) * mix(0.018, 0.004, cinema);
+          // (필름 그레인 제거: 모바일에서 화면 고정 가로줄 유발)
         }
         gl_FragColor = vec4(max(c, 0.0), 1.0);
       }` });
@@ -5113,7 +5113,7 @@ function gfxBloomBuild(W, H) {
   const ms = renderer.capabilities.isWebGL2 && THREE.WebGLMultisampleRenderTarget;
   GFXB.rtScene = ms ? new THREE.WebGLMultisampleRenderTarget(W, H, Object.assign({ depthBuffer: true }, base))
                     : new THREE.WebGLRenderTarget(W, H, Object.assign({ depthBuffer: true }, base));
-  if (ms) GFXB.rtScene.samples = GFX_MOBILE ? 2 : 4;                          // 후처리 중에도 MSAA 유지
+  if (ms) GFXB.rtScene.samples = 4;                          // 후처리 중에도 MSAA 유지
   const mk = (sh) => new THREE.WebGLRenderTarget(Math.max(2, W >> sh), Math.max(2, H >> sh), Object.assign({ depthBuffer: false }, base));
   GFXB.a1 = mk(2); GFXB.b1 = mk(2); GFXB.a2 = mk(3); GFXB.b2 = mk(3);
   GFXB.W = W; GFXB.H = H;
@@ -5218,7 +5218,7 @@ function gfxSetQuality(q) {
   const P = GFX_PRESETS[q];
   gfxApplyUser();
   if (q !== 'low') { try { GFX.envKey = ''; gfxBuildEnv(); } catch (e) { console.warn('env', e); } }
-  gfxApplyShadows(); gfxSetPR(Math.min(window.devicePixelRatio || 1, GFX_MOBILE ? Math.min(P.maxPR, 1.25) : P.maxPR)); gfxSetBloom(gfxBloomWanted(P)); gfx2Apply(!!P.cinema); try { vfxApplyQuality(q); } catch (e) { console.warn('vfxq', e); }
+  gfxApplyShadows(); gfxSetPR(Math.min(window.devicePixelRatio || 1, GFX_MOBILE ? Math.min(P.maxPR, 2.0) : P.maxPR)); gfxSetBloom(gfxBloomWanted(P)); gfx2Apply(!!P.cinema); try { vfxApplyQuality(q); } catch (e) { console.warn('vfxq', e); }
   const b = document.getElementById('btn-gfx-quality');
   if (b) { b.innerText = '그래픽 품질: ' + P.label; b.classList.toggle('off', q === 'low'); }
   try { gfxSyncUserUI(); } catch (e) {}
@@ -5365,7 +5365,7 @@ function gfxUpdate() {
   if (GFX.lockUp > 0) GFX.lockUp--;
   if (GFX.frames >= 45) {
     const avg = GFX.acc / GFX.frames; GFX.frames = 0; GFX.acc = 0;
-    const maxPR = Math.min(window.devicePixelRatio || 1, GFX_MOBILE ? Math.min(GFX_PRESETS[GFX.quality].maxPR, 1.25) : GFX_PRESETS[GFX.quality].maxPR);
+    const maxPR = Math.min(window.devicePixelRatio || 1, GFX_MOBILE ? Math.min(GFX_PRESETS[GFX.quality].maxPR, 2.0) : GFX_PRESETS[GFX.quality].maxPR);
     if (avg > 24 && GFX.pr > GFX.minPR + 0.01) { gfxSetPR(Math.max(GFX.minPR, GFX.pr - 0.1)); GFX.lockUp = 480; }
     else if (avg < 18.5 && GFX.lockUp === 0 && GFX.pr < maxPR - 0.01) { gfxSetPR(Math.min(maxPR, GFX.pr + 0.05)); GFX.lockUp = 240; }
   }
@@ -6112,7 +6112,7 @@ function init() {
   camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.2, 2600);
   renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
   renderer.setSize(window.innerWidth, window.innerHeight);
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   document.body.appendChild(renderer.domElement);
 
   const hemiLight = new THREE.HemisphereLight(0xe2e8f0, 0x1e293b, 1.0);
@@ -6330,7 +6330,7 @@ const HRT = {
 };
 // 반사/템포럴 패스가 공유하는 GLSL 유틸 (G-buffer 디코딩, 뷰공간 복원, 투영)
 const HRT_COMMON = `
-  float hh(vec2 p){ return fract(sin(dot(p, vec2(12.9898,78.233))) * 43758.5453); }
+  float hh(vec2 p){ p = fract(p * vec2(0.1031, 0.1030)); p += dot(p, p.yx + 33.33); return fract((p.x + p.y) * p.x); }
   vec3 rotv(vec3 v){ return camWorld[0].xyz * v.x + camWorld[1].xyz * v.y + camWorld[2].xyz * v.z; }
   // G-buffer: float 모드 = (깊이, 반사율, 법선 옥타헤드럴 xy) / 8bit 모드 = (깊이 상위, 깊이 하위, 반사율)
   float gDepth(vec2 u, out float rf){ vec4 g = texture2D(tG, u); if (gfl > 0.5) { rf = g.g; return g.r; } rf = g.b; return (g.r + g.g / 255.0) * 2600.0; }
@@ -6861,7 +6861,7 @@ function rgsMkSkyMat() {
 function rgsMkSky() { const o = new THREE.Mesh(new THREE.SphereGeometry(1000, 48, 24), rgsMkSkyMat()); o.frustumCulled = false; o.renderOrder = -10; return o; }
 
 const RGS_BODYCAM_FS = `uniform sampler2D tDiffuse;uniform float uTime,uBarrel,uChroma,uGrain,uVig,uSat;uniform vec2 uRes;varying vec2 vUv;
- float h(vec2 p){return fract(sin(dot(p,vec2(12.9898,78.233)))*43758.5453);}
+ float h(vec2 p){p=fract(p*vec2(.1031,.1030));p+=dot(p,p.yx+33.33);return fract((p.x+p.y)*p.x);}
  void main(){
   vec2 c=(vUv-.5)/(1.+uBarrel*.25);float r2=dot(c,c);
   vec2 d=c*(1.+uBarrel*r2);vec2 uv=.5+d;
