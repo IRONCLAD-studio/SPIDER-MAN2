@@ -2502,6 +2502,10 @@ canvas { display: block; width: 100%; height: 100%; }
       <button class="assist-toggle-btn" id="lux-auto" style="margin-top:8px;">시간 자동 흐름: ON</button>
       <span class="settings-label" style="margin:8px 0 2px;">흐름 속도 <span id="lux-speed-val">1.5</span> (게임 분/실제 초)</span>
       <input type="range" id="lux-speed" min="0.2" max="30" step="0.1" value="1.5" style="width:100%;touch-action:none;">
+      <span class="settings-label" style="margin:12px 0 2px;">📅 날짜 · 계절 <span id="lux-date-val"></span></span>
+      <input type="range" id="lux-date" min="1" max="365" step="1" value="1" style="width:100%;touch-action:none;">
+      <span class="assist-desc" id="lux-sun-info" style="display:block;margin:4px 0 8px;"></span>
+      <button class="assist-toggle-btn" id="lux-today">오늘 날짜로 (실제 태양)</button>
       <span class="settings-label" style="margin:12px 0 6px;">🌦️ 날씨 (Weather)</span>
       <div class="lux-grid3">
         <button class="lux-wbtn" data-w="clear">☀️ 맑음</button>
@@ -8771,8 +8775,10 @@ const LUX = {
   internal: false, first: true, lastMode: '', lastEnvT: 0, envDirty: false, lastDir: new THREE.Vector3(), applied: -1,
   oc: 0, precip: 0, fogMul: 1, flash: 0, nextBolt: 5, lastUI: 0, wetT: 0
 };
-try { const s = JSON.parse(localStorage.getItem('luxSettings') || 'null'); if (s) for (const k of ['time', 'auto', 'speed', 'weather', 'ao', 'cs', 'gi']) if (s[k] !== undefined) LUX[k] = s[k]; } catch (e) {}
-function luxSave() { try { localStorage.setItem('luxSettings', JSON.stringify({ time: LUX.time, auto: LUX.auto, speed: LUX.speed, weather: LUX.weather, ao: LUX.ao, cs: LUX.cs, gi: LUX.gi })); } catch (e) {} }
+// 날짜(계절): 기본값은 기기의 실제 오늘 날짜. 슬라이더로 바꾸면 그 날짜를 저장한다.
+LUX.year = new Date().getFullYear(); LUX.today = true; LUX.doy = luxTodayDOY();
+try { const s = JSON.parse(localStorage.getItem('luxSettings') || 'null'); if (s) { for (const k of ['time', 'auto', 'speed', 'weather', 'ao', 'cs', 'gi']) if (s[k] !== undefined) LUX[k] = s[k]; if (s.today === false && s.doy >= 1 && s.doy <= 365) { LUX.today = false; LUX.doy = s.doy; } } } catch (e) {}
+function luxSave() { try { localStorage.setItem('luxSettings', JSON.stringify({ time: LUX.time, auto: LUX.auto, speed: LUX.speed, weather: LUX.weather, ao: LUX.ao, cs: LUX.cs, gi: LUX.gi, today: LUX.today, doy: LUX.doy })); } catch (e) {} }
 const LUX_WEATHER = {
   clear:    { oc: 0.00, precip: 0,    fog: 1.0, wet: 0 },
   partly:   { oc: 0.38, precip: 0,    fog: 1.1, wet: 0 },
@@ -8803,10 +8809,58 @@ function luxKF(el) {
 }
 const luxSS = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
 function luxGray(c, k, dark) { const l = (c.r * 0.3 + c.g * 0.59 + c.b * 0.11) * dark; c.r += (l - c.r) * k; c.g += (l - c.g) * k; c.b += (l - c.b) * k; return c; }
+// ===== 실제 태양 궤도 =====================================================================
+// 맨해튼(위도 40.7484°N, 경도 73.9857°W) 기준. 날짜(적위·계절), 균시차, 경도 보정, 미국 서머타임(EST/EDT),
+// 대기 굴절(지평선 근처에서 태양이 살짝 떠 보임)을 반영한 NOAA 방식 계산.
+// 월드 좌표: +X 동, -Z 정북, +Z 정남  → 정오의 태양은 남쪽(+Z)에 뜨고, 여름엔 일출/일몰이 북동/북서쪽으로 치우친다.
+const SUN_LAT = 40.7484, SUN_LON = -73.9857;
+function luxTodayDOY() {
+  const d = new Date(), y0 = new Date(d.getFullYear(), 0, 0);
+  return Math.min(365, Math.max(1, Math.round((new Date(d.getFullYear(), d.getMonth(), d.getDate()) - y0) / 86400000)));
+}
+function sunDST(doy, year) {                       // 3월 둘째 일요일 ~ 11월 첫째 일요일
+  const d = new Date(year, 0, doy), m = d.getMonth(), prevSun = d.getDate() - d.getDay();
+  if (m < 2 || m > 10) return false;
+  if (m > 2 && m < 10) return true;
+  return m === 2 ? prevSun >= 8 : prevSun <= 0;
+}
+// hours = 현지 시계 시각(0~24), 반환: el/az(도, az는 북=0 시계방향), decl(적위)
+function sunPosition(hours, doy, year) {
+  const R = Math.PI / 180, dst = sunDST(doy, year) ? 1 : 0, tz = -5 + dst;
+  const g = 2 * Math.PI / 365 * (doy - 1 + (hours - 12) / 24);
+  const eqt = 229.18 * (0.000075 + 0.001868 * Math.cos(g) - 0.032077 * Math.sin(g) - 0.014615 * Math.cos(2 * g) - 0.040849 * Math.sin(2 * g));
+  const decl = 0.006918 - 0.399912 * Math.cos(g) + 0.070257 * Math.sin(g) - 0.006758 * Math.cos(2 * g) + 0.000907 * Math.sin(2 * g) - 0.002697 * Math.cos(3 * g) + 0.00148 * Math.sin(3 * g);
+  const tst = hours * 60 + eqt + 4 * SUN_LON - 60 * tz;           // 진태양시(분)
+  const ha = (tst / 4 - 180) * R, lat = SUN_LAT * R;
+  const cz = Math.min(1, Math.max(-1, Math.sin(lat) * Math.sin(decl) + Math.cos(lat) * Math.cos(decl) * Math.cos(ha)));
+  const el0 = 90 - Math.acos(cz) / R;
+  const az = ((Math.atan2(Math.sin(ha), Math.cos(ha) * Math.sin(lat) - Math.tan(decl) * Math.cos(lat)) / R + 180) % 360 + 360) % 360;
+  let refr;                                                        // 대기 굴절(도)
+  if (el0 > -1) refr = 1.02 / Math.tan((el0 + 10.3 / (el0 + 5.11)) * R) / 60;
+  else refr = 0.647 * Math.max(0, 1 + (el0 + 1) / 2);
+  return { el: el0 + refr, az, decl: decl / R };
+}
 function luxSunVec(t) {
-  const a = (t - 6) / 12 * Math.PI, sx = Math.cos(a), sy = Math.sin(a) * 0.86, sz = 0.5;
-  const v = new THREE.Vector3(sx, sy, sz).normalize();
-  return v;
+  const p = sunPosition(t, LUX.doy, LUX.year), e = p.el * Math.PI / 180, a = p.az * Math.PI / 180;
+  return new THREE.Vector3(Math.cos(e) * Math.sin(a), Math.sin(e), -Math.cos(e) * Math.cos(a));
+}
+// 일출/일몰/남중 시각 (날짜별 캐시)
+function luxTimes() {
+  const key = LUX.doy + '|' + LUX.year; if (LUX._stKey === key) return LUX._st;
+  let rise = null, set = null, noon = 12, maxEl = -90, prev = sunPosition(0, LUX.doy, LUX.year).el;
+  for (let i = 1; i <= 1440; i++) {
+    const t = i / 60, e = sunPosition(t, LUX.doy, LUX.year).el;
+    if (e > maxEl) { maxEl = e; noon = t; }
+    if (rise === null && prev <= -0.22 && e > -0.22) rise = t;
+    if (prev > -0.22 && e <= -0.22) set = t;
+    prev = e;
+  }
+  LUX._stKey = key; return (LUX._st = { rise: rise === null ? 6 : rise, set: set === null ? 18 : set, noon, maxEl });
+}
+function luxTimeAtEl(target) {                    // 정오 이후 태양이 target 고도(도)로 내려오는 시각
+  const st = luxTimes();
+  for (let i = Math.round(st.noon * 60); i <= 1440; i++) if (sunPosition(i / 60, LUX.doy, LUX.year).el <= target) return i / 60;
+  return st.set;
 }
 
 function luxApply(force) {
@@ -8818,7 +8872,7 @@ function luxApply(force) {
   const oc = LUX.oc;
   const sv = luxSunVec(LUX.time), el = Math.asin(sv.y) * 57.2958;
   const moon = el < -4.5;
-  const dir = moon ? new THREE.Vector3(-sv.x, Math.max(0.35, -sv.y * 1.6 + 0.3), sv.z).normalize() : sv;
+  const dir = moon ? new THREE.Vector3(-sv.x, Math.max(0.3, -sv.y), -sv.z).normalize() : sv;   // 밤: 태양 정반대편의 보름달
   // 구름/날씨에 따른 이산 모드(다른 시스템: 창문 불빛·블룸·환경맵 키 등)
   const mode = el > 9 ? (oc > 0.7 ? 'cloudy' : 'day') : (el > -4.5 ? (oc > 0.85 ? 'cloudy' : 'sunset') : 'night');
   if (force || mode !== LUX.lastMode) { LUX.lastMode = mode; LUX.internal = true; try { _origAWT(mode); } finally { LUX.internal = false; } }
@@ -8873,7 +8927,7 @@ const _origAWT = applyWeatherTheme;
 applyWeatherTheme = function (mode) {
   if (LUX.internal) return _origAWT(mode);
   if (LUX.first) { LUX.first = false; luxApply(true); luxSyncUI(); return; }
-  const T = { day: 13.0, sunset: 18.6, night: 23.5, cloudy: 13.0 };
+  const stm = luxTimes(), T = { day: stm.noon, sunset: luxTimeAtEl(1.5), night: 23.5, cloudy: stm.noon };
   if (T[mode] !== undefined) { LUX.time = T[mode]; LUX.weather = mode === 'cloudy' ? 'overcast' : (LUX.weather === 'overcast' ? 'clear' : LUX.weather); }
   luxApply(true); luxSave(); luxSyncUI();
 };
@@ -8937,6 +8991,12 @@ function luxSyncUI() {
   $('lux-time').value = LUX.time; $('lux-time-val').textContent = luxFmt(LUX.time);
   $('lux-auto').textContent = '시간 자동 흐름: ' + (LUX.auto ? 'ON' : 'OFF'); $('lux-auto').classList.toggle('off', !LUX.auto);
   $('lux-speed').value = LUX.speed; $('lux-speed-val').textContent = LUX.speed.toFixed(1);
+  if ($('lux-date')) {
+    const dd = new Date(LUX.year, 0, LUX.doy), st = luxTimes();
+    $('lux-date').value = LUX.doy;
+    $('lux-date-val').textContent = (dd.getMonth() + 1) + '월 ' + dd.getDate() + '일' + (LUX.today ? ' (오늘)' : '');
+    $('lux-sun-info').textContent = '일출 ' + luxFmt(st.rise) + ' · 남중 ' + luxFmt(st.noon) + ' (고도 ' + st.maxEl.toFixed(0) + '°) · 일몰 ' + luxFmt(st.set);
+  }
   for (const id of ['ao', 'cs', 'gi']) { $('lux-' + id).value = LUX[id]; $('lux-' + id + '-val').textContent = Math.round(LUX[id] * 100) + '%'; }
   document.querySelectorAll('.lux-wbtn').forEach(b => b.classList.toggle('active', b.dataset.w === LUX.weather));
 }
@@ -8944,6 +9004,11 @@ function luxWire() {
   const $ = (id) => document.getElementById(id); if (!$('lux-time')) return;
   $('lux-time').addEventListener('input', () => { LUX.time = +$('lux-time').value; luxApply(true); $('lux-time-val').textContent = luxFmt(LUX.time); });
   $('lux-time').addEventListener('change', luxSave);
+  if ($('lux-date')) {
+    $('lux-date').addEventListener('input', () => { LUX.doy = +$('lux-date').value; LUX.today = false; luxApply(true); luxSyncUI(); });
+    $('lux-date').addEventListener('change', luxSave);
+    $('lux-today').addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); LUX.today = true; LUX.doy = luxTodayDOY(); luxApply(true); luxSave(); luxSyncUI(); });
+  }
   $('lux-speed').addEventListener('input', () => { LUX.speed = +$('lux-speed').value; $('lux-speed-val').textContent = LUX.speed.toFixed(1); luxSave(); });
   for (const id of ['ao', 'cs', 'gi']) $('lux-' + id).addEventListener('input', () => { LUX[id] = +$('lux-' + id).value; $('lux-' + id + '-val').textContent = Math.round(LUX[id] * 100) + '%'; luxSave(); });
   $('lux-auto').addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); LUX.auto = !LUX.auto; luxSave(); luxSyncUI(); });
@@ -8959,7 +9024,7 @@ gfxUpdate = function () {
   const now = performance.now(), dt = Math.min(0.1, (now - _luxLast) / 1000); _luxLast = now;
   try {
     let need = LUX.forceApply; LUX.forceApply = false;
-    if (LUX.auto && isGameStarted) { LUX.time = (LUX.time + dt * LUX.speed / 60) % 24; need = true; if (now - LUX.lastUI > 500) { LUX.lastUI = now; luxSyncUI(); } }
+    if (LUX.auto && isGameStarted) { const nt = LUX.time + dt * LUX.speed / 60; if (nt >= 24) LUX.doy = LUX.doy % 365 + 1; LUX.time = nt % 24; need = true; if (now - LUX.lastUI > 500) { LUX.lastUI = now; luxSyncUI(); } }
     const W = LUX_WEATHER[LUX.weather] || LUX_WEATHER.clear;
     if (Math.abs(LUX.oc - W.oc) > 0.002 || Math.abs(LUX.precip - W.precip) > 0.002 || Math.abs(LUX.fogMul - W.fog) > 0.01) need = true;
     luxLightning(dt);
@@ -9417,8 +9482,8 @@ class RGSystem {
     dt = Math.min(dt, 0.1); this._t += dt; const c = this.cur, k = 1 - Math.exp(-dt * 0.6), CF = RGS.cfg;
     for (const key in this.tgt) c[key] += (this.tgt[key] - c[key]) * k;
     const ov = c.dark, st = c.storm, rad = Math.PI / 180;
-    const elev = this.elev = 75 * Math.sin((this.hour - 6) / 24 * Math.PI * 2), az = 90 + (this.hour - 6) * 15;
-    const sd = this.sunDir.setFromSphericalCoords(1, (90 - elev) * rad, az * rad);
+    const _sv = luxSunVec(this.hour), elev = this.elev = Math.asin(_sv.y) * 57.2958;   // 실제 태양 궤도(날짜·위도 반영)
+    const sd = this.sunDir.copy(_sv);
     const day = rgsSS(-8, 15, elev), night = 1 - rgsSS(-14, -3, elev), e = rgsSS(0, 30, elev), tw = Math.exp(-Math.pow(elev / 8, 2));
     this.day = day; this.night = night;
     this.lamp = rgsClamp((1 - rgsSS(-4, 10, elev)) + 0.5 * ov * day, 0, 1);
