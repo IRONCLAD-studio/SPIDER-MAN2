@@ -3315,10 +3315,36 @@ void shopCell(float u, float y, float w, float gH, float SW, out float h, out ve
     if (cdist > uWinFar) {
       // 원거리: 평균색만
       vec3 avg = mix(gWC, gGC * 1.5, pFam < 0.5 ? 0.78 : 0.34);
-      avg *= 0.86 + 0.28 * fbm(vWP.xz * 0.05 + vWP.y * 0.02);
-      avg *= mix(0.62, 1.0, smoothstep(0.0, 40.0, y));
-      diffuseColor.rgb = mix(diffuseColor.rgb, avg, 0.9);
-      vfxWin = pFam < 0.5 ? 0.55 : 0.22;
+      float fbF = fbm(vWP.xz * 0.05 + vWP.y * 0.02), dkF = mix(0.62, 1.0, smoothstep(0.0, 40.0, y));
+      avg *= (0.86 + 0.28 * fbF) * dkF;
+      // 중거리 창문 격자(저비용): 층·베이 격자만 그려 단색 덩어리처럼 보이지 않게 한다. 멀어져 칸이 픽셀보다 작아지면 평균색으로 수렴
+      vec3 farC = avg; float farWin = 0.0;
+      {
+        vec3 T3f = vec3(-wn.z, 0.0, wn.x);
+        float uF = dot(vLP.xz - vAnc, T3f.xz) + seed * 23.7;
+        vec2 cl = vec2(uF / max(pBW, 1.3), y / max(pFH, 2.8));
+        float cpx = max(fwidth(cl.x), fwidth(cl.y));
+        float lodF = 1.0 - smoothstep(0.30, 0.80, cpx);
+        if (lodF > 0.01) {
+          vec2 cf = fract(cl), ci = floor(cl);
+          float wx = pFam < 0.5 ? 0.88 : clamp(pWW / max(pBW, 1.0), 0.3, 0.8);
+          float wy = pFam < 0.5 ? 0.60 : clamp(pWH / max(pFH, 2.8), 0.3, 0.7);
+          float y0 = pFam < 0.5 ? 0.20 : clamp(pSill / max(pFH, 2.8), 0.1, 0.4);
+          float aa = max(cpx * 0.8, 0.02);
+          float inx = smoothstep(0.5 - wx * 0.5 - aa, 0.5 - wx * 0.5 + aa, cf.x) * (1.0 - smoothstep(0.5 + wx * 0.5 - aa, 0.5 + wx * 0.5 + aa, cf.x));
+          float iny = smoothstep(y0 - aa, y0 + aa, cf.y) * (1.0 - smoothstep(y0 + wy - aa, y0 + wy + aa, cf.y));
+          farWin = inx * iny * step(2.5, y);
+          float hv = fract(sin(dot(ci + seed * 13.0, vec2(12.9898, 78.233))) * 43758.5453);
+          float hv2 = fract(sin(dot(ci + seed * 7.0 + 3.1, vec2(39.346, 11.135))) * 24634.6345);
+          vec3 wallC = gWC * (0.86 + 0.28 * fbF) * dkF;
+          vec3 glassC = gGC * (pFam < 0.5 ? 1.7 : 1.1) * (0.75 + 0.55 * hv) * dkF;
+          farC = mix(avg, mix(wallC, glassC, farWin), lodF);
+          totalEmissiveRadiance += vec3(1.0, 0.80, 0.52) * farWin * step(0.68, hv2) * uWinGlow * 0.55 * lodF;
+          farWin *= lodF;
+        }
+      }
+      diffuseColor.rgb = mix(diffuseColor.rgb, farC, 0.9);
+      vfxWin = (pFam < 0.5 ? 0.55 : 0.22) * mix(1.0, 0.5 + 0.9 * farWin, step(0.01, farWin));
     } else {
     // 이 벽면의 상단 높이: 세트백(단) 위 지붕 높이를 우선 사용
     float wallTop = topY, tq;
@@ -4231,7 +4257,7 @@ function nmFrame(dt) {
   if (!NM.ready) return; NM.camT += dt; if (NM.camT < 0.3) return; NM.camT = 0;
   const cx = camera.position.x, cz = camera.position.z, R = (GFXU.chunk || 2300) + 250;
   for (const c of NM.cellMeshes) c.mesh.visible = Math.hypot(c.x - cx, c.z - cz) < (c.r || R) + 300;
-  if (window.__winFar) window.__winFar.value = Math.max(250, gfxEffDetail() * 0.65);
+  if (window.__winFar) window.__winFar.value = Math.max(250, gfxEffDetail() * 0.72);
   const gx = Math.floor(player.pos.x / SPATIAL_CELL), gz = Math.floor(player.pos.z / SPATIAL_CELL);
   for (let a = -3; a <= 3; a++) for (let b = -3; b <= 3; b++) nmEnsureCell((gx + a) + ',' + (gz + b));
 }
@@ -5005,6 +5031,113 @@ function nrTreeGeo() {
   const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(P, 3)); g.setAttribute('normal', new THREE.BufferAttribute(NM_, 3)); g.setAttribute('color', new THREE.BufferAttribute(Cc, 3)); return g;
 }
 // ---------- 전체 빌드 ----------
+
+// ===== 사실적 아스팔트: 월드좌표 절차적 디테일 (골재 입자·노출 골재·바퀴자국·균열·실링·보수 패치·기름·연석 먼지·페인트 마모) =====
+// 기존 아틀라스(저해상도) 위에 곱하는 방식. 아스팔트(무채색·어두운 텍셀)에만 적용하고 차선 페인트는 닳음만 적용한다.
+function nrAsphaltPatch(mats) {
+  const lite = (typeof GFX_MOBILE !== 'undefined' && GFX_MOBILE);
+  for (const m of mats) {
+    if (!m || m.userData.asph) continue; m.userData.asph = true;
+    m.extensions = Object.assign({}, m.extensions, { derivatives: true });
+    const prevKey = m.customProgramCacheKey ? m.customProgramCacheKey.bind(m) : null;
+    m.customProgramCacheKey = () => (prevKey ? prevKey() : '') + 'asph1' + (lite ? 'L' : '');
+    const prev = m.onBeforeCompile;
+    m.onBeforeCompile = function (sh, rr) {
+      if (prev) prev.call(m, sh, rr);
+      sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vAsW;\nvarying vec2 vAsL;')
+        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvAsW = (modelMatrix * vec4(transformed, 1.0)).xyz; vAsL = transformed.xz;');
+      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
+${lite ? '#define AS_LITE' : ''}
+varying vec3 vAsW;
+varying vec2 vAsL;
+float asRs = 1.0, asHt = 0.0;
+float asH(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
+vec2 asH2(vec2 p) { return vec2(asH(p), asH(p + vec2(41.3, 17.7))); }
+float asN(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(asH(i), asH(i + vec2(1.0, 0.0)), f.x), mix(asH(i + vec2(0.0, 1.0)), asH(i + vec2(1.0, 1.0)), f.x), f.y); }
+float asF(vec2 p) { float a = 0.5, s = 0.0; for (int i = 0; i < 4; i++) { s += a * asN(p); p = p * 2.03 + vec2(17.1, 9.2); a *= 0.5; } return s; }
+vec2 asW(vec2 p) { vec2 i = floor(p), f = fract(p); float d1 = 8.0, d2 = 8.0;
+  for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) { vec2 g = vec2(float(x), float(y)); vec2 o = asH2(i + g); float d = length(g + o - f); if (d < d1) { d2 = d1; d1 = d; } else if (d < d2) { d2 = d; } }
+  return vec2(d1, d2); }
+`)
+      .replace('#include <color_fragment>', `#include <color_fragment>
+{
+  vec2 w = vAsW.xz, lw = vAsL;
+  vec3 c0 = diffuseColor.rgb;
+  float luma = dot(c0, vec3(0.299, 0.587, 0.114));
+  float chroma = max(c0.r, max(c0.g, c0.b)) - min(c0.r, min(c0.g, c0.b));
+  float aM = (1.0 - smoothstep(0.035, 0.085, chroma)) * (1.0 - smoothstep(0.30, 0.46, luma));   // 아스팔트(무채색·어두움)
+  float pM = smoothstep(0.58, 0.74, luma);                                                         // 차선 페인트(밝음)
+  float px = max(fwidth(w.x), fwidth(w.y));            // (파생값은 분기 밖에서 계산)
+  float fF = 1.0 - smoothstep(0.004, 0.030, px);       // 1~3cm 입자: 아주 가까울 때만
+  float fM = 1.0 - smoothstep(0.03, 0.25, px);         // 10~50cm
+  float fC = 1.0 - smoothstep(0.4, 3.5, px);           // 수 m
+  if (aM + pM > 0.01) {
+    // 차로 좌표(아틀라스 슬롯 → 차선 수): 바퀴 자국 위치 계산
+    float sl = floor(vUv.x * 25.6), xs = fract(vUv.x * 25.6);
+    float nL = sl < 1.5 ? 2.0 : (sl < 2.5 ? 4.0 : (sl < 3.5 ? 6.0 : (sl < 8.5 ? sl - 3.0 : (sl < 9.5 ? 2.0 : (sl < 10.5 ? 3.0 : (sl < 12.5 ? 4.0 : (sl < 13.5 ? 1.0 : 2.0)))))));
+    float lf = fract(xs * nL);
+    float t1 = (lf - 0.31) / 0.075, t2 = (lf - 0.69) / 0.075;
+    float trk = clamp(exp(-t1 * t1) + exp(-t2 * t2), 0.0, 1.0);
+    float big = asF(w / 20.0 + 7.0), mid = asF(w / 2.6 + 3.0);
+    float age = smoothstep(0.35, 0.75, asF(w / 45.0 + 91.0));          // 0=새 포장(검음) ~ 1=노후(회색)
+    float tone = mix(0.80, 1.20, age) * (0.80 + 0.40 * big) * (0.92 + 0.16 * mid);
+    tone *= 1.0 - 0.22 * trk * fC;                                     // 바퀴 자국: 기름·고무로 어둡다
+    tone *= 1.0 + 0.07 * (1.0 - trk) * age;                            // 차로 중앙은 건조해서 살짝 밝다
+    float gr = asH(floor(lw * 70.0)), gr2 = asN(lw * 24.0);
+    float grain = (gr - 0.5) * 0.42 * fF + (gr2 - 0.5) * 0.26 * fM;
+    vec2 cc = floor(lw * 38.0), cfr = fract(lw * 38.0) - (0.22 + 0.56 * asH2(cc));
+    float chip = step(0.93 - 0.10 * age, asH(cc + 3.1)) * (1.0 - smoothstep(0.11, 0.20, length(cfr)));
+    vec3 chipC = vec3(0.30, 0.29, 0.27) * (0.6 + 0.8 * asH(cc + 9.0));
+    float crack = 0.0, seal = 0.0;
+#ifndef AS_LITE
+    if (fM > 0.02 && aM > 0.02) {
+      vec2 wc = asW(w / 1.15 + 5.0);
+      float zone = smoothstep(0.55, 0.78, asF(w / 11.0 + 40.0)) * (0.4 + 0.6 * trk);
+      crack = (1.0 - smoothstep(0.0, max(0.028, px * 1.04), wc.y - wc.x)) * zone * fM;            // 악어등 균열(바퀴 자국 근처)
+      float ln = abs(asN(w / 3.1 + 9.0) - 0.5);
+      seal = (1.0 - smoothstep(0.0, 0.010 + px * 0.25, ln)) * step(0.52, asN(w / 24.0 + 33.0)) * fM;   // 타르로 메운 긴 균열
+    }
+#endif
+    float pv = asF(w / 6.5 + 120.0);
+    float pch = smoothstep(0.640, 0.652, pv) * step(0.48, asN(w / 50.0 + 3.0));                 // 보수 포장(새 검은 아스팔트)
+    float oil = smoothstep(0.66, 0.82, asF(w / 1.5 + 60.0)) * (0.25 + 0.75 * trk) * fM;           // 기름 얼룩
+    float dirt = (1.0 - smoothstep(0.0, 0.07, min(xs, 1.0 - xs))) * (0.5 + 0.5 * asF(w / 1.3 + 14.0));   // 연석 쪽 모래·먼지
+    vec3 asph = c0 * tone * (1.0 + grain);
+    asph = mix(asph, chipC, chip * 0.75 * fF);
+    asph *= 1.0 - 0.62 * crack;
+    asph *= 1.0 - 0.70 * seal;
+    asph *= mix(1.0, 0.70, pch * 0.8);
+    asph *= 1.0 - 0.45 * oil;
+    asph = mix(asph, asph * vec3(1.14, 1.05, 0.90) + 0.012, dirt * 0.6);
+    // 차선 페인트: 먼지 + 바퀴 마모 + 벗겨짐(아래 아스팔트가 드러남)
+    float wearN = asF(w * 2.2) * 0.65 + asN(lw * 18.0) * 0.35;
+    float scuff = clamp(smoothstep(0.52, 0.82, wearN) * 0.75 + trk * 0.25 + step(0.82, asH(floor(lw * 55.0))) * 0.35 * fF, 0.0, 0.85);
+    vec3 pc = c0 * (0.80 + 0.20 * asF(w / 1.4));
+    pc = mix(pc, vec3(0.17, 0.17, 0.18) * tone, scuff * 0.8);
+    diffuseColor.rgb = mix(mix(c0, asph, aM), pc, pM);
+    // 거칠기(바퀴 자국은 매끈, 기름·실링은 반들), 범프 높이(m)
+    float r = 0.94 - 0.10 * trk * fC - 0.22 * oil - 0.28 * seal + 0.04 * (gr - 0.5) * fF;
+    r = mix(r, 0.74, pM);
+    asRs = mix(1.0, clamp(r, 0.35, 1.0) / 0.88, max(aM, pM));
+    asHt = (((gr - 0.5) * 0.0035 * fF + (gr2 - 0.5) * 0.004 * fM + chip * 0.003 * fF) - crack * 0.006 + seal * 0.002 + pch * 0.0025) * aM;
+  }
+}`)
+      .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
+roughnessFactor = clamp(roughnessFactor * asRs, 0.05, 1.0);`)
+      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+{
+  float fdA = gl_FrontFacing ? 1.0 : -1.0;
+  vec3 dpx = dFdx(-vViewPosition), dpy = dFdy(-vViewPosition);
+  float dhx = dFdx(asHt), dhy = dFdy(asHt);
+  vec3 r1 = cross(dpy, normal), r2 = cross(normal, dpx);
+  float det = dot(dpx, r1) * fdA;
+  vec3 grad = sign(det) * (dhx * r1 + dhy * r2);
+  if (asHt != 0.0 || dhx != 0.0 || dhy != 0.0) normal = normalize(abs(det) * normal - grad);
+}`);
+    };
+  }
+}
 async function nrBuild(R) {
   NR.R = R;
   nycLoadStatus('도로·지물 데이터 해제 중…', 0.9); await nmYield();
@@ -5012,6 +5145,7 @@ async function nrBuild(R) {
   const tex = nrAtlas();
   NR.mG = [0, 1, 2, 3].map(i => new THREE.MeshStandardMaterial({ map: tex, vertexColors: true, roughness: 0.88, metalness: 0, alphaTest: 0.45, side: THREE.DoubleSide, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -(6 + i * 2) })); NR.mGr = NR.mG[0];
   NR.mDk = new THREE.MeshStandardMaterial({ map: tex, vertexColors: true, roughness: 0.9, metalness: 0, alphaTest: 0.45, side: THREE.DoubleSide });
+  nrAsphaltPatch(NR.mG.concat([NR.mDk]));   // 사실적 아스팔트 셰이더
   NR.mLc = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0, side: THREE.DoubleSide, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4 });
 
   NR.lcT = { value: 0 };
@@ -6942,7 +7076,7 @@ const GFX_SKY = {
   cloudy: { top: 0x6b7c8e, exp: 0.60, star: 0.0, sun: 0xdde6ee, sunI: 0.0, expo: 1.10, bloom: 0.30 },
   night:  { top: 0x01040c, exp: 0.65, star: 1.0, sun: 0x8aa6ee, sunI: 0.30, expo: 1.08, bloom: 1.6 }
 };
-const GFX_MOBILE = false;   // 모바일 제한 해제: 터치 기기에서도 PC 품질 경로 사용
+const GFX_MOBILE = !!(window.matchMedia && window.matchMedia('(pointer:coarse)').matches);
 const GFX = {
   quality: 'medium', pr: 1.5, envTex: null, envKey: '', minPR: 1.0, sky: null,
   sunDir: new THREE.Vector3(0.3, 0.85, 0.35).normalize(),
@@ -6956,7 +7090,7 @@ function gfxCreateSky() {
     uniforms: {
       topColor: { value: new THREE.Color(0x1f6fc9) }, horizonColor: { value: new THREE.Color(0x7dd3fc) },
       bottomColor: { value: new THREE.Color(0x4b6b86) }, sunColor: { value: new THREE.Color(0xfff1c9) },
-      sunDir: { value: GFX.sunDir.clone() }, exponent: { value: 0.85 }, starAmt: { value: 0.0 }, sunI: { value: 1.0 },
+      sunDir: { value: GFX.sunDir.clone() }, exponent: { value: 0.85 }, starAmt: { value: 0.0 }, sunI: { value: 1.0 }, starM: { value: new THREE.Matrix3() },
       cTime: { value: 0 }, cCoverLo: { value: 0.48 }, cCoverHi: { value: 0.69 }, cAlpha: { value: 0.8 }, cTopFade: { value: 1 }, cDark: { value: 0 },
       cLit: { value: new THREE.Color(1, 0.76, 0.39) }, cShade: { value: new THREE.Color(0.66, 0.245, 0.055) }, cRim: { value: new THREE.Color(1, 0.62, 0.28) }, cSunUV: { value: new THREE.Vector2(1, 0) }
     },
@@ -6965,7 +7099,7 @@ function gfxCreateSky() {
       void main() { vDir = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
     fragmentShader: `
       uniform vec3 topColor, horizonColor, bottomColor, sunColor, sunDir;
-      uniform float exponent, starAmt, sunI;
+      uniform float exponent, starAmt, sunI; uniform mat3 starM;
       uniform float cTime, cCoverLo, cCoverHi, cAlpha, cTopFade, cDark;
       uniform vec3 cLit, cShade, cRim; uniform vec2 cSunUV;
       varying vec3 vDir;
@@ -7006,9 +7140,12 @@ function gfxCreateSky() {
         col = mix(col, cloudColor, cloudMask * cAlpha);
 
         float s = max(dot(d, normalize(sunDir)), 0.0);
-        float glow = pow(s, 700.0) * 3.0 + pow(s, 42.0) * 0.42 + pow(s, 8.0) * 0.16 + pow(s, 2.0) * 0.055;
+        float glow = pow(s, 2500.0) * 2.0 + pow(s, 42.0) * 0.42 + pow(s, 8.0) * 0.16 + pow(s, 2.0) * 0.055;
         col += sunColor * glow * sunI * smoothstep(-0.05, 0.08, h) * (1.0 - cloudMask * cAlpha * 0.6);
-        if (starAmt > 0.0 && h > 0.0) col += vec3(step(0.9965, hash(floor(d * 360.0)))) * starAmt * smoothstep(0.03, 0.30, h) * (1.0 - cloudMask * cAlpha);
+        // 실제 크기의 태양(달) 원반 — 시지름 0.53°, 가장자리가 어두운 주연감광
+        float _sa = length(cross(d, normalize(sunDir))); float _sd = (1.0 - smoothstep(0.0036, 0.0046, _sa)) * step(0.0, dot(d, normalize(sunDir))) * (1.0 - 0.55 * (1.0 - sqrt(max(1.0 - (_sa / 0.0046) * (_sa / 0.0046), 0.0))));
+        col += sunColor * _sd * 14.0 * sunI * smoothstep(-0.002, 0.003, h) * (1.0 - cloudMask * cAlpha * 0.92);
+        if (starAmt > 0.0 && h > 0.0) col += vec3(step(0.9965, hash(floor((starM * d) * 360.0)))) * starAmt * smoothstep(0.03, 0.30, h) * (1.0 - cloudMask * cAlpha);
         gl_FragColor = vec4(col, 1.0);
         #include <tonemapping_fragment>
       }`
@@ -7272,7 +7409,9 @@ function gfxBloomInit() {
             vec3 RW = normalize(rotv(Rv));
             float sh = clamp(RW.y, 0.0, 1.0);
             vec3 skyC = mix(skyHor, skyTop, pow(sh, 0.55)) * 0.85;
-            skyC += sunCol * pow(max(dot(RW, sunDirW), 0.0), 500.0) * sunI * 3.0;
+            skyC += sunCol * pow(max(dot(RW, sunDirW), 0.0), 2500.0) * sunI * 2.0;
+            float _sa = length(cross(RW, normalize(sunDirW))); float _sd = (1.0 - smoothstep(0.0036, 0.0046, _sa)) * step(0.0, dot(RW, normalize(sunDirW))) * (1.0 - 0.55 * (1.0 - sqrt(max(1.0 - (_sa / 0.0046) * (_sa / 0.0046), 0.0))));
+            skyC += sunCol * _sd * 14.0 * sunI;
             if (RW.y < 0.0) skyC = skyHor * 0.35;
             if (hasEnv > 0.5) { skyC = textureCube(tEnv, RW).rgb; if (RW.y < 0.0) skyC *= 0.5; }
             vec3 rc = mix(skyC, hitCol, hit);
@@ -8646,7 +8785,9 @@ function hrtBuildMaterials(u) {
       vec3 RW = normalize(rotv(Rj));
       float shy = clamp(RW.y, 0.0, 1.0);
       vec3 skyC = mix(skyHor, skyTop, pow(shy, 0.55)) * 0.85;
-      skyC += sunCol * pow(max(dot(RW, sunDirW), 0.0), 500.0) * sunI * 3.0;
+      skyC += sunCol * pow(max(dot(RW, sunDirW), 0.0), 2500.0) * sunI * 2.0;
+            float _sa = length(cross(RW, normalize(sunDirW))); float _sd = (1.0 - smoothstep(0.0036, 0.0046, _sa)) * step(0.0, dot(RW, normalize(sunDirW))) * (1.0 - 0.55 * (1.0 - sqrt(max(1.0 - (_sa / 0.0046) * (_sa / 0.0046), 0.0))));
+            skyC += sunCol * _sd * 14.0 * sunI;
       if (RW.y < 0.0) skyC = skyHor * 0.35;
       if (hasEnv > 0.5) { skyC = textureCube(tEnv, RW).rgb; if (RW.y < 0.0) skyC *= 0.5; }
       // --- 2단계: SSR이 놓친 부분(hit<1)은 환경 큐브맵(하늘+도시 스카이라인)으로 부드럽게 폴백
@@ -8814,6 +8955,7 @@ function luxGray(c, k, dark) { const l = (c.r * 0.3 + c.g * 0.59 + c.b * 0.11) *
 // 대기 굴절(지평선 근처에서 태양이 살짝 떠 보임)을 반영한 NOAA 방식 계산.
 // 월드 좌표: +X 동, -Z 정북, +Z 정남  → 정오의 태양은 남쪽(+Z)에 뜨고, 여름엔 일출/일몰이 북동/북서쪽으로 치우친다.
 const SUN_LAT = 40.7484, SUN_LON = -73.9857;
+const luxPoleAxis = new THREE.Vector3(0, Math.sin(SUN_LAT * Math.PI / 180), -Math.cos(SUN_LAT * Math.PI / 180)), luxStarM4 = new THREE.Matrix4();
 function luxTodayDOY() {
   const d = new Date(), y0 = new Date(d.getFullYear(), 0, 0);
   return Math.min(365, Math.max(1, Math.round((new Date(d.getFullYear(), d.getMonth(), d.getDate()) - y0) / 86400000)));
@@ -8900,6 +9042,8 @@ function luxApply(force) {
   const skyI = (moon ? 0.30 : Math.max(0.3, (1.0 + 1.35 * luxSS(25, 3, el)) * luxSS(-4.5, -1, el))) * (1 - 0.92 * oc);
   u.sunI.value = skyI; GFX.sunI = skyI; u.exponent.value = 0.85 - 0.25 * oc;
   u.starAmt.value = luxSS(-4, -12, el) * (1 - oc);
+  { const a = ((LUX.time / 24 + LUX.doy / 365.25) % 1) * Math.PI * 2;      // 항성시: 별은 천구 북극(북쪽, 고도=위도) 주위를 하루 한 바퀴
+    luxStarM4.makeRotationAxis(luxPoleAxis, a); u.starM.value.setFromMatrix4(luxStarM4); }
   u.cCoverLo.value = 0.60 - 0.34 * oc; u.cCoverHi.value = 0.80 - 0.30 * oc; u.cAlpha.value = 0.88 + 0.10 * oc;
   u.cTopFade.value = 1 - oc; u.cDark.value = Math.min(0.9, (1 - day) * 0.3 + oc * 0.55 + LUX.precip * 0.2);
   const lit = sc.clone().multiplyScalar(0.25 + 0.75 * day); luxGray(lit, oc * 0.6, 1);
@@ -9121,7 +9265,7 @@ const RGS_SKY_FS = `uniform vec3 uSun,uZen,uHor,uOff;uniform float uCover,uDark,
   float dayK=mix(.04,1.,uDay);
   vec3 col=mix(uHor,uZen,pow(el,.42))*dayK;
   col+=vec3(.9,.4,.15)*uTw*exp(-el*7.)*(.15+.85*pow(mu,2.))*.45;
-  float sunHalo=pow(mu,256.)*.6+pow(mu,16.)*.15;
+  float sunHalo=pow(mu,1800.)*.6+pow(mu,16.)*.15;
   col+=vec3(1.,.9,.72)*sunHalo*uSunI;
   float vis=smoothstep(.0,.09,rayDir.y);
   vec2 cp=rayDir.xz/(rayDir.y+.14)*1.25+uOff.xy;
@@ -9138,8 +9282,9 @@ const RGS_SKY_FS = `uniform vec3 uSun,uZen,uHor,uOff;uniform float uCover,uDark,
   cc=mix(cc,under*dayK,clamp(uDark*(.45+.55*thick),0.,1.));
   cc+=vec3(1.,.93,.82)*pow(mu,32.)*(1.-thick)*1.1*uSunI;
   col=mix(col,cc,dens*.92);
-  float sunDisk=smoothstep(.99985,.99995,mu)*step(0.,rayDir.y+.02);
-  col+=vec3(10.,9.,7.5)*sunDisk*uSunI*(1.-dens*.6);
+  float _sa=length(cross(rayDir,sunDir));
+  float sunDisk=(1.-smoothstep(.0036,.0046,_sa))*step(0.,dot(rayDir,sunDir))*(1.-.55*(1.-sqrt(max(1.-(_sa/.0046)*(_sa/.0046),0.))))*smoothstep(-.002,.003,rayDir.y);
+  col+=vec3(10.,9.,7.5)*sunDisk*1.4*uSunI*(1.-dens*.92);
   col=aces(col*uExp);
   col=pow(col,vec3(uLift));
   gl_FragColor=vec4(col,1.);}`;
@@ -9518,7 +9663,7 @@ class RGSystem {
     // follow camera
     this.root.position.copy(this.camera.position);
     this.moon.position.copy(sd).multiplyScalar(-2200); this.moon.material.opacity = 1 - ov;
-    this.stars.material.opacity = night * (1 - ov); this.stars.rotation.y = this.hour / 24 * 6.283;
+    this.stars.material.opacity = night * (1 - ov); { const _a = ((this.hour / 24 + LUX.doy / 365.25) % 1) * Math.PI * 2; this.stars.quaternion.setFromAxisAngle(luxPoleAxis, -_a); }
     // clouds
     this._cloudOff += dt * 0.0008 * (0.3 + c.wind);
     for (const L of this.cloudLayers) {
