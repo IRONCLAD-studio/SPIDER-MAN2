@@ -6942,7 +6942,7 @@ const GFX_SKY = {
   cloudy: { top: 0x6b7c8e, exp: 0.60, star: 0.0, sun: 0xdde6ee, sunI: 0.0, expo: 1.10, bloom: 0.30 },
   night:  { top: 0x01040c, exp: 0.65, star: 1.0, sun: 0x8aa6ee, sunI: 0.30, expo: 1.08, bloom: 1.6 }
 };
-const GFX_MOBILE = !!(window.matchMedia && window.matchMedia('(pointer:coarse)').matches);
+const GFX_MOBILE = false;   // 모바일 제한 해제: 터치 기기에서도 PC 품질 경로 사용
 const GFX = {
   quality: 'medium', pr: 1.5, envTex: null, envKey: '', minPR: 1.0, sky: null,
   sunDir: new THREE.Vector3(0.3, 0.85, 0.35).normalize(),
