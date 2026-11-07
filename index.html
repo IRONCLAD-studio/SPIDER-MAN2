@@ -188,6 +188,2231 @@ canvas { display: block; width: 100%; height: 100%; }
 }
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>/* three r128 examples/js/math/SimplexNoise.js */
+( function () {
+
+	// Ported from Stefan Gustavson's java implementation
+	// http://staffwww.itn.liu.se/~stegu/simplexnoise/simplexnoise.pdf
+	// Read Stefan's excellent paper for details on how this code works.
+	//
+	// Sean McCullough banksean@gmail.com
+	//
+	// Added 4D noise
+
+	/**
+ * You can pass in a random number generator object if you like.
+ * It is assumed to have a random() method.
+ */
+	class SimplexNoise {
+
+		constructor( r = Math ) {
+
+			this.grad3 = [[ 1, 1, 0 ], [ - 1, 1, 0 ], [ 1, - 1, 0 ], [ - 1, - 1, 0 ], [ 1, 0, 1 ], [ - 1, 0, 1 ], [ 1, 0, - 1 ], [ - 1, 0, - 1 ], [ 0, 1, 1 ], [ 0, - 1, 1 ], [ 0, 1, - 1 ], [ 0, - 1, - 1 ]];
+			this.grad4 = [[ 0, 1, 1, 1 ], [ 0, 1, 1, - 1 ], [ 0, 1, - 1, 1 ], [ 0, 1, - 1, - 1 ], [ 0, - 1, 1, 1 ], [ 0, - 1, 1, - 1 ], [ 0, - 1, - 1, 1 ], [ 0, - 1, - 1, - 1 ], [ 1, 0, 1, 1 ], [ 1, 0, 1, - 1 ], [ 1, 0, - 1, 1 ], [ 1, 0, - 1, - 1 ], [ - 1, 0, 1, 1 ], [ - 1, 0, 1, - 1 ], [ - 1, 0, - 1, 1 ], [ - 1, 0, - 1, - 1 ], [ 1, 1, 0, 1 ], [ 1, 1, 0, - 1 ], [ 1, - 1, 0, 1 ], [ 1, - 1, 0, - 1 ], [ - 1, 1, 0, 1 ], [ - 1, 1, 0, - 1 ], [ - 1, - 1, 0, 1 ], [ - 1, - 1, 0, - 1 ], [ 1, 1, 1, 0 ], [ 1, 1, - 1, 0 ], [ 1, - 1, 1, 0 ], [ 1, - 1, - 1, 0 ], [ - 1, 1, 1, 0 ], [ - 1, 1, - 1, 0 ], [ - 1, - 1, 1, 0 ], [ - 1, - 1, - 1, 0 ]];
+			this.p = [];
+
+			for ( let i = 0; i < 256; i ++ ) {
+
+				this.p[ i ] = Math.floor( r.random() * 256 );
+
+			} // To remove the need for index wrapping, double the permutation table length
+
+
+			this.perm = [];
+
+			for ( let i = 0; i < 512; i ++ ) {
+
+				this.perm[ i ] = this.p[ i & 255 ];
+
+			} // A lookup table to traverse the simplex around a given point in 4D.
+			// Details can be found where this table is used, in the 4D noise method.
+
+
+			this.simplex = [[ 0, 1, 2, 3 ], [ 0, 1, 3, 2 ], [ 0, 0, 0, 0 ], [ 0, 2, 3, 1 ], [ 0, 0, 0, 0 ], [ 0, 0, 0, 0 ], [ 0, 0, 0, 0 ], [ 1, 2, 3, 0 ], [ 0, 2, 1, 3 ], [ 0, 0, 0, 0 ], [ 0, 3, 1, 2 ], [ 0, 3, 2, 1 ], [ 0, 0, 0, 0 ], [ 0, 0, 0, 0 ], [ 0, 0, 0, 0 ], [ 1, 3, 2, 0 ], [ 0, 0, 0, 0 ], [ 0, 0, 0, 0 ], [ 0, 0, 0, 0 ], [ 0, 0, 0, 0 ], [ 0, 0, 0, 0 ], [ 0, 0, 0, 0 ], [ 0, 0, 0, 0 ], [ 0, 0, 0, 0 ], [ 1, 2, 0, 3 ], [ 0, 0, 0, 0 ], [ 1, 3, 0, 2 ], [ 0, 0, 0, 0 ], [ 0, 0, 0, 0 ], [ 0, 0, 0, 0 ], [ 2, 3, 0, 1 ], [ 2, 3, 1, 0 ], [ 1, 0, 2, 3 ], [ 1, 0, 3, 2 ], [ 0, 0, 0, 0 ], [ 0, 0, 0, 0 ], [ 0, 0, 0, 0 ], [ 2, 0, 3, 1 ], [ 0, 0, 0, 0 ], [ 2, 1, 3, 0 ], [ 0, 0, 0, 0 ], [ 0, 0, 0, 0 ], [ 0, 0, 0, 0 ], [ 0, 0, 0, 0 ], [ 0, 0, 0, 0 ], [ 0, 0, 0, 0 ], [ 0, 0, 0, 0 ], [ 0, 0, 0, 0 ], [ 2, 0, 1, 3 ], [ 0, 0, 0, 0 ], [ 0, 0, 0, 0 ], [ 0, 0, 0, 0 ], [ 3, 0, 1, 2 ], [ 3, 0, 2, 1 ], [ 0, 0, 0, 0 ], [ 3, 1, 2, 0 ], [ 2, 1, 0, 3 ], [ 0, 0, 0, 0 ], [ 0, 0, 0, 0 ], [ 0, 0, 0, 0 ], [ 3, 1, 0, 2 ], [ 0, 0, 0, 0 ], [ 3, 2, 0, 1 ], [ 3, 2, 1, 0 ]];
+
+		}
+
+		dot( g, x, y ) {
+
+			return g[ 0 ] * x + g[ 1 ] * y;
+
+		}
+
+		dot3( g, x, y, z ) {
+
+			return g[ 0 ] * x + g[ 1 ] * y + g[ 2 ] * z;
+
+		}
+
+		dot4( g, x, y, z, w ) {
+
+			return g[ 0 ] * x + g[ 1 ] * y + g[ 2 ] * z + g[ 3 ] * w;
+
+		}
+
+		noise( xin, yin ) {
+
+			let n0; // Noise contributions from the three corners
+
+			let n1;
+			let n2; // Skew the input space to determine which simplex cell we're in
+
+			const F2 = 0.5 * ( Math.sqrt( 3.0 ) - 1.0 );
+			const s = ( xin + yin ) * F2; // Hairy factor for 2D
+
+			const i = Math.floor( xin + s );
+			const j = Math.floor( yin + s );
+			const G2 = ( 3.0 - Math.sqrt( 3.0 ) ) / 6.0;
+			const t = ( i + j ) * G2;
+			const X0 = i - t; // Unskew the cell origin back to (x,y) space
+
+			const Y0 = j - t;
+			const x0 = xin - X0; // The x,y distances from the cell origin
+
+			const y0 = yin - Y0; // For the 2D case, the simplex shape is an equilateral triangle.
+			// Determine which simplex we are in.
+
+			let i1; // Offsets for second (middle) corner of simplex in (i,j) coords
+
+			let j1;
+
+			if ( x0 > y0 ) {
+
+				i1 = 1;
+				j1 = 0; // lower triangle, XY order: (0,0)->(1,0)->(1,1)
+
+			} else {
+
+				i1 = 0;
+				j1 = 1;
+
+			} // upper triangle, YX order: (0,0)->(0,1)->(1,1)
+			// A step of (1,0) in (i,j) means a step of (1-c,-c) in (x,y), and
+			// a step of (0,1) in (i,j) means a step of (-c,1-c) in (x,y), where
+			// c = (3-sqrt(3))/6
+
+
+			const x1 = x0 - i1 + G2; // Offsets for middle corner in (x,y) unskewed coords
+
+			const y1 = y0 - j1 + G2;
+			const x2 = x0 - 1.0 + 2.0 * G2; // Offsets for last corner in (x,y) unskewed coords
+
+			const y2 = y0 - 1.0 + 2.0 * G2; // Work out the hashed gradient indices of the three simplex corners
+
+			const ii = i & 255;
+			const jj = j & 255;
+			const gi0 = this.perm[ ii + this.perm[ jj ] ] % 12;
+			const gi1 = this.perm[ ii + i1 + this.perm[ jj + j1 ] ] % 12;
+			const gi2 = this.perm[ ii + 1 + this.perm[ jj + 1 ] ] % 12; // Calculate the contribution from the three corners
+
+			let t0 = 0.5 - x0 * x0 - y0 * y0;
+			if ( t0 < 0 ) n0 = 0.0; else {
+
+				t0 *= t0;
+				n0 = t0 * t0 * this.dot( this.grad3[ gi0 ], x0, y0 ); // (x,y) of grad3 used for 2D gradient
+
+			}
+
+			let t1 = 0.5 - x1 * x1 - y1 * y1;
+			if ( t1 < 0 ) n1 = 0.0; else {
+
+				t1 *= t1;
+				n1 = t1 * t1 * this.dot( this.grad3[ gi1 ], x1, y1 );
+
+			}
+
+			let t2 = 0.5 - x2 * x2 - y2 * y2;
+			if ( t2 < 0 ) n2 = 0.0; else {
+
+				t2 *= t2;
+				n2 = t2 * t2 * this.dot( this.grad3[ gi2 ], x2, y2 );
+
+			} // Add contributions from each corner to get the final noise value.
+			// The result is scaled to return values in the interval [-1,1].
+
+			return 70.0 * ( n0 + n1 + n2 );
+
+		} // 3D simplex noise
+
+
+		noise3d( xin, yin, zin ) {
+
+			let n0; // Noise contributions from the four corners
+
+			let n1;
+			let n2;
+			let n3; // Skew the input space to determine which simplex cell we're in
+
+			const F3 = 1.0 / 3.0;
+			const s = ( xin + yin + zin ) * F3; // Very nice and simple skew factor for 3D
+
+			const i = Math.floor( xin + s );
+			const j = Math.floor( yin + s );
+			const k = Math.floor( zin + s );
+			const G3 = 1.0 / 6.0; // Very nice and simple unskew factor, too
+
+			const t = ( i + j + k ) * G3;
+			const X0 = i - t; // Unskew the cell origin back to (x,y,z) space
+
+			const Y0 = j - t;
+			const Z0 = k - t;
+			const x0 = xin - X0; // The x,y,z distances from the cell origin
+
+			const y0 = yin - Y0;
+			const z0 = zin - Z0; // For the 3D case, the simplex shape is a slightly irregular tetrahedron.
+			// Determine which simplex we are in.
+
+			let i1; // Offsets for second corner of simplex in (i,j,k) coords
+
+			let j1;
+			let k1;
+			let i2; // Offsets for third corner of simplex in (i,j,k) coords
+
+			let j2;
+			let k2;
+
+			if ( x0 >= y0 ) {
+
+				if ( y0 >= z0 ) {
+
+					i1 = 1;
+					j1 = 0;
+					k1 = 0;
+					i2 = 1;
+					j2 = 1;
+					k2 = 0; // X Y Z order
+
+				} else if ( x0 >= z0 ) {
+
+					i1 = 1;
+					j1 = 0;
+					k1 = 0;
+					i2 = 1;
+					j2 = 0;
+					k2 = 1; // X Z Y order
+
+				} else {
+
+					i1 = 0;
+					j1 = 0;
+					k1 = 1;
+					i2 = 1;
+					j2 = 0;
+					k2 = 1;
+
+				} // Z X Y order
+
+			} else {
+
+				// x0<y0
+				if ( y0 < z0 ) {
+
+					i1 = 0;
+					j1 = 0;
+					k1 = 1;
+					i2 = 0;
+					j2 = 1;
+					k2 = 1; // Z Y X order
+
+				} else if ( x0 < z0 ) {
+
+					i1 = 0;
+					j1 = 1;
+					k1 = 0;
+					i2 = 0;
+					j2 = 1;
+					k2 = 1; // Y Z X order
+
+				} else {
+
+					i1 = 0;
+					j1 = 1;
+					k1 = 0;
+					i2 = 1;
+					j2 = 1;
+					k2 = 0;
+
+				} // Y X Z order
+
+			} // A step of (1,0,0) in (i,j,k) means a step of (1-c,-c,-c) in (x,y,z),
+			// a step of (0,1,0) in (i,j,k) means a step of (-c,1-c,-c) in (x,y,z), and
+			// a step of (0,0,1) in (i,j,k) means a step of (-c,-c,1-c) in (x,y,z), where
+			// c = 1/6.
+
+
+			const x1 = x0 - i1 + G3; // Offsets for second corner in (x,y,z) coords
+
+			const y1 = y0 - j1 + G3;
+			const z1 = z0 - k1 + G3;
+			const x2 = x0 - i2 + 2.0 * G3; // Offsets for third corner in (x,y,z) coords
+
+			const y2 = y0 - j2 + 2.0 * G3;
+			const z2 = z0 - k2 + 2.0 * G3;
+			const x3 = x0 - 1.0 + 3.0 * G3; // Offsets for last corner in (x,y,z) coords
+
+			const y3 = y0 - 1.0 + 3.0 * G3;
+			const z3 = z0 - 1.0 + 3.0 * G3; // Work out the hashed gradient indices of the four simplex corners
+
+			const ii = i & 255;
+			const jj = j & 255;
+			const kk = k & 255;
+			const gi0 = this.perm[ ii + this.perm[ jj + this.perm[ kk ] ] ] % 12;
+			const gi1 = this.perm[ ii + i1 + this.perm[ jj + j1 + this.perm[ kk + k1 ] ] ] % 12;
+			const gi2 = this.perm[ ii + i2 + this.perm[ jj + j2 + this.perm[ kk + k2 ] ] ] % 12;
+			const gi3 = this.perm[ ii + 1 + this.perm[ jj + 1 + this.perm[ kk + 1 ] ] ] % 12; // Calculate the contribution from the four corners
+
+			let t0 = 0.6 - x0 * x0 - y0 * y0 - z0 * z0;
+			if ( t0 < 0 ) n0 = 0.0; else {
+
+				t0 *= t0;
+				n0 = t0 * t0 * this.dot3( this.grad3[ gi0 ], x0, y0, z0 );
+
+			}
+
+			let t1 = 0.6 - x1 * x1 - y1 * y1 - z1 * z1;
+			if ( t1 < 0 ) n1 = 0.0; else {
+
+				t1 *= t1;
+				n1 = t1 * t1 * this.dot3( this.grad3[ gi1 ], x1, y1, z1 );
+
+			}
+
+			let t2 = 0.6 - x2 * x2 - y2 * y2 - z2 * z2;
+			if ( t2 < 0 ) n2 = 0.0; else {
+
+				t2 *= t2;
+				n2 = t2 * t2 * this.dot3( this.grad3[ gi2 ], x2, y2, z2 );
+
+			}
+
+			let t3 = 0.6 - x3 * x3 - y3 * y3 - z3 * z3;
+			if ( t3 < 0 ) n3 = 0.0; else {
+
+				t3 *= t3;
+				n3 = t3 * t3 * this.dot3( this.grad3[ gi3 ], x3, y3, z3 );
+
+			} // Add contributions from each corner to get the final noise value.
+			// The result is scaled to stay just inside [-1,1]
+
+			return 32.0 * ( n0 + n1 + n2 + n3 );
+
+		} // 4D simplex noise
+
+
+		noise4d( x, y, z, w ) {
+
+			// For faster and easier lookups
+			const grad4 = this.grad4;
+			const simplex = this.simplex;
+			const perm = this.perm; // The skewing and unskewing factors are hairy again for the 4D case
+
+			const F4 = ( Math.sqrt( 5.0 ) - 1.0 ) / 4.0;
+			const G4 = ( 5.0 - Math.sqrt( 5.0 ) ) / 20.0;
+			let n0; // Noise contributions from the five corners
+
+			let n1;
+			let n2;
+			let n3;
+			let n4; // Skew the (x,y,z,w) space to determine which cell of 24 simplices we're in
+
+			const s = ( x + y + z + w ) * F4; // Factor for 4D skewing
+
+			const i = Math.floor( x + s );
+			const j = Math.floor( y + s );
+			const k = Math.floor( z + s );
+			const l = Math.floor( w + s );
+			const t = ( i + j + k + l ) * G4; // Factor for 4D unskewing
+
+			const X0 = i - t; // Unskew the cell origin back to (x,y,z,w) space
+
+			const Y0 = j - t;
+			const Z0 = k - t;
+			const W0 = l - t;
+			const x0 = x - X0; // The x,y,z,w distances from the cell origin
+
+			const y0 = y - Y0;
+			const z0 = z - Z0;
+			const w0 = w - W0; // For the 4D case, the simplex is a 4D shape I won't even try to describe.
+			// To find out which of the 24 possible simplices we're in, we need to
+			// determine the magnitude ordering of x0, y0, z0 and w0.
+			// The method below is a good way of finding the ordering of x,y,z,w and
+			// then find the correct traversal order for the simplex we’re in.
+			// First, six pair-wise comparisons are performed between each possible pair
+			// of the four coordinates, and the results are used to add up binary bits
+			// for an integer index.
+
+			const c1 = x0 > y0 ? 32 : 0;
+			const c2 = x0 > z0 ? 16 : 0;
+			const c3 = y0 > z0 ? 8 : 0;
+			const c4 = x0 > w0 ? 4 : 0;
+			const c5 = y0 > w0 ? 2 : 0;
+			const c6 = z0 > w0 ? 1 : 0;
+			const c = c1 + c2 + c3 + c4 + c5 + c6; // simplex[c] is a 4-vector with the numbers 0, 1, 2 and 3 in some order.
+			// Many values of c will never occur, since e.g. x>y>z>w makes x<z, y<w and x<w
+			// impossible. Only the 24 indices which have non-zero entries make any sense.
+			// We use a thresholding to set the coordinates in turn from the largest magnitude.
+			// The number 3 in the "simplex" array is at the position of the largest coordinate.
+
+			const i1 = simplex[ c ][ 0 ] >= 3 ? 1 : 0;
+			const j1 = simplex[ c ][ 1 ] >= 3 ? 1 : 0;
+			const k1 = simplex[ c ][ 2 ] >= 3 ? 1 : 0;
+			const l1 = simplex[ c ][ 3 ] >= 3 ? 1 : 0; // The number 2 in the "simplex" array is at the second largest coordinate.
+
+			const i2 = simplex[ c ][ 0 ] >= 2 ? 1 : 0;
+			const j2 = simplex[ c ][ 1 ] >= 2 ? 1 : 0;
+			const k2 = simplex[ c ][ 2 ] >= 2 ? 1 : 0;
+			const l2 = simplex[ c ][ 3 ] >= 2 ? 1 : 0; // The number 1 in the "simplex" array is at the second smallest coordinate.
+
+			const i3 = simplex[ c ][ 0 ] >= 1 ? 1 : 0;
+			const j3 = simplex[ c ][ 1 ] >= 1 ? 1 : 0;
+			const k3 = simplex[ c ][ 2 ] >= 1 ? 1 : 0;
+			const l3 = simplex[ c ][ 3 ] >= 1 ? 1 : 0; // The fifth corner has all coordinate offsets = 1, so no need to look that up.
+
+			const x1 = x0 - i1 + G4; // Offsets for second corner in (x,y,z,w) coords
+
+			const y1 = y0 - j1 + G4;
+			const z1 = z0 - k1 + G4;
+			const w1 = w0 - l1 + G4;
+			const x2 = x0 - i2 + 2.0 * G4; // Offsets for third corner in (x,y,z,w) coords
+
+			const y2 = y0 - j2 + 2.0 * G4;
+			const z2 = z0 - k2 + 2.0 * G4;
+			const w2 = w0 - l2 + 2.0 * G4;
+			const x3 = x0 - i3 + 3.0 * G4; // Offsets for fourth corner in (x,y,z,w) coords
+
+			const y3 = y0 - j3 + 3.0 * G4;
+			const z3 = z0 - k3 + 3.0 * G4;
+			const w3 = w0 - l3 + 3.0 * G4;
+			const x4 = x0 - 1.0 + 4.0 * G4; // Offsets for last corner in (x,y,z,w) coords
+
+			const y4 = y0 - 1.0 + 4.0 * G4;
+			const z4 = z0 - 1.0 + 4.0 * G4;
+			const w4 = w0 - 1.0 + 4.0 * G4; // Work out the hashed gradient indices of the five simplex corners
+
+			const ii = i & 255;
+			const jj = j & 255;
+			const kk = k & 255;
+			const ll = l & 255;
+			const gi0 = perm[ ii + perm[ jj + perm[ kk + perm[ ll ] ] ] ] % 32;
+			const gi1 = perm[ ii + i1 + perm[ jj + j1 + perm[ kk + k1 + perm[ ll + l1 ] ] ] ] % 32;
+			const gi2 = perm[ ii + i2 + perm[ jj + j2 + perm[ kk + k2 + perm[ ll + l2 ] ] ] ] % 32;
+			const gi3 = perm[ ii + i3 + perm[ jj + j3 + perm[ kk + k3 + perm[ ll + l3 ] ] ] ] % 32;
+			const gi4 = perm[ ii + 1 + perm[ jj + 1 + perm[ kk + 1 + perm[ ll + 1 ] ] ] ] % 32; // Calculate the contribution from the five corners
+
+			let t0 = 0.6 - x0 * x0 - y0 * y0 - z0 * z0 - w0 * w0;
+			if ( t0 < 0 ) n0 = 0.0; else {
+
+				t0 *= t0;
+				n0 = t0 * t0 * this.dot4( grad4[ gi0 ], x0, y0, z0, w0 );
+
+			}
+
+			let t1 = 0.6 - x1 * x1 - y1 * y1 - z1 * z1 - w1 * w1;
+			if ( t1 < 0 ) n1 = 0.0; else {
+
+				t1 *= t1;
+				n1 = t1 * t1 * this.dot4( grad4[ gi1 ], x1, y1, z1, w1 );
+
+			}
+
+			let t2 = 0.6 - x2 * x2 - y2 * y2 - z2 * z2 - w2 * w2;
+			if ( t2 < 0 ) n2 = 0.0; else {
+
+				t2 *= t2;
+				n2 = t2 * t2 * this.dot4( grad4[ gi2 ], x2, y2, z2, w2 );
+
+			}
+
+			let t3 = 0.6 - x3 * x3 - y3 * y3 - z3 * z3 - w3 * w3;
+			if ( t3 < 0 ) n3 = 0.0; else {
+
+				t3 *= t3;
+				n3 = t3 * t3 * this.dot4( grad4[ gi3 ], x3, y3, z3, w3 );
+
+			}
+
+			let t4 = 0.6 - x4 * x4 - y4 * y4 - z4 * z4 - w4 * w4;
+			if ( t4 < 0 ) n4 = 0.0; else {
+
+				t4 *= t4;
+				n4 = t4 * t4 * this.dot4( grad4[ gi4 ], x4, y4, z4, w4 );
+
+			} // Sum up and scale the result to cover the range [-1,1]
+
+			return 27.0 * ( n0 + n1 + n2 + n3 + n4 );
+
+		}
+
+	}
+
+	THREE.SimplexNoise = SimplexNoise;
+
+} )();
+
+</script>
+<script>/* three r128 examples/js/shaders/CopyShader.js */
+( function () {
+
+	/**
+ * Full-screen textured quad shader
+ */
+	var CopyShader = {
+		uniforms: {
+			'tDiffuse': {
+				value: null
+			},
+			'opacity': {
+				value: 1.0
+			}
+		},
+		vertexShader:
+  /* glsl */
+  `
+
+		varying vec2 vUv;
+
+		void main() {
+
+			vUv = uv;
+			gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+
+		}`,
+		fragmentShader:
+  /* glsl */
+  `
+
+		uniform float opacity;
+
+		uniform sampler2D tDiffuse;
+
+		varying vec2 vUv;
+
+		void main() {
+
+			vec4 texel = texture2D( tDiffuse, vUv );
+			gl_FragColor = opacity * texel;
+
+		}`
+	};
+
+	THREE.CopyShader = CopyShader;
+
+} )();
+
+</script>
+<script>/* three r128 examples/js/shaders/LuminosityHighPassShader.js */
+( function () {
+
+	/**
+ * Luminosity
+ * http://en.wikipedia.org/wiki/Luminosity
+ */
+
+	const LuminosityHighPassShader = {
+		shaderID: 'luminosityHighPass',
+		uniforms: {
+			'tDiffuse': {
+				value: null
+			},
+			'luminosityThreshold': {
+				value: 1.0
+			},
+			'smoothWidth': {
+				value: 1.0
+			},
+			'defaultColor': {
+				value: new THREE.Color( 0x000000 )
+			},
+			'defaultOpacity': {
+				value: 0.0
+			}
+		},
+		vertexShader:
+  /* glsl */
+  `
+
+		varying vec2 vUv;
+
+		void main() {
+
+			vUv = uv;
+
+			gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+
+		}`,
+		fragmentShader:
+  /* glsl */
+  `
+
+		uniform sampler2D tDiffuse;
+		uniform vec3 defaultColor;
+		uniform float defaultOpacity;
+		uniform float luminosityThreshold;
+		uniform float smoothWidth;
+
+		varying vec2 vUv;
+
+		void main() {
+
+			vec4 texel = texture2D( tDiffuse, vUv );
+
+			vec3 luma = vec3( 0.299, 0.587, 0.114 );
+
+			float v = dot( texel.xyz, luma );
+
+			vec4 outputColor = vec4( defaultColor.rgb, defaultOpacity );
+
+			float alpha = smoothstep( luminosityThreshold, luminosityThreshold + smoothWidth, v );
+
+			gl_FragColor = mix( outputColor, texel, alpha );
+
+		}`
+	};
+
+	THREE.LuminosityHighPassShader = LuminosityHighPassShader;
+
+} )();
+
+</script>
+<script>/* three r128 examples/js/shaders/SSAOShader.js */
+( function () {
+
+	/**
+ * References:
+ * http://john-chapman-graphics.blogspot.com/2013/01/ssao-tutorial.html
+ * https://learnopengl.com/Advanced-Lighting/SSAO
+ * https://github.com/McNopper/OpenGL/blob/master/Example28/shader/ssao.frag.glsl
+ */
+
+	const SSAOShader = {
+		defines: {
+			'PERSPECTIVE_CAMERA': 1,
+			'KERNEL_SIZE': 32
+		},
+		uniforms: {
+			'tDiffuse': {
+				value: null
+			},
+			'tNormal': {
+				value: null
+			},
+			'tDepth': {
+				value: null
+			},
+			'tNoise': {
+				value: null
+			},
+			'kernel': {
+				value: null
+			},
+			'cameraNear': {
+				value: null
+			},
+			'cameraFar': {
+				value: null
+			},
+			'resolution': {
+				value: new THREE.Vector2()
+			},
+			'cameraProjectionMatrix': {
+				value: new THREE.Matrix4()
+			},
+			'cameraInverseProjectionMatrix': {
+				value: new THREE.Matrix4()
+			},
+			'kernelRadius': {
+				value: 8
+			},
+			'minDistance': {
+				value: 0.005
+			},
+			'maxDistance': {
+				value: 0.05
+			}
+		},
+		vertexShader:
+  /* glsl */
+  `
+
+		varying vec2 vUv;
+
+		void main() {
+
+			vUv = uv;
+
+			gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+
+		}`,
+		fragmentShader:
+  /* glsl */
+  `
+
+		uniform sampler2D tDiffuse;
+		uniform sampler2D tNormal;
+		uniform sampler2D tDepth;
+		uniform sampler2D tNoise;
+
+		uniform vec3 kernel[ KERNEL_SIZE ];
+
+		uniform vec2 resolution;
+
+		uniform float cameraNear;
+		uniform float cameraFar;
+		uniform mat4 cameraProjectionMatrix;
+		uniform mat4 cameraInverseProjectionMatrix;
+
+		uniform float kernelRadius;
+		uniform float minDistance; // avoid artifacts caused by neighbour fragments with minimal depth difference
+		uniform float maxDistance; // avoid the influence of fragments which are too far away
+
+		varying vec2 vUv;
+
+		#include <packing>
+
+		float getDepth( const in vec2 screenPosition ) {
+
+			return texture2D( tDepth, screenPosition ).x;
+
+		}
+
+		float getLinearDepth( const in vec2 screenPosition ) {
+
+			#if PERSPECTIVE_CAMERA == 1
+
+				float fragCoordZ = texture2D( tDepth, screenPosition ).x;
+				float viewZ = perspectiveDepthToViewZ( fragCoordZ, cameraNear, cameraFar );
+				return viewZToOrthographicDepth( viewZ, cameraNear, cameraFar );
+
+			#else
+
+				return texture2D( tDepth, screenPosition ).x;
+
+			#endif
+
+		}
+
+		float getViewZ( const in float depth ) {
+
+			#if PERSPECTIVE_CAMERA == 1
+
+				return perspectiveDepthToViewZ( depth, cameraNear, cameraFar );
+
+			#else
+
+				return orthographicDepthToViewZ( depth, cameraNear, cameraFar );
+
+			#endif
+
+		}
+
+		vec3 getViewPosition( const in vec2 screenPosition, const in float depth, const in float viewZ ) {
+
+			float clipW = cameraProjectionMatrix[2][3] * viewZ + cameraProjectionMatrix[3][3];
+
+			vec4 clipPosition = vec4( ( vec3( screenPosition, depth ) - 0.5 ) * 2.0, 1.0 );
+
+			clipPosition *= clipW; // unprojection.
+
+			return ( cameraInverseProjectionMatrix * clipPosition ).xyz;
+
+		}
+
+		vec3 getViewNormal( const in vec2 screenPosition ) {
+
+			return unpackRGBToNormal( texture2D( tNormal, screenPosition ).xyz );
+
+		}
+
+		void main() {
+
+			float depth = getDepth( vUv );
+			float viewZ = getViewZ( depth );
+
+			vec3 viewPosition = getViewPosition( vUv, depth, viewZ );
+			vec3 viewNormal = getViewNormal( vUv );
+
+			vec2 noiseScale = vec2( resolution.x / 4.0, resolution.y / 4.0 );
+			vec3 random = texture2D( tNoise, vUv * noiseScale ).xyz;
+
+			// compute matrix used to reorient a kernel vector
+
+			vec3 tangent = normalize( random - viewNormal * dot( random, viewNormal ) );
+			vec3 bitangent = cross( viewNormal, tangent );
+			mat3 kernelMatrix = mat3( tangent, bitangent, viewNormal );
+
+		 float occlusion = 0.0;
+
+		 for ( int i = 0; i < KERNEL_SIZE; i ++ ) {
+
+				vec3 sampleVector = kernelMatrix * kernel[ i ]; // reorient sample vector in view space
+				vec3 samplePoint = viewPosition + ( sampleVector * kernelRadius ); // calculate sample point
+
+				vec4 samplePointNDC = cameraProjectionMatrix * vec4( samplePoint, 1.0 ); // project point and calculate NDC
+				samplePointNDC /= samplePointNDC.w;
+
+				vec2 samplePointUv = samplePointNDC.xy * 0.5 + 0.5; // compute uv coordinates
+
+				float realDepth = getLinearDepth( samplePointUv ); // get linear depth from depth texture
+				float sampleDepth = viewZToOrthographicDepth( samplePoint.z, cameraNear, cameraFar ); // compute linear depth of the sample view Z value
+				float delta = sampleDepth - realDepth;
+
+				if ( delta > minDistance && delta < maxDistance ) { // if fragment is before sample point, increase occlusion
+
+					occlusion += 1.0;
+
+				}
+
+			}
+
+			occlusion = clamp( occlusion / float( KERNEL_SIZE ), 0.0, 1.0 );
+
+			gl_FragColor = vec4( vec3( 1.0 - occlusion ), 1.0 );
+
+		}`
+	};
+	const SSAODepthShader = {
+		defines: {
+			'PERSPECTIVE_CAMERA': 1
+		},
+		uniforms: {
+			'tDepth': {
+				value: null
+			},
+			'cameraNear': {
+				value: null
+			},
+			'cameraFar': {
+				value: null
+			}
+		},
+		vertexShader: `varying vec2 vUv;
+
+		void main() {
+
+			vUv = uv;
+			gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+
+		}`,
+		fragmentShader: `uniform sampler2D tDepth;
+
+		uniform float cameraNear;
+		uniform float cameraFar;
+
+		varying vec2 vUv;
+
+		#include <packing>
+
+		float getLinearDepth( const in vec2 screenPosition ) {
+
+			#if PERSPECTIVE_CAMERA == 1
+
+				float fragCoordZ = texture2D( tDepth, screenPosition ).x;
+				float viewZ = perspectiveDepthToViewZ( fragCoordZ, cameraNear, cameraFar );
+				return viewZToOrthographicDepth( viewZ, cameraNear, cameraFar );
+
+			#else
+
+				return texture2D( tDepth, screenPosition ).x;
+
+			#endif
+
+		}
+
+		void main() {
+
+			float depth = getLinearDepth( vUv );
+			gl_FragColor = vec4( vec3( 1.0 - depth ), 1.0 );
+
+		}`
+	};
+	const SSAOBlurShader = {
+		uniforms: {
+			'tDiffuse': {
+				value: null
+			},
+			'resolution': {
+				value: new THREE.Vector2()
+			}
+		},
+		vertexShader: `varying vec2 vUv;
+
+		void main() {
+
+			vUv = uv;
+			gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+
+		}`,
+		fragmentShader: `uniform sampler2D tDiffuse;
+
+		uniform vec2 resolution;
+
+		varying vec2 vUv;
+
+		void main() {
+
+			vec2 texelSize = ( 1.0 / resolution );
+			float result = 0.0;
+
+			for ( int i = - 2; i <= 2; i ++ ) {
+
+				for ( int j = - 2; j <= 2; j ++ ) {
+
+					vec2 offset = ( vec2( float( i ), float( j ) ) ) * texelSize;
+					result += texture2D( tDiffuse, vUv + offset ).r;
+
+				}
+
+			}
+
+			gl_FragColor = vec4( vec3( result / ( 5.0 * 5.0 ) ), 1.0 );
+
+		}`
+	};
+
+	THREE.SSAOBlurShader = SSAOBlurShader;
+	THREE.SSAODepthShader = SSAODepthShader;
+	THREE.SSAOShader = SSAOShader;
+
+} )();
+
+</script>
+<script>/* three r128 examples/js/postprocessing/Pass.js */
+( function () {
+
+	class Pass {
+
+		constructor() {
+
+			// if set to true, the pass is processed by the composer
+			this.enabled = true; // if set to true, the pass indicates to swap read and write buffer after rendering
+
+			this.needsSwap = true; // if set to true, the pass clears its buffer before rendering
+
+			this.clear = false; // if set to true, the result of the pass is rendered to screen. This is set automatically by EffectComposer.
+
+			this.renderToScreen = false;
+
+		}
+
+		setSize( ) {}
+
+		render( ) {
+
+			console.error( 'THREE.Pass: .render() must be implemented in derived pass.' );
+
+		}
+
+	} // Helper for passes that need to fill the viewport with a single quad.
+
+
+	const _camera = new THREE.OrthographicCamera( - 1, 1, 1, - 1, 0, 1 ); // https://github.com/mrdoob/three.js/pull/21358
+
+
+	const _geometry = new THREE.BufferGeometry();
+
+	_geometry.setAttribute( 'position', new THREE.Float32BufferAttribute( [ - 1, 3, 0, - 1, - 1, 0, 3, - 1, 0 ], 3 ) );
+
+	_geometry.setAttribute( 'uv', new THREE.Float32BufferAttribute( [ 0, 2, 0, 0, 2, 0 ], 2 ) );
+
+	class FullScreenQuad {
+
+		constructor( material ) {
+
+			this._mesh = new THREE.Mesh( _geometry, material );
+
+		}
+
+		dispose() {
+
+			this._mesh.geometry.dispose();
+
+		}
+
+		render( renderer ) {
+
+			renderer.render( this._mesh, _camera );
+
+		}
+
+		get material() {
+
+			return this._mesh.material;
+
+		}
+
+		set material( value ) {
+
+			this._mesh.material = value;
+
+		}
+
+	}
+
+	THREE.FullScreenQuad = FullScreenQuad;
+	THREE.Pass = Pass;
+
+} )();
+
+</script>
+<script>/* three r128 examples/js/postprocessing/EffectComposer.js */
+( function () {
+
+	class EffectComposer {
+
+		constructor( renderer, renderTarget ) {
+
+			this.renderer = renderer;
+
+			if ( renderTarget === undefined ) {
+
+				const parameters = {
+					minFilter: THREE.LinearFilter,
+					magFilter: THREE.LinearFilter,
+					format: THREE.RGBAFormat
+				};
+				const size = renderer.getSize( new THREE.Vector2() );
+				this._pixelRatio = renderer.getPixelRatio();
+				this._width = size.width;
+				this._height = size.height;
+				renderTarget = new THREE.WebGLRenderTarget( this._width * this._pixelRatio, this._height * this._pixelRatio, parameters );
+				renderTarget.texture.name = 'EffectComposer.rt1';
+
+			} else {
+
+				this._pixelRatio = 1;
+				this._width = renderTarget.width;
+				this._height = renderTarget.height;
+
+			}
+
+			this.renderTarget1 = renderTarget;
+			this.renderTarget2 = renderTarget.clone();
+			this.renderTarget2.texture.name = 'EffectComposer.rt2';
+			this.writeBuffer = this.renderTarget1;
+			this.readBuffer = this.renderTarget2;
+			this.renderToScreen = true;
+			this.passes = []; // dependencies
+
+			if ( THREE.CopyShader === undefined ) {
+
+				console.error( 'THREE.EffectComposer relies on THREE.CopyShader' );
+
+			}
+
+			if ( THREE.ShaderPass === undefined ) {
+
+				console.error( 'THREE.EffectComposer relies on THREE.ShaderPass' );
+
+			}
+
+			this.copyPass = new THREE.ShaderPass( THREE.CopyShader );
+			this.clock = new THREE.Clock();
+
+		}
+
+		swapBuffers() {
+
+			const tmp = this.readBuffer;
+			this.readBuffer = this.writeBuffer;
+			this.writeBuffer = tmp;
+
+		}
+
+		addPass( pass ) {
+
+			this.passes.push( pass );
+			pass.setSize( this._width * this._pixelRatio, this._height * this._pixelRatio );
+
+		}
+
+		insertPass( pass, index ) {
+
+			this.passes.splice( index, 0, pass );
+			pass.setSize( this._width * this._pixelRatio, this._height * this._pixelRatio );
+
+		}
+
+		removePass( pass ) {
+
+			const index = this.passes.indexOf( pass );
+
+			if ( index !== - 1 ) {
+
+				this.passes.splice( index, 1 );
+
+			}
+
+		}
+
+		isLastEnabledPass( passIndex ) {
+
+			for ( let i = passIndex + 1; i < this.passes.length; i ++ ) {
+
+				if ( this.passes[ i ].enabled ) {
+
+					return false;
+
+				}
+
+			}
+
+			return true;
+
+		}
+
+		render( deltaTime ) {
+
+			// deltaTime value is in seconds
+			if ( deltaTime === undefined ) {
+
+				deltaTime = this.clock.getDelta();
+
+			}
+
+			const currentRenderTarget = this.renderer.getRenderTarget();
+			let maskActive = false;
+
+			for ( let i = 0, il = this.passes.length; i < il; i ++ ) {
+
+				const pass = this.passes[ i ];
+				if ( pass.enabled === false ) continue;
+				pass.renderToScreen = this.renderToScreen && this.isLastEnabledPass( i );
+				pass.render( this.renderer, this.writeBuffer, this.readBuffer, deltaTime, maskActive );
+
+				if ( pass.needsSwap ) {
+
+					if ( maskActive ) {
+
+						const context = this.renderer.getContext();
+						const stencil = this.renderer.state.buffers.stencil; //context.stencilFunc( context.NOTEQUAL, 1, 0xffffffff );
+
+						stencil.setFunc( context.NOTEQUAL, 1, 0xffffffff );
+						this.copyPass.render( this.renderer, this.writeBuffer, this.readBuffer, deltaTime ); //context.stencilFunc( context.EQUAL, 1, 0xffffffff );
+
+						stencil.setFunc( context.EQUAL, 1, 0xffffffff );
+
+					}
+
+					this.swapBuffers();
+
+				}
+
+				if ( THREE.MaskPass !== undefined ) {
+
+					if ( pass instanceof THREE.MaskPass ) {
+
+						maskActive = true;
+
+					} else if ( pass instanceof THREE.ClearMaskPass ) {
+
+						maskActive = false;
+
+					}
+
+				}
+
+			}
+
+			this.renderer.setRenderTarget( currentRenderTarget );
+
+		}
+
+		reset( renderTarget ) {
+
+			if ( renderTarget === undefined ) {
+
+				const size = this.renderer.getSize( new THREE.Vector2() );
+				this._pixelRatio = this.renderer.getPixelRatio();
+				this._width = size.width;
+				this._height = size.height;
+				renderTarget = this.renderTarget1.clone();
+				renderTarget.setSize( this._width * this._pixelRatio, this._height * this._pixelRatio );
+
+			}
+
+			this.renderTarget1.dispose();
+			this.renderTarget2.dispose();
+			this.renderTarget1 = renderTarget;
+			this.renderTarget2 = renderTarget.clone();
+			this.writeBuffer = this.renderTarget1;
+			this.readBuffer = this.renderTarget2;
+
+		}
+
+		setSize( width, height ) {
+
+			this._width = width;
+			this._height = height;
+			const effectiveWidth = this._width * this._pixelRatio;
+			const effectiveHeight = this._height * this._pixelRatio;
+			this.renderTarget1.setSize( effectiveWidth, effectiveHeight );
+			this.renderTarget2.setSize( effectiveWidth, effectiveHeight );
+
+			for ( let i = 0; i < this.passes.length; i ++ ) {
+
+				this.passes[ i ].setSize( effectiveWidth, effectiveHeight );
+
+			}
+
+		}
+
+		setPixelRatio( pixelRatio ) {
+
+			this._pixelRatio = pixelRatio;
+			this.setSize( this._width, this._height );
+
+		}
+
+	}
+
+	class Pass {
+
+		constructor() {
+
+			// if set to true, the pass is processed by the composer
+			this.enabled = true; // if set to true, the pass indicates to swap read and write buffer after rendering
+
+			this.needsSwap = true; // if set to true, the pass clears its buffer before rendering
+
+			this.clear = false; // if set to true, the result of the pass is rendered to screen. This is set automatically by EffectComposer.
+
+			this.renderToScreen = false;
+
+		}
+
+		setSize( ) {}
+
+		render( ) {
+
+			console.error( 'THREE.Pass: .render() must be implemented in derived pass.' );
+
+		}
+
+	} // Helper for passes that need to fill the viewport with a single quad.
+
+
+	const _camera = new THREE.OrthographicCamera( - 1, 1, 1, - 1, 0, 1 ); // https://github.com/mrdoob/three.js/pull/21358
+
+
+	const _geometry = new THREE.BufferGeometry();
+
+	_geometry.setAttribute( 'position', new THREE.Float32BufferAttribute( [ - 1, 3, 0, - 1, - 1, 0, 3, - 1, 0 ], 3 ) );
+
+	_geometry.setAttribute( 'uv', new THREE.Float32BufferAttribute( [ 0, 2, 0, 0, 2, 0 ], 2 ) );
+
+	class FullScreenQuad {
+
+		constructor( material ) {
+
+			this._mesh = new THREE.Mesh( _geometry, material );
+
+		}
+
+		dispose() {
+
+			this._mesh.geometry.dispose();
+
+		}
+
+		render( renderer ) {
+
+			renderer.render( this._mesh, _camera );
+
+		}
+
+		get material() {
+
+			return this._mesh.material;
+
+		}
+
+		set material( value ) {
+
+			this._mesh.material = value;
+
+		}
+
+	}
+
+	THREE.EffectComposer = EffectComposer;
+	THREE.FullScreenQuad = FullScreenQuad;
+	THREE.Pass = Pass;
+
+} )();
+
+</script>
+<script>/* three r128 examples/js/postprocessing/MaskPass.js */
+( function () {
+
+	class MaskPass extends THREE.Pass {
+
+		constructor( scene, camera ) {
+
+			super();
+			this.scene = scene;
+			this.camera = camera;
+			this.clear = true;
+			this.needsSwap = false;
+			this.inverse = false;
+
+		}
+
+		render( renderer, writeBuffer, readBuffer
+			/*, deltaTime, maskActive */
+		) {
+
+			const context = renderer.getContext();
+			const state = renderer.state; // don't update color or depth
+
+			state.buffers.color.setMask( false );
+			state.buffers.depth.setMask( false ); // lock buffers
+
+			state.buffers.color.setLocked( true );
+			state.buffers.depth.setLocked( true ); // set up stencil
+
+			let writeValue, clearValue;
+
+			if ( this.inverse ) {
+
+				writeValue = 0;
+				clearValue = 1;
+
+			} else {
+
+				writeValue = 1;
+				clearValue = 0;
+
+			}
+
+			state.buffers.stencil.setTest( true );
+			state.buffers.stencil.setOp( context.REPLACE, context.REPLACE, context.REPLACE );
+			state.buffers.stencil.setFunc( context.ALWAYS, writeValue, 0xffffffff );
+			state.buffers.stencil.setClear( clearValue );
+			state.buffers.stencil.setLocked( true ); // draw into the stencil buffer
+
+			renderer.setRenderTarget( readBuffer );
+			if ( this.clear ) renderer.clear();
+			renderer.render( this.scene, this.camera );
+			renderer.setRenderTarget( writeBuffer );
+			if ( this.clear ) renderer.clear();
+			renderer.render( this.scene, this.camera ); // unlock color and depth buffer for subsequent rendering
+
+			state.buffers.color.setLocked( false );
+			state.buffers.depth.setLocked( false ); // only render where stencil is set to 1
+
+			state.buffers.stencil.setLocked( false );
+			state.buffers.stencil.setFunc( context.EQUAL, 1, 0xffffffff ); // draw if == 1
+
+			state.buffers.stencil.setOp( context.KEEP, context.KEEP, context.KEEP );
+			state.buffers.stencil.setLocked( true );
+
+		}
+
+	}
+
+	class ClearMaskPass extends THREE.Pass {
+
+		constructor() {
+
+			super();
+			this.needsSwap = false;
+
+		}
+
+		render( renderer
+			/*, writeBuffer, readBuffer, deltaTime, maskActive */
+		) {
+
+			renderer.state.buffers.stencil.setLocked( false );
+			renderer.state.buffers.stencil.setTest( false );
+
+		}
+
+	}
+
+	THREE.ClearMaskPass = ClearMaskPass;
+	THREE.MaskPass = MaskPass;
+
+} )();
+
+</script>
+<script>/* three r128 examples/js/postprocessing/ShaderPass.js */
+( function () {
+
+	class ShaderPass extends THREE.Pass {
+
+		constructor( shader, textureID ) {
+
+			super();
+			this.textureID = textureID !== undefined ? textureID : 'tDiffuse';
+
+			if ( shader instanceof THREE.ShaderMaterial ) {
+
+				this.uniforms = shader.uniforms;
+				this.material = shader;
+
+			} else if ( shader ) {
+
+				this.uniforms = THREE.UniformsUtils.clone( shader.uniforms );
+				this.material = new THREE.ShaderMaterial( {
+					defines: Object.assign( {}, shader.defines ),
+					uniforms: this.uniforms,
+					vertexShader: shader.vertexShader,
+					fragmentShader: shader.fragmentShader
+				} );
+
+			}
+
+			this.fsQuad = new THREE.FullScreenQuad( this.material );
+
+		}
+
+		render( renderer, writeBuffer, readBuffer
+			/*, deltaTime, maskActive */
+		) {
+
+			if ( this.uniforms[ this.textureID ] ) {
+
+				this.uniforms[ this.textureID ].value = readBuffer.texture;
+
+			}
+
+			this.fsQuad.material = this.material;
+
+			if ( this.renderToScreen ) {
+
+				renderer.setRenderTarget( null );
+				this.fsQuad.render( renderer );
+
+			} else {
+
+				renderer.setRenderTarget( writeBuffer ); // TODO: Avoid using autoClear properties, see https://github.com/mrdoob/three.js/pull/15571#issuecomment-465669600
+
+				if ( this.clear ) renderer.clear( renderer.autoClearColor, renderer.autoClearDepth, renderer.autoClearStencil );
+				this.fsQuad.render( renderer );
+
+			}
+
+		}
+
+	}
+
+	THREE.ShaderPass = ShaderPass;
+
+} )();
+
+</script>
+<script>/* three r128 examples/js/postprocessing/RenderPass.js */
+( function () {
+
+	class RenderPass extends THREE.Pass {
+
+		constructor( scene, camera, overrideMaterial, clearColor, clearAlpha ) {
+
+			super();
+			this.scene = scene;
+			this.camera = camera;
+			this.overrideMaterial = overrideMaterial;
+			this.clearColor = clearColor;
+			this.clearAlpha = clearAlpha !== undefined ? clearAlpha : 0;
+			this.clear = true;
+			this.clearDepth = false;
+			this.needsSwap = false;
+			this._oldClearColor = new THREE.Color();
+
+		}
+
+		render( renderer, writeBuffer, readBuffer
+			/*, deltaTime, maskActive */
+		) {
+
+			const oldAutoClear = renderer.autoClear;
+			renderer.autoClear = false;
+			let oldClearAlpha, oldOverrideMaterial;
+
+			if ( this.overrideMaterial !== undefined ) {
+
+				oldOverrideMaterial = this.scene.overrideMaterial;
+				this.scene.overrideMaterial = this.overrideMaterial;
+
+			}
+
+			if ( this.clearColor ) {
+
+				renderer.getClearColor( this._oldClearColor );
+				oldClearAlpha = renderer.getClearAlpha();
+				renderer.setClearColor( this.clearColor, this.clearAlpha );
+
+			}
+
+			if ( this.clearDepth ) {
+
+				renderer.clearDepth();
+
+			}
+
+			renderer.setRenderTarget( this.renderToScreen ? null : readBuffer ); // TODO: Avoid using autoClear properties, see https://github.com/mrdoob/three.js/pull/15571#issuecomment-465669600
+
+			if ( this.clear ) renderer.clear( renderer.autoClearColor, renderer.autoClearDepth, renderer.autoClearStencil );
+			renderer.render( this.scene, this.camera );
+
+			if ( this.clearColor ) {
+
+				renderer.setClearColor( this._oldClearColor, oldClearAlpha );
+
+			}
+
+			if ( this.overrideMaterial !== undefined ) {
+
+				this.scene.overrideMaterial = oldOverrideMaterial;
+
+			}
+
+			renderer.autoClear = oldAutoClear;
+
+		}
+
+	}
+
+	THREE.RenderPass = RenderPass;
+
+} )();
+
+</script>
+<script>/* three r128 examples/js/postprocessing/UnrealBloomPass.js */
+( function () {
+
+	/**
+ * UnrealBloomPass is inspired by the bloom pass of Unreal Engine. It creates a
+ * mip map chain of bloom textures and blurs them with different radii. Because
+ * of the weighted combination of mips, and because larger blurs are done on
+ * higher mips, this effect provides good quality and performance.
+ *
+ * Reference:
+ * - https://docs.unrealengine.com/latest/INT/Engine/Rendering/PostProcessEffects/Bloom/
+ */
+
+	class UnrealBloomPass extends THREE.Pass {
+
+		constructor( resolution, strength, radius, threshold ) {
+
+			super();
+			this.strength = strength !== undefined ? strength : 1;
+			this.radius = radius;
+			this.threshold = threshold;
+			this.resolution = resolution !== undefined ? new THREE.Vector2( resolution.x, resolution.y ) : new THREE.Vector2( 256, 256 ); // create color only once here, reuse it later inside the render function
+
+			this.clearColor = new THREE.Color( 0, 0, 0 ); // render targets
+
+			const pars = {
+				minFilter: THREE.LinearFilter,
+				magFilter: THREE.LinearFilter,
+				format: THREE.RGBAFormat
+			};
+			this.renderTargetsHorizontal = [];
+			this.renderTargetsVertical = [];
+			this.nMips = 5;
+			let resx = Math.round( this.resolution.x / 2 );
+			let resy = Math.round( this.resolution.y / 2 );
+			this.renderTargetBright = new THREE.WebGLRenderTarget( resx, resy, pars );
+			this.renderTargetBright.texture.name = 'UnrealBloomPass.bright';
+			this.renderTargetBright.texture.generateMipmaps = false;
+
+			for ( let i = 0; i < this.nMips; i ++ ) {
+
+				const renderTargetHorizonal = new THREE.WebGLRenderTarget( resx, resy, pars );
+				renderTargetHorizonal.texture.name = 'UnrealBloomPass.h' + i;
+				renderTargetHorizonal.texture.generateMipmaps = false;
+				this.renderTargetsHorizontal.push( renderTargetHorizonal );
+				const renderTargetVertical = new THREE.WebGLRenderTarget( resx, resy, pars );
+				renderTargetVertical.texture.name = 'UnrealBloomPass.v' + i;
+				renderTargetVertical.texture.generateMipmaps = false;
+				this.renderTargetsVertical.push( renderTargetVertical );
+				resx = Math.round( resx / 2 );
+				resy = Math.round( resy / 2 );
+
+			} // luminosity high pass material
+
+
+			if ( THREE.LuminosityHighPassShader === undefined ) console.error( 'THREE.UnrealBloomPass relies on THREE.LuminosityHighPassShader' );
+			const highPassShader = THREE.LuminosityHighPassShader;
+			this.highPassUniforms = THREE.UniformsUtils.clone( highPassShader.uniforms );
+			this.highPassUniforms[ 'luminosityThreshold' ].value = threshold;
+			this.highPassUniforms[ 'smoothWidth' ].value = 0.01;
+			this.materialHighPassFilter = new THREE.ShaderMaterial( {
+				uniforms: this.highPassUniforms,
+				vertexShader: highPassShader.vertexShader,
+				fragmentShader: highPassShader.fragmentShader,
+				defines: {}
+			} ); // Gaussian Blur Materials
+
+			this.separableBlurMaterials = [];
+			const kernelSizeArray = [ 3, 5, 7, 9, 11 ];
+			resx = Math.round( this.resolution.x / 2 );
+			resy = Math.round( this.resolution.y / 2 );
+
+			for ( let i = 0; i < this.nMips; i ++ ) {
+
+				this.separableBlurMaterials.push( this.getSeperableBlurMaterial( kernelSizeArray[ i ] ) );
+				this.separableBlurMaterials[ i ].uniforms[ 'texSize' ].value = new THREE.Vector2( resx, resy );
+				resx = Math.round( resx / 2 );
+				resy = Math.round( resy / 2 );
+
+			} // Composite material
+
+
+			this.compositeMaterial = this.getCompositeMaterial( this.nMips );
+			this.compositeMaterial.uniforms[ 'blurTexture1' ].value = this.renderTargetsVertical[ 0 ].texture;
+			this.compositeMaterial.uniforms[ 'blurTexture2' ].value = this.renderTargetsVertical[ 1 ].texture;
+			this.compositeMaterial.uniforms[ 'blurTexture3' ].value = this.renderTargetsVertical[ 2 ].texture;
+			this.compositeMaterial.uniforms[ 'blurTexture4' ].value = this.renderTargetsVertical[ 3 ].texture;
+			this.compositeMaterial.uniforms[ 'blurTexture5' ].value = this.renderTargetsVertical[ 4 ].texture;
+			this.compositeMaterial.uniforms[ 'bloomStrength' ].value = strength;
+			this.compositeMaterial.uniforms[ 'bloomRadius' ].value = 0.1;
+			this.compositeMaterial.needsUpdate = true;
+			const bloomFactors = [ 1.0, 0.8, 0.6, 0.4, 0.2 ];
+			this.compositeMaterial.uniforms[ 'bloomFactors' ].value = bloomFactors;
+			this.bloomTintColors = [ new THREE.Vector3( 1, 1, 1 ), new THREE.Vector3( 1, 1, 1 ), new THREE.Vector3( 1, 1, 1 ), new THREE.Vector3( 1, 1, 1 ), new THREE.Vector3( 1, 1, 1 ) ];
+			this.compositeMaterial.uniforms[ 'bloomTintColors' ].value = this.bloomTintColors; // copy material
+
+			if ( THREE.CopyShader === undefined ) {
+
+				console.error( 'THREE.UnrealBloomPass relies on THREE.CopyShader' );
+
+			}
+
+			const copyShader = THREE.CopyShader;
+			this.copyUniforms = THREE.UniformsUtils.clone( copyShader.uniforms );
+			this.copyUniforms[ 'opacity' ].value = 1.0;
+			this.materialCopy = new THREE.ShaderMaterial( {
+				uniforms: this.copyUniforms,
+				vertexShader: copyShader.vertexShader,
+				fragmentShader: copyShader.fragmentShader,
+				blending: THREE.AdditiveBlending,
+				depthTest: false,
+				depthWrite: false,
+				transparent: true
+			} );
+			this.enabled = true;
+			this.needsSwap = false;
+			this._oldClearColor = new THREE.Color();
+			this.oldClearAlpha = 1;
+			this.basic = new THREE.MeshBasicMaterial();
+			this.fsQuad = new THREE.FullScreenQuad( null );
+
+		}
+
+		dispose() {
+
+			for ( let i = 0; i < this.renderTargetsHorizontal.length; i ++ ) {
+
+				this.renderTargetsHorizontal[ i ].dispose();
+
+			}
+
+			for ( let i = 0; i < this.renderTargetsVertical.length; i ++ ) {
+
+				this.renderTargetsVertical[ i ].dispose();
+
+			}
+
+			this.renderTargetBright.dispose();
+
+		}
+
+		setSize( width, height ) {
+
+			let resx = Math.round( width / 2 );
+			let resy = Math.round( height / 2 );
+			this.renderTargetBright.setSize( resx, resy );
+
+			for ( let i = 0; i < this.nMips; i ++ ) {
+
+				this.renderTargetsHorizontal[ i ].setSize( resx, resy );
+				this.renderTargetsVertical[ i ].setSize( resx, resy );
+				this.separableBlurMaterials[ i ].uniforms[ 'texSize' ].value = new THREE.Vector2( resx, resy );
+				resx = Math.round( resx / 2 );
+				resy = Math.round( resy / 2 );
+
+			}
+
+		}
+
+		render( renderer, writeBuffer, readBuffer, deltaTime, maskActive ) {
+
+			renderer.getClearColor( this._oldClearColor );
+			this.oldClearAlpha = renderer.getClearAlpha();
+			const oldAutoClear = renderer.autoClear;
+			renderer.autoClear = false;
+			renderer.setClearColor( this.clearColor, 0 );
+			if ( maskActive ) renderer.state.buffers.stencil.setTest( false ); // Render input to screen
+
+			if ( this.renderToScreen ) {
+
+				this.fsQuad.material = this.basic;
+				this.basic.map = readBuffer.texture;
+				renderer.setRenderTarget( null );
+				renderer.clear();
+				this.fsQuad.render( renderer );
+
+			} // 1. Extract Bright Areas
+
+
+			this.highPassUniforms[ 'tDiffuse' ].value = readBuffer.texture;
+			this.highPassUniforms[ 'luminosityThreshold' ].value = this.threshold;
+			this.fsQuad.material = this.materialHighPassFilter;
+			renderer.setRenderTarget( this.renderTargetBright );
+			renderer.clear();
+			this.fsQuad.render( renderer ); // 2. Blur All the mips progressively
+
+			let inputRenderTarget = this.renderTargetBright;
+
+			for ( let i = 0; i < this.nMips; i ++ ) {
+
+				this.fsQuad.material = this.separableBlurMaterials[ i ];
+				this.separableBlurMaterials[ i ].uniforms[ 'colorTexture' ].value = inputRenderTarget.texture;
+				this.separableBlurMaterials[ i ].uniforms[ 'direction' ].value = UnrealBloomPass.BlurDirectionX;
+				renderer.setRenderTarget( this.renderTargetsHorizontal[ i ] );
+				renderer.clear();
+				this.fsQuad.render( renderer );
+				this.separableBlurMaterials[ i ].uniforms[ 'colorTexture' ].value = this.renderTargetsHorizontal[ i ].texture;
+				this.separableBlurMaterials[ i ].uniforms[ 'direction' ].value = UnrealBloomPass.BlurDirectionY;
+				renderer.setRenderTarget( this.renderTargetsVertical[ i ] );
+				renderer.clear();
+				this.fsQuad.render( renderer );
+				inputRenderTarget = this.renderTargetsVertical[ i ];
+
+			} // Composite All the mips
+
+
+			this.fsQuad.material = this.compositeMaterial;
+			this.compositeMaterial.uniforms[ 'bloomStrength' ].value = this.strength;
+			this.compositeMaterial.uniforms[ 'bloomRadius' ].value = this.radius;
+			this.compositeMaterial.uniforms[ 'bloomTintColors' ].value = this.bloomTintColors;
+			renderer.setRenderTarget( this.renderTargetsHorizontal[ 0 ] );
+			renderer.clear();
+			this.fsQuad.render( renderer ); // Blend it additively over the input texture
+
+			this.fsQuad.material = this.materialCopy;
+			this.copyUniforms[ 'tDiffuse' ].value = this.renderTargetsHorizontal[ 0 ].texture;
+			if ( maskActive ) renderer.state.buffers.stencil.setTest( true );
+
+			if ( this.renderToScreen ) {
+
+				renderer.setRenderTarget( null );
+				this.fsQuad.render( renderer );
+
+			} else {
+
+				renderer.setRenderTarget( readBuffer );
+				this.fsQuad.render( renderer );
+
+			} // Restore renderer settings
+
+
+			renderer.setClearColor( this._oldClearColor, this.oldClearAlpha );
+			renderer.autoClear = oldAutoClear;
+
+		}
+
+		getSeperableBlurMaterial( kernelRadius ) {
+
+			return new THREE.ShaderMaterial( {
+				defines: {
+					'KERNEL_RADIUS': kernelRadius,
+					'SIGMA': kernelRadius
+				},
+				uniforms: {
+					'colorTexture': {
+						value: null
+					},
+					'texSize': {
+						value: new THREE.Vector2( 0.5, 0.5 )
+					},
+					'direction': {
+						value: new THREE.Vector2( 0.5, 0.5 )
+					}
+				},
+				vertexShader: `varying vec2 vUv;
+				void main() {
+					vUv = uv;
+					gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+				}`,
+				fragmentShader: `#include <common>
+				varying vec2 vUv;
+				uniform sampler2D colorTexture;
+				uniform vec2 texSize;
+				uniform vec2 direction;
+
+				float gaussianPdf(in float x, in float sigma) {
+					return 0.39894 * exp( -0.5 * x * x/( sigma * sigma))/sigma;
+				}
+				void main() {
+					vec2 invSize = 1.0 / texSize;
+					float fSigma = float(SIGMA);
+					float weightSum = gaussianPdf(0.0, fSigma);
+					vec3 diffuseSum = texture2D( colorTexture, vUv).rgb * weightSum;
+					for( int i = 1; i < KERNEL_RADIUS; i ++ ) {
+						float x = float(i);
+						float w = gaussianPdf(x, fSigma);
+						vec2 uvOffset = direction * invSize * x;
+						vec3 sample1 = texture2D( colorTexture, vUv + uvOffset).rgb;
+						vec3 sample2 = texture2D( colorTexture, vUv - uvOffset).rgb;
+						diffuseSum += (sample1 + sample2) * w;
+						weightSum += 2.0 * w;
+					}
+					gl_FragColor = vec4(diffuseSum/weightSum, 1.0);
+				}`
+			} );
+
+		}
+
+		getCompositeMaterial( nMips ) {
+
+			return new THREE.ShaderMaterial( {
+				defines: {
+					'NUM_MIPS': nMips
+				},
+				uniforms: {
+					'blurTexture1': {
+						value: null
+					},
+					'blurTexture2': {
+						value: null
+					},
+					'blurTexture3': {
+						value: null
+					},
+					'blurTexture4': {
+						value: null
+					},
+					'blurTexture5': {
+						value: null
+					},
+					'dirtTexture': {
+						value: null
+					},
+					'bloomStrength': {
+						value: 1.0
+					},
+					'bloomFactors': {
+						value: null
+					},
+					'bloomTintColors': {
+						value: null
+					},
+					'bloomRadius': {
+						value: 0.0
+					}
+				},
+				vertexShader: `varying vec2 vUv;
+				void main() {
+					vUv = uv;
+					gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+				}`,
+				fragmentShader: `varying vec2 vUv;
+				uniform sampler2D blurTexture1;
+				uniform sampler2D blurTexture2;
+				uniform sampler2D blurTexture3;
+				uniform sampler2D blurTexture4;
+				uniform sampler2D blurTexture5;
+				uniform sampler2D dirtTexture;
+				uniform float bloomStrength;
+				uniform float bloomRadius;
+				uniform float bloomFactors[NUM_MIPS];
+				uniform vec3 bloomTintColors[NUM_MIPS];
+
+				float lerpBloomFactor(const in float factor) {
+					float mirrorFactor = 1.2 - factor;
+					return mix(factor, mirrorFactor, bloomRadius);
+				}
+
+				void main() {
+					gl_FragColor = bloomStrength * ( lerpBloomFactor(bloomFactors[0]) * vec4(bloomTintColors[0], 1.0) * texture2D(blurTexture1, vUv) +
+						lerpBloomFactor(bloomFactors[1]) * vec4(bloomTintColors[1], 1.0) * texture2D(blurTexture2, vUv) +
+						lerpBloomFactor(bloomFactors[2]) * vec4(bloomTintColors[2], 1.0) * texture2D(blurTexture3, vUv) +
+						lerpBloomFactor(bloomFactors[3]) * vec4(bloomTintColors[3], 1.0) * texture2D(blurTexture4, vUv) +
+						lerpBloomFactor(bloomFactors[4]) * vec4(bloomTintColors[4], 1.0) * texture2D(blurTexture5, vUv) );
+				}`
+			} );
+
+		}
+
+	}
+
+	UnrealBloomPass.BlurDirectionX = new THREE.Vector2( 1.0, 0.0 );
+	UnrealBloomPass.BlurDirectionY = new THREE.Vector2( 0.0, 1.0 );
+
+	THREE.UnrealBloomPass = UnrealBloomPass;
+
+} )();
+
+</script>
+<script>/* three r128 examples/js/postprocessing/SSAOPass.js */
+( function () {
+
+	class SSAOPass extends THREE.Pass {
+
+		constructor( scene, camera, width, height ) {
+
+			super();
+			this.width = width !== undefined ? width : 512;
+			this.height = height !== undefined ? height : 512;
+			this.clear = true;
+			this.camera = camera;
+			this.scene = scene;
+			this.kernelRadius = 8;
+			this.kernelSize = 32;
+			this.kernel = [];
+			this.noiseTexture = null;
+			this.output = 0;
+			this.minDistance = 0.005;
+			this.maxDistance = 0.1;
+			this._visibilityCache = new Map(); //
+
+			this.generateSampleKernel();
+			this.generateRandomKernelRotations(); // beauty render target
+
+			const depthTexture = new THREE.DepthTexture();
+			depthTexture.type = THREE.UnsignedShortType;
+			this.beautyRenderTarget = new THREE.WebGLRenderTarget( this.width, this.height, {
+				minFilter: THREE.LinearFilter,
+				magFilter: THREE.LinearFilter,
+				format: THREE.RGBAFormat
+			} ); // normal render target with depth buffer
+
+			this.normalRenderTarget = new THREE.WebGLRenderTarget( this.width, this.height, {
+				minFilter: THREE.NearestFilter,
+				magFilter: THREE.NearestFilter,
+				format: THREE.RGBAFormat,
+				depthTexture: depthTexture
+			} ); // ssao render target
+
+			this.ssaoRenderTarget = new THREE.WebGLRenderTarget( this.width, this.height, {
+				minFilter: THREE.LinearFilter,
+				magFilter: THREE.LinearFilter,
+				format: THREE.RGBAFormat
+			} );
+			this.blurRenderTarget = this.ssaoRenderTarget.clone(); // ssao material
+
+			if ( THREE.SSAOShader === undefined ) {
+
+				console.error( 'THREE.SSAOPass: The pass relies on THREE.SSAOShader.' );
+
+			}
+
+			this.ssaoMaterial = new THREE.ShaderMaterial( {
+				defines: Object.assign( {}, THREE.SSAOShader.defines ),
+				uniforms: THREE.UniformsUtils.clone( THREE.SSAOShader.uniforms ),
+				vertexShader: THREE.SSAOShader.vertexShader,
+				fragmentShader: THREE.SSAOShader.fragmentShader,
+				blending: THREE.NoBlending
+			} );
+			this.ssaoMaterial.uniforms[ 'tDiffuse' ].value = this.beautyRenderTarget.texture;
+			this.ssaoMaterial.uniforms[ 'tNormal' ].value = this.normalRenderTarget.texture;
+			this.ssaoMaterial.uniforms[ 'tDepth' ].value = this.normalRenderTarget.depthTexture;
+			this.ssaoMaterial.uniforms[ 'tNoise' ].value = this.noiseTexture;
+			this.ssaoMaterial.uniforms[ 'kernel' ].value = this.kernel;
+			this.ssaoMaterial.uniforms[ 'cameraNear' ].value = this.camera.near;
+			this.ssaoMaterial.uniforms[ 'cameraFar' ].value = this.camera.far;
+			this.ssaoMaterial.uniforms[ 'resolution' ].value.set( this.width, this.height );
+			this.ssaoMaterial.uniforms[ 'cameraProjectionMatrix' ].value.copy( this.camera.projectionMatrix );
+			this.ssaoMaterial.uniforms[ 'cameraInverseProjectionMatrix' ].value.copy( this.camera.projectionMatrixInverse ); // normal material
+
+			this.normalMaterial = new THREE.MeshNormalMaterial();
+			this.normalMaterial.blending = THREE.NoBlending; // blur material
+
+			this.blurMaterial = new THREE.ShaderMaterial( {
+				defines: Object.assign( {}, THREE.SSAOBlurShader.defines ),
+				uniforms: THREE.UniformsUtils.clone( THREE.SSAOBlurShader.uniforms ),
+				vertexShader: THREE.SSAOBlurShader.vertexShader,
+				fragmentShader: THREE.SSAOBlurShader.fragmentShader
+			} );
+			this.blurMaterial.uniforms[ 'tDiffuse' ].value = this.ssaoRenderTarget.texture;
+			this.blurMaterial.uniforms[ 'resolution' ].value.set( this.width, this.height ); // material for rendering the depth
+
+			this.depthRenderMaterial = new THREE.ShaderMaterial( {
+				defines: Object.assign( {}, THREE.SSAODepthShader.defines ),
+				uniforms: THREE.UniformsUtils.clone( THREE.SSAODepthShader.uniforms ),
+				vertexShader: THREE.SSAODepthShader.vertexShader,
+				fragmentShader: THREE.SSAODepthShader.fragmentShader,
+				blending: THREE.NoBlending
+			} );
+			this.depthRenderMaterial.uniforms[ 'tDepth' ].value = this.normalRenderTarget.depthTexture;
+			this.depthRenderMaterial.uniforms[ 'cameraNear' ].value = this.camera.near;
+			this.depthRenderMaterial.uniforms[ 'cameraFar' ].value = this.camera.far; // material for rendering the content of a render target
+
+			this.copyMaterial = new THREE.ShaderMaterial( {
+				uniforms: THREE.UniformsUtils.clone( THREE.CopyShader.uniforms ),
+				vertexShader: THREE.CopyShader.vertexShader,
+				fragmentShader: THREE.CopyShader.fragmentShader,
+				transparent: true,
+				depthTest: false,
+				depthWrite: false,
+				blendSrc: THREE.DstColorFactor,
+				blendDst: THREE.ZeroFactor,
+				blendEquation: THREE.AddEquation,
+				blendSrcAlpha: THREE.DstAlphaFactor,
+				blendDstAlpha: THREE.ZeroFactor,
+				blendEquationAlpha: THREE.AddEquation
+			} );
+			this.fsQuad = new THREE.FullScreenQuad( null );
+			this.originalClearColor = new THREE.Color();
+
+		}
+
+		dispose() {
+
+			// dispose render targets
+			this.beautyRenderTarget.dispose();
+			this.normalRenderTarget.dispose();
+			this.ssaoRenderTarget.dispose();
+			this.blurRenderTarget.dispose(); // dispose materials
+
+			this.normalMaterial.dispose();
+			this.blurMaterial.dispose();
+			this.copyMaterial.dispose();
+			this.depthRenderMaterial.dispose(); // dipsose full screen quad
+
+			this.fsQuad.dispose();
+
+		}
+
+		render( renderer, writeBuffer
+			/*, readBuffer, deltaTime, maskActive */
+		) {
+
+			// render beauty
+			renderer.setRenderTarget( this.beautyRenderTarget );
+			renderer.clear();
+			renderer.render( this.scene, this.camera ); // render normals and depth (honor only meshes, points and lines do not contribute to SSAO)
+
+			this.overrideVisibility();
+			this.renderOverride( renderer, this.normalMaterial, this.normalRenderTarget, 0x7777ff, 1.0 );
+			this.restoreVisibility(); // render SSAO
+
+			this.ssaoMaterial.uniforms[ 'kernelRadius' ].value = this.kernelRadius;
+			this.ssaoMaterial.uniforms[ 'minDistance' ].value = this.minDistance;
+			this.ssaoMaterial.uniforms[ 'maxDistance' ].value = this.maxDistance;
+			this.renderPass( renderer, this.ssaoMaterial, this.ssaoRenderTarget ); // render blur
+
+			this.renderPass( renderer, this.blurMaterial, this.blurRenderTarget ); // output result to screen
+
+			switch ( this.output ) {
+
+				case SSAOPass.OUTPUT.SSAO:
+					this.copyMaterial.uniforms[ 'tDiffuse' ].value = this.ssaoRenderTarget.texture;
+					this.copyMaterial.blending = THREE.NoBlending;
+					this.renderPass( renderer, this.copyMaterial, this.renderToScreen ? null : writeBuffer );
+					break;
+
+				case SSAOPass.OUTPUT.Blur:
+					this.copyMaterial.uniforms[ 'tDiffuse' ].value = this.blurRenderTarget.texture;
+					this.copyMaterial.blending = THREE.NoBlending;
+					this.renderPass( renderer, this.copyMaterial, this.renderToScreen ? null : writeBuffer );
+					break;
+
+				case SSAOPass.OUTPUT.Beauty:
+					this.copyMaterial.uniforms[ 'tDiffuse' ].value = this.beautyRenderTarget.texture;
+					this.copyMaterial.blending = THREE.NoBlending;
+					this.renderPass( renderer, this.copyMaterial, this.renderToScreen ? null : writeBuffer );
+					break;
+
+				case SSAOPass.OUTPUT.Depth:
+					this.renderPass( renderer, this.depthRenderMaterial, this.renderToScreen ? null : writeBuffer );
+					break;
+
+				case SSAOPass.OUTPUT.Normal:
+					this.copyMaterial.uniforms[ 'tDiffuse' ].value = this.normalRenderTarget.texture;
+					this.copyMaterial.blending = THREE.NoBlending;
+					this.renderPass( renderer, this.copyMaterial, this.renderToScreen ? null : writeBuffer );
+					break;
+
+				case SSAOPass.OUTPUT.Default:
+					this.copyMaterial.uniforms[ 'tDiffuse' ].value = this.beautyRenderTarget.texture;
+					this.copyMaterial.blending = THREE.NoBlending;
+					this.renderPass( renderer, this.copyMaterial, this.renderToScreen ? null : writeBuffer );
+					this.copyMaterial.uniforms[ 'tDiffuse' ].value = this.blurRenderTarget.texture;
+					this.copyMaterial.blending = THREE.CustomBlending;
+					this.renderPass( renderer, this.copyMaterial, this.renderToScreen ? null : writeBuffer );
+					break;
+
+				default:
+					console.warn( 'THREE.SSAOPass: Unknown output type.' );
+
+			}
+
+		}
+
+		renderPass( renderer, passMaterial, renderTarget, clearColor, clearAlpha ) {
+
+			// save original state
+			renderer.getClearColor( this.originalClearColor );
+			const originalClearAlpha = renderer.getClearAlpha();
+			const originalAutoClear = renderer.autoClear;
+			renderer.setRenderTarget( renderTarget ); // setup pass state
+
+			renderer.autoClear = false;
+
+			if ( clearColor !== undefined && clearColor !== null ) {
+
+				renderer.setClearColor( clearColor );
+				renderer.setClearAlpha( clearAlpha || 0.0 );
+				renderer.clear();
+
+			}
+
+			this.fsQuad.material = passMaterial;
+			this.fsQuad.render( renderer ); // restore original state
+
+			renderer.autoClear = originalAutoClear;
+			renderer.setClearColor( this.originalClearColor );
+			renderer.setClearAlpha( originalClearAlpha );
+
+		}
+
+		renderOverride( renderer, overrideMaterial, renderTarget, clearColor, clearAlpha ) {
+
+			renderer.getClearColor( this.originalClearColor );
+			const originalClearAlpha = renderer.getClearAlpha();
+			const originalAutoClear = renderer.autoClear;
+			renderer.setRenderTarget( renderTarget );
+			renderer.autoClear = false;
+			clearColor = overrideMaterial.clearColor || clearColor;
+			clearAlpha = overrideMaterial.clearAlpha || clearAlpha;
+
+			if ( clearColor !== undefined && clearColor !== null ) {
+
+				renderer.setClearColor( clearColor );
+				renderer.setClearAlpha( clearAlpha || 0.0 );
+				renderer.clear();
+
+			}
+
+			this.scene.overrideMaterial = overrideMaterial;
+			renderer.render( this.scene, this.camera );
+			this.scene.overrideMaterial = null; // restore original state
+
+			renderer.autoClear = originalAutoClear;
+			renderer.setClearColor( this.originalClearColor );
+			renderer.setClearAlpha( originalClearAlpha );
+
+		}
+
+		setSize( width, height ) {
+
+			this.width = width;
+			this.height = height;
+			this.beautyRenderTarget.setSize( width, height );
+			this.ssaoRenderTarget.setSize( width, height );
+			this.normalRenderTarget.setSize( width, height );
+			this.blurRenderTarget.setSize( width, height );
+			this.ssaoMaterial.uniforms[ 'resolution' ].value.set( width, height );
+			this.ssaoMaterial.uniforms[ 'cameraProjectionMatrix' ].value.copy( this.camera.projectionMatrix );
+			this.ssaoMaterial.uniforms[ 'cameraInverseProjectionMatrix' ].value.copy( this.camera.projectionMatrixInverse );
+			this.blurMaterial.uniforms[ 'resolution' ].value.set( width, height );
+
+		}
+
+		generateSampleKernel() {
+
+			const kernelSize = this.kernelSize;
+			const kernel = this.kernel;
+
+			for ( let i = 0; i < kernelSize; i ++ ) {
+
+				const sample = new THREE.Vector3();
+				sample.x = Math.random() * 2 - 1;
+				sample.y = Math.random() * 2 - 1;
+				sample.z = Math.random();
+				sample.normalize();
+				let scale = i / kernelSize;
+				scale = THREE.MathUtils.lerp( 0.1, 1, scale * scale );
+				sample.multiplyScalar( scale );
+				kernel.push( sample );
+
+			}
+
+		}
+
+		generateRandomKernelRotations() {
+
+			const width = 4,
+				height = 4;
+
+			if ( THREE.SimplexNoise === undefined ) {
+
+				console.error( 'THREE.SSAOPass: The pass relies on THREE.SimplexNoise.' );
+
+			}
+
+			const simplex = new THREE.SimplexNoise();
+			const size = width * height;
+			const data = new Float32Array( size * 4 );
+
+			for ( let i = 0; i < size; i ++ ) {
+
+				const stride = i * 4;
+				const x = Math.random() * 2 - 1;
+				const y = Math.random() * 2 - 1;
+				const z = 0;
+				const noise = simplex.noise3d( x, y, z );
+				data[ stride ] = noise;
+				data[ stride + 1 ] = noise;
+				data[ stride + 2 ] = noise;
+				data[ stride + 3 ] = 1;
+
+			}
+
+			this.noiseTexture = new THREE.DataTexture( data, width, height, THREE.RGBAFormat, THREE.FloatType );
+			this.noiseTexture.wrapS = THREE.RepeatWrapping;
+			this.noiseTexture.wrapT = THREE.RepeatWrapping;
+
+		}
+
+		overrideVisibility() {
+
+			const scene = this.scene;
+			const cache = this._visibilityCache;
+			scene.traverse( function ( object ) {
+
+				cache.set( object, object.visible );
+				if ( object.isPoints || object.isLine ) object.visible = false;
+
+			} );
+
+		}
+
+		restoreVisibility() {
+
+			const scene = this.scene;
+			const cache = this._visibilityCache;
+			scene.traverse( function ( object ) {
+
+				const visible = cache.get( object );
+				object.visible = visible;
+
+			} );
+			cache.clear();
+
+		}
+
+	}
+
+	SSAOPass.OUTPUT = {
+		'Default': 0,
+		'SSAO': 1,
+		'Blur': 2,
+		'Beauty': 3,
+		'Depth': 4,
+		'Normal': 5
+	};
+
+	THREE.SSAOPass = SSAOPass;
+
+} )();
+
+</script>
 </head>
 <body>
 <div id="start-overlay">
@@ -2158,7 +4383,7 @@ function nrEdges(P, n, Y, hw, dy) {
 }
 const nrCol = t => { const v = Math.max(0, Math.min(255, Math.round(t * 255))); return [v, v, v]; };
 function nrRoadSlot(hw, lanes, ow) {
-  if (hw === 8) return NR_S.PED; if (hw === 6) return NR_S.PLAIN; if (hw === 7) return lanes >= 2 ? NR_S.LK2 : NR_S.LK1;
+  if (hw === 8) return NR_S.PLAIN;   /* 보행자 광장 타일 → 아스팔트 */ if (hw === 6) return NR_S.PLAIN; if (hw === 7) return lanes >= 2 ? NR_S.LK2 : NR_S.LK1;
   if (hw <= 1) { if (!ow) return NR_S.HWTW; return lanes <= 2 ? NR_S.HW2 : lanes === 3 ? NR_S.HW3 : NR_S.HW4; }
   if (ow) return NR_S.OW1 - 1 + Math.min(5, Math.max(1, lanes));
   return lanes <= 2 ? NR_S.TW2 : lanes <= 4 ? NR_S.TW4 : NR_S.TW6;
@@ -5638,7 +7863,7 @@ function animate() {
 
   drawMap();
   gfxUpdate();
-  if (GFXB.on) gfxRenderBloom(); else renderer.render(scene, camera);
+  if (window.__rceFrame && window.__rceFrame(dt)) { /* RCE 컴포저가 렌더 */ } else if (GFXB.on) gfxRenderBloom(); else renderer.render(scene, camera);
 }
 
 function updateSpiderManRig(dt) {
@@ -7563,6 +9788,1297 @@ window.onload = init;
   if (window.ResizeObserver) new ResizeObserver(fit).observe(hp);
   fit();
 })();
+</script>
+<script>/* ===== RealisticCityEnvironment 모듈 ===== */
+/*!
+ * RealisticCityEnvironment  (three.js r128, classic-script / global THREE)
+ * ---------------------------------------------------------------------------
+ * 외부 이미지 에셋 없이 코드만으로 만드는 "매트릭스 어웨이큰스" 풍 흐린 날 대도시 환경 모듈.
+ *   · 절차적 PBR 텍스처(Diffuse / Roughness / Bump / Emissive) — 오프스크린 Canvas 로 생성
+ *   · 절차적 큐브맵(WebGLCubeRenderTarget + PMREM) 으로 유리창 반사
+ *   · 젖은 아스팔트 + 불규칙 물웅덩이 + 파문 + 스크린스페이스 반사
+ *   · ACESFilmic + PCFSoftShadowMap + FogExp2 + 하늘 셰이더
+ *   · EffectComposer: RenderPass → SSAO → SSR → UnrealBloom → ACES/Grade
+ *
+ * 필요 스크립트(r128 examples/js): EffectComposer, Pass, ShaderPass, MaskPass, RenderPass, UnrealBloomPass,
+ *   SSAOPass, CopyShader, LuminosityHighPassShader, SSAOShader, SimplexNoise
+ *   (없으면 후처리만 자동 비활성 — 텍스처/머티리얼/하늘/환경맵은 그대로 동작)
+ */
+(function (global) {
+'use strict';
+const THREE = global.THREE;
+if (!THREE) throw new Error('[RealisticCityEnvironment] THREE(r128) 가 먼저 로드되어야 합니다.');
+
+/* ============================================================================
+ * 0. 공용 수학/해시/타일링 노이즈 필드
+ * ========================================================================== */
+const TAU = Math.PI * 2;
+const clamp = (x, a, b) => (x < a ? a : x > b ? b : x);
+const sstep = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+const mixf = (a, b, t) => a + (b - a) * t;
+const nextTick = () => new Promise(r => setTimeout(r, 0));
+
+function ihash(x, y, s) {                       // 정수 격자 해시 → [0,1)
+  let h = (Math.imul(x | 0, 374761393) + Math.imul(y | 0, 668265263) + Math.imul(s | 0, 1274126177)) | 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177); h ^= h >>> 16;
+  return (h >>> 0) / 4294967296;
+}
+function rng(seed) {                            // mulberry32
+  let a = seed >>> 0;
+  return () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+}
+
+/** 값 분포를 [0,1] 균일하게 만든다(히스토그램 평활화) → "임계값 = 면적 비율" 이 되어 마스크 제어가 쉬워진다. */
+function equalize(F) {
+  const n = F.length, B = 2048, hist = new Uint32Array(B);
+  let mn = Infinity, mx = -Infinity;
+  for (let i = 0; i < n; i++) { const v = F[i]; if (v < mn) mn = v; if (v > mx) mx = v; }
+  const k = (B - 1) / Math.max(1e-9, mx - mn);
+  for (let i = 0; i < n; i++) hist[((F[i] - mn) * k) | 0]++;
+  const cdf = new Float32Array(B); let acc = 0;
+  for (let b = 0; b < B; b++) { acc += hist[b]; cdf[b] = acc / n; }
+  for (let i = 0; i < n; i++) F[i] = cdf[((F[i] - mn) * k) | 0];
+}
+/** 이음매 없이 타일링되는 fBm 값 노이즈(M×M). px,py = 기본 주기(이방성 가능), octaves 마다 주기 2배. */
+function makeField(M, px, py, octaves, seed, gain, noEq) {
+  gain = gain || 0.5;
+  const F = new Float32Array(M * M); let amp = 1;
+  for (let o = 0; o < octaves; o++) {
+    const Px = px << o, Py = py << o, L = new Float32Array(Px * Py);
+    for (let j = 0; j < Py; j++) for (let i = 0; i < Px; i++) L[j * Px + i] = ihash(i, j, seed + o * 131);
+    for (let j = 0; j < M; j++) {
+      const y = (j / M) * Py, iy = Math.floor(y), ty = y - iy, sy = ty * ty * (3 - 2 * ty), y0 = iy % Py, y1 = (iy + 1) % Py;
+      for (let i = 0; i < M; i++) {
+        const x = (i / M) * Px, ix = Math.floor(x), tx = x - ix, sx = tx * tx * (3 - 2 * tx), x0 = ix % Px, x1 = (ix + 1) % Px;
+        const a = L[y0 * Px + x0], b = L[y0 * Px + x1], c = L[y1 * Px + x0], d = L[y1 * Px + x1];
+        F[j * M + i] += amp * (a + (b - a) * sx + (c - a) * sy + (a - b - c + d) * sx * sy);
+      }
+    }
+    amp *= gain;
+  }
+  if (!noEq) equalize(F);
+  return F;
+}
+/** 필드 샘플러(C1 연속 보간, wrap). */
+function sampleField(F, M, u, v) {
+  const x = u * M, y = v * M; let ix = Math.floor(x), iy = Math.floor(y);
+  const tx = x - ix, ty = y - iy, sx = tx * tx * (3 - 2 * tx), sy = ty * ty * (3 - 2 * ty);
+  ix = ((ix % M) + M) % M; iy = ((iy % M) + M) % M;
+  const ix1 = ix + 1 === M ? 0 : ix + 1, iy1 = iy + 1 === M ? 0 : iy + 1;
+  const a = F[iy * M + ix], b = F[iy * M + ix1], c = F[iy1 * M + ix], d = F[iy1 * M + ix1];
+  return a + (b - a) * sx + (c - a) * sy + (a - b - c + d) * sx * sy;
+}
+
+/* ============================================================================
+ * 1. 벽면 디테일 텍스처 세트 (D / R / H) — 콘크리트·석회암·벽돌·유리 먼지 4종을 채널에 패킹
+ *    R,G,B = 콘크리트, 석조, 벽돌   /   A = 유리(먼지 · 거칠기 · 빗방울 요철)
+ *    · D: 알베도 변조(0.5 = 중립)  · R: 거칠기  · H: 높이(범프)
+ *    무거운 노이즈 연산은 Canvas ImageData 버퍼에 직접 기록 → DataTexture 로 업로드한다
+ *    (알파가 데이터인 텍스처를 canvas 로 올리면 premultiply 로 값이 깨지기 때문)
+ * ========================================================================== */
+async function genDetailMaps(N, seed, onProgress) {
+  const M = 512;
+  const fLow = makeField(M, 4, 4, 5, seed + 11), fMid = makeField(M, 16, 16, 4, seed + 23),
+    fPit = makeField(M, 40, 40, 3, seed + 37), fCrk = makeField(M, 3, 3, 5, seed + 53),
+    fStk = makeField(M, 36, 3, 4, seed + 71), fStk2 = makeField(M, 80, 5, 3, seed + 91);
+  const cv = document.createElement('canvas'); cv.width = N; cv.height = 1;
+  const ctx = cv.getContext('2d');
+  const mkBuf = () => ctx.createImageData(N, N);             // Canvas ImageData 를 데이터 버퍼로 사용
+  const iD = mkBuf(), iR = mkBuf(), iH = mkBuf();
+  const D = iD.data, R = iR.data, H = iH.data;
+  const bead = Math.max(8, Math.round(N / 128)), nb = N / bead;   // 빗방울 격자(픽셀)
+  const rows = Math.max(4, Math.floor(260000 / N));
+  const S = sampleField;
+  for (let j0 = 0; j0 < N; j0 += rows) {
+    const j1 = Math.min(N, j0 + rows);
+    for (let j = j0; j < j1; j++) {
+      const v = j / N, strata = 0.5 + 0.5 * Math.sin(v * TAU * 22);
+      for (let i = 0; i < N; i++) {
+        const u = i / N, p = (j * N + i) * 4;
+        const A = S(fLow, M, u, v), B = S(fMid, M, u, v), C = S(fPit, M, u, v), K = S(fCrk, M, u, v);
+        const T = S(fStk, M, u, v), T2 = S(fStk2, M, u, v);
+        const g1 = ihash(i, j, 1), g2 = ihash(i, j, 2), g3 = ihash(i, j, 3);
+        // --- 콘크리트: 기공·골재 알갱이·미세 균열·얼룩
+        const pit = sstep(0.74, 0.88, C) * (0.45 + 0.55 * g2);
+        const crack = 1 - sstep(0.0, 0.007, Math.abs(K - 0.5));
+        const dc = 0.5 + 0.30 * (A - 0.5) + 0.16 * (B - 0.5) + 0.10 * (g1 - 0.5) - 0.34 * pit - 0.14 * crack + (g3 > 0.996 ? 0.22 : 0) - (g3 < 0.004 ? 0.2 : 0);
+        const hc = 0.5 + 0.30 * (B - 0.5) + 0.14 * (g1 - 0.5) - 0.34 * pit - 0.22 * crack;
+        const rc = 0.78 + 0.16 * (B - 0.5) + 0.12 * (g2 - 0.5) + 0.12 * pit;
+        // --- 석회암: 퇴적층 줄무늬 · 화석 반점 · 부드러운 얼룩
+        const fleck = (g3 > 0.9935 ? 1 : 0) * (0.6 + 0.4 * g1);
+        const ds = 0.5 + 0.26 * (A - 0.5) + 0.12 * (strata - 0.5) * (0.4 + A) + 0.12 * (B - 0.5) + 0.07 * (g1 - 0.5) - 0.22 * fleck - 0.18 * pit;
+        const hs = 0.5 + 0.20 * (B - 0.5) + 0.10 * (strata - 0.5) + 0.08 * (g1 - 0.5) - 0.28 * pit - 0.24 * fleck;
+        const rs = 0.62 + 0.18 * (B - 0.5) + 0.10 * (g2 - 0.5) + 0.10 * pit;
+        // --- 벽돌: 소성 점토 모래알 · 핀홀 · 그을음 번짐
+        const pitB = sstep(0.70, 0.86, C) * (0.5 + 0.5 * g2);
+        const db = 0.5 + 0.18 * (A - 0.5) + 0.26 * (g1 - 0.5) + 0.12 * (B - 0.5) - 0.24 * pitB + (g3 > 0.993 ? 0.18 : 0);
+        const hb = 0.5 + 0.34 * (g1 - 0.5) + 0.16 * (B - 0.5) - 0.28 * pitB;
+        const rb = 0.88 + 0.10 * (g2 - 0.5) + 0.10 * (B - 0.5);
+        // --- 유리: 세로 물때 줄무늬 · 먼지 · 빗방울(비드)
+        const st = sstep(0.52, 0.92, T), dust = sstep(0.55, 1.0, T2) * 0.5 + (g3 > 0.985 ? 0.25 : 0);
+        const dirt = clamp(st * (0.45 + 0.55 * A) * 0.85 + dust * 0.6, 0, 1);
+        let bh = 0;
+        { const ci = Math.floor(i / bead), cj = Math.floor(j / bead), e = ihash(ci, cj, 7);
+          if (e < 0.22) {
+            const cx = (0.30 + 0.40 * ihash(ci, cj, 8)) * bead, cy = (0.30 + 0.40 * ihash(ci, cj, 9)) * bead, rr = (0.10 + 0.16 * ihash(ci, cj, 10)) * bead;
+            const dx = (i % bead) - cx, dy = (j % bead) - cy, d2 = (dx * dx + dy * dy) / (rr * rr);
+            if (d2 < 1) bh = Math.sqrt(1 - d2);
+          } }
+        D[p] = dc * 255; D[p + 1] = ds * 255; D[p + 2] = db * 255; D[p + 3] = dirt * 255;
+        R[p] = rc * 255; R[p + 1] = rs * 255; R[p + 2] = rb * 255; R[p + 3] = (0.05 + 0.5 * dirt + 0.08 * (g1 - 0.5)) * 255;
+        H[p] = hc * 255; H[p + 1] = hs * 255; H[p + 2] = hb * 255; H[p + 3] = (0.5 + 0.42 * bh * (1 - 0.5 * dirt) + 0.06 * (g1 - 0.5)) * 255;
+      }
+    }
+    if (onProgress) onProgress(j1 / N);
+    await nextTick();
+  }
+  const mk = (img) => {
+    const t = new THREE.DataTexture(new Uint8Array(img.data.buffer), N, N, THREE.RGBAFormat, THREE.UnsignedByteType);
+    t.wrapS = t.wrapT = THREE.RepeatWrapping; t.magFilter = THREE.LinearFilter; t.minFilter = THREE.LinearMipmapLinearFilter;
+    t.generateMipmaps = true; t.anisotropy = 8; t.needsUpdate = true; return t;
+  };
+  return { D: mk(iD), R: mk(iR), H: mk(iH) };
+}
+
+/* ============================================================================
+ * 2. 범용 노이즈 텍스처(512²): R/A = 저주파 블롭(물웅덩이용), G = 중주파, B = 고주파 입자
+ * ========================================================================== */
+function genNoiseTexture(seed) {
+  const M = 512, a = makeField(M, 3, 3, 5, seed + 5), b = makeField(M, 8, 8, 5, seed + 17), c = makeField(M, 128, 128, 2, seed + 29, 0.6), d = makeField(M, 5, 5, 5, seed + 41);
+  const px = new Uint8Array(M * M * 4);
+  for (let i = 0; i < M * M; i++) { px[i * 4] = a[i] * 255; px[i * 4 + 1] = b[i] * 255; px[i * 4 + 2] = c[i] * 255; px[i * 4 + 3] = d[i] * 255; }
+  const t = new THREE.DataTexture(px, M, M, THREE.RGBAFormat, THREE.UnsignedByteType);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping; t.magFilter = THREE.LinearFilter; t.minFilter = THREE.LinearMipmapLinearFilter;
+  t.generateMipmaps = true; t.anisotropy = 4; t.needsUpdate = true; return t;
+}
+
+/* ============================================================================
+ * 3. 파사드 시트 — 수천 개의 창문 격자 + 실내조명 랜덤 점등 (Canvas 2D 로 직접 그림)
+ *    cols×rows 개 창(기본 32×64 = 2048 개). Diffuse / Emissive 는 항상, Roughness / Bump 는 full 일 때.
+ *    Roughness 패킹: R = 클리어코트(유리) 마스크, G = 거칠기, B = 금속성  (three 의 roughnessMap=G, metalnessMap=B, clearcoatMap=R)
+ * ========================================================================== */
+function genFacadeSheet(cols, rows, cell, seed, full) {
+  const W = cols * cell, Hh = rows * cell;
+  const mk = () => { const c = document.createElement('canvas'); c.width = W; c.height = Hh; return c; };
+  const cvD = mk(), cvE = mk(), cvR = full ? mk() : null, cvH = full ? mk() : null;
+  const gD = cvD.getContext('2d'), gE = cvE.getContext('2d'), gR = full ? cvR.getContext('2d') : null, gH = full ? cvH.getContext('2d') : null;
+  gD.fillStyle = '#a19e98'; gD.fillRect(0, 0, W, Hh);
+  gE.fillStyle = '#000'; gE.fillRect(0, 0, W, Hh);
+  if (full) { gR.fillStyle = 'rgb(0,222,0)'; gR.fillRect(0, 0, W, Hh); gH.fillStyle = 'rgb(140,140,140)'; gH.fillRect(0, 0, W, Hh); }
+  const rd = rng(seed ^ 0x9e3779b9);
+  const lights = [[255, 196, 118], [255, 196, 118], [255, 196, 118], [255, 238, 214], [255, 238, 214], [172, 210, 255], [90, 128, 255], [255, 170, 90]];
+  // 층(행)마다 점등 확률이 조금씩 달라서 "불 켜진 층 / 꺼진 층" 이 자연스럽게 생김
+  const rowLit = []; for (let r = 0; r < rows; r++) rowLit.push(0.18 + 0.38 * ihash(r, 3, seed));
+  for (let iy = 0; iy < rows; iy++) for (let ix = 0; ix < cols; ix++) {
+    const x0 = ix * cell, y0 = iy * cell, r1 = ihash(ix, iy, seed + 1), r2 = ihash(ix, iy, seed + 2), r3 = ihash(ix, iy, seed + 3), r4 = ihash(ix, iy, seed + 4), r5 = ihash(ix, iy, seed + 5);
+    const wx = x0 + cell * 0.20, ww = cell * 0.60, wy = y0 + cell * 0.17, wh = cell * 0.58, fr = Math.max(1, cell / 18);
+    // ----- Diffuse
+    const tone = 150 + 28 * (r1 - 0.5) * 2;
+    gD.fillStyle = `rgb(${tone | 0},${(tone - 3) | 0},${(tone - 8) | 0})`; gD.fillRect(x0, y0, cell, cell);
+    gD.fillStyle = 'rgba(0,0,0,0.12)'; gD.fillRect(x0, y0 + cell * 0.80, cell, cell * 0.20);            // 스팬드럴(층간 띠)
+    gD.fillStyle = 'rgba(255,255,255,0.10)'; gD.fillRect(x0, y0 + cell * 0.78, cell, Math.max(1, cell / 28));   // 코니스 하이라이트
+    gD.fillStyle = '#d9d6cf'; gD.fillRect(wx - fr, wy - fr, ww + 2 * fr, wh + 2 * fr);                     // 창틀
+    const gg = gD.createLinearGradient(0, wy, 0, wy + wh);
+    gg.addColorStop(0, `rgb(${(78 + 28 * r2) | 0},${(98 + 24 * r2) | 0},${(120 + 20 * r2) | 0})`); gg.addColorStop(1, 'rgb(18,24,34)');
+    gD.fillStyle = gg; gD.fillRect(wx, wy, ww, wh);
+    const blind = r3 < 0.26, bf = 0.2 + 0.7 * r4;
+    if (blind) { gD.fillStyle = `rgb(${(176 + 20 * r5) | 0},${(160 + 18 * r5) | 0},${(130 + 14 * r5) | 0})`; gD.fillRect(wx, wy, ww, wh * bf); }
+    if (r5 < 0.5) { gD.fillStyle = '#cfccc4'; gD.fillRect(wx + ww / 2 - fr / 2, wy, fr, wh); }               // 중간 문설주
+    gD.fillStyle = '#bdb9b0'; gD.fillRect(wx - fr * 1.5, wy + wh + fr, ww + fr * 3, Math.max(1, fr * 1.3));   // 창대(sill)
+    // ----- Emissive (켜진 방)
+    if (r3 > 0.26 || blind) {
+      const lit = ihash(ix, iy, seed + 6) < rowLit[iy];
+      if (lit) {
+        const L = lights[(ihash(ix, iy, seed + 7) * lights.length) | 0], k = 0.35 + 0.65 * ihash(ix, iy, seed + 8);
+        const top = blind ? wy + wh * bf : wy, hh = blind ? wh * (1 - bf) : wh;
+        const rg = gE.createRadialGradient(wx + ww * (0.3 + 0.4 * r2), top + hh * 0.15, 1, wx + ww / 2, top + hh * 0.5, Math.max(ww, hh) * 0.8);
+        rg.addColorStop(0, `rgb(${(L[0] * k) | 0},${(L[1] * k) | 0},${(L[2] * k) | 0})`);
+        rg.addColorStop(1, `rgb(${(L[0] * k * 0.45) | 0},${(L[1] * k * 0.45) | 0},${(L[2] * k * 0.45) | 0})`);
+        gE.fillStyle = rg; gE.fillRect(wx, top, ww, hh);
+        gE.fillStyle = '#000'; if (r5 < 0.5) gE.fillRect(wx + ww / 2 - fr / 2, wy, fr, wh);
+      }
+    }
+    if (full) {
+      gR.fillStyle = 'rgb(0,225,0)'; gR.fillRect(x0, y0, cell, cell);
+      gR.fillStyle = 'rgb(0,120,200)'; gR.fillRect(wx - fr, wy - fr, ww + 2 * fr, wh + 2 * fr);              // 알루미늄 창틀: 금속성
+      gR.fillStyle = 'rgb(255,16,0)'; gR.fillRect(wx, wy, ww, wh);                                              // 유리: 클리어코트 + 매끈
+      if (blind) { gR.fillStyle = 'rgb(0,200,0)'; gR.fillRect(wx, wy, ww, wh * bf); }
+      gH.fillStyle = 'rgb(205,205,205)'; gH.fillRect(wx - fr, wy - fr, ww + 2 * fr, wh + 2 * fr);
+      gH.fillStyle = 'rgb(84,84,84)'; gH.fillRect(wx, wy, ww, wh);
+      gH.fillStyle = 'rgb(176,176,176)'; gH.fillRect(wx - fr * 1.5, wy + wh + fr, ww + fr * 3, Math.max(1, fr * 1.3));
+    }
+  }
+  // 콘크리트 입자감(캔버스 위 미세 점)
+  gD.globalAlpha = 0.07;
+  for (let i = 0; i < W * Hh / 60; i++) { gD.fillStyle = rd() < 0.5 ? '#000' : '#fff'; gD.fillRect(rd() * W, rd() * Hh, 1, 1); }
+  gD.globalAlpha = 1;
+  return { D: cvD, E: cvE, R: cvR, H: cvH, windowCount: cols * rows };
+}
+
+/* ============================================================================
+ * 4. 실내 조명 아틀라스(4×4 = 16 종 방) — 켜진 창 안의 조명 패턴(램프·TV·형광등·커튼·네온…)
+ * ========================================================================== */
+function genRoomAtlas(S, seed) {
+  const cv = document.createElement('canvas'); cv.width = cv.height = S * 4;
+  const g = cv.getContext('2d'); g.fillStyle = '#000'; g.fillRect(0, 0, cv.width, cv.height);
+  const rd = rng(seed ^ 0x51ed270b);
+  const rgb = (r, gg, b, k) => `rgb(${(r * k) | 0},${(gg * k) | 0},${(b * k) | 0})`;
+  const radial = (x, y, r0, r1, c0, c1) => { const q = g.createRadialGradient(x, y, r0, x, y, r1); q.addColorStop(0, c0); q.addColorStop(1, c1); return q; };
+  const painters = [
+    (x, y) => { g.fillStyle = radial(x + S * .5, y + S * .12, 2, S * .9, rgb(255, 205, 130, 1), rgb(70, 45, 22, 1)); g.fillRect(x, y, S, S); },                                   // 0 따뜻한 천장등
+    (x, y) => { g.fillStyle = rgb(60, 40, 22, 1); g.fillRect(x, y, S, S); g.fillStyle = radial(x + S * .22, y + S * .68, 2, S * .5, rgb(255, 220, 150, 1), 'rgba(0,0,0,0)'); g.fillRect(x, y, S, S); }, // 1 스탠드 램프
+    (x, y) => { g.fillStyle = rgb(18, 20, 30, 1); g.fillRect(x, y, S, S); g.fillStyle = radial(x + S * .5, y + S * .72, 4, S * .55, rgb(110, 150, 255, 1), 'rgba(0,0,0,0)'); g.fillRect(x, y, S, S); },   // 2 TV 블루
+    (x, y) => { g.fillStyle = radial(x + S * .5, y + S * .4, 2, S * .8, rgb(255, 190, 120, 1), rgb(60, 36, 20, 1)); g.fillRect(x, y, S, S); g.fillStyle = 'rgba(0,0,0,0.5)';
+      for (let i = 0; i < 9; i++) g.fillRect(x + i * S / 9, y, S / 22, S); },                                                                                                     // 3 커튼 주름
+    (x, y) => { g.fillStyle = rgb(190, 215, 240, 1); g.fillRect(x, y, S, S); g.strokeStyle = 'rgba(0,0,0,0.45)'; g.lineWidth = 2; for (let i = 1; i < 4; i++) { g.beginPath(); g.moveTo(x + i * S / 4, y); g.lineTo(x + i * S / 4, y + S * .6); g.stroke(); }
+      g.fillStyle = 'rgba(0,0,0,0.78)'; g.fillRect(x, y + S * .66, S, S * .34); },                                                                                                  // 4 사무실 형광등
+    (x, y) => { g.fillStyle = rgb(70, 48, 30, 1); g.fillRect(x, y, S, S); },                                                                                                       // 5 어두운 복도
+    (x, y) => { g.fillStyle = rgb(235, 230, 215, 1); g.fillRect(x, y, S, S); g.fillStyle = 'rgba(0,0,0,0.35)'; g.fillRect(x, y + S * .75, S, S * .25); },                              // 6 주방 밝은 조명
+    (x, y) => { const q = g.createLinearGradient(x, y, x + S, y + S); q.addColorStop(0, rgb(255, 40, 160, 1)); q.addColorStop(1, rgb(30, 200, 255, 1)); g.fillStyle = q; g.fillRect(x, y, S, S); }, // 7 바 네온
+    (x, y) => { g.fillStyle = rgb(255, 214, 150, 1); g.fillRect(x, y, S, S); g.fillStyle = 'rgba(0,0,0,0.65)'; for (let i = 0; i < 9; i++) g.fillRect(x, y + i * S / 9, S, S / 22); },       // 8 블라인드
+    (x, y) => { g.fillStyle = rgb(36, 54, 38, 1); g.fillRect(x, y, S, S); g.fillStyle = radial(x + S * .8, y + S * .3, 2, S * .4, rgb(200, 240, 180, 1), 'rgba(0,0,0,0)'); g.fillRect(x, y, S, S); }, // 9 화분/녹색 조명
+    (x, y) => { g.fillStyle = rgb(44, 30, 20, 1); g.fillRect(x, y, S, S); },                                                                                                       // 10 침실(아주 어둡게)
+    (x, y) => { g.fillStyle = rgb(30, 22, 16, 1); g.fillRect(x, y, S, S); [.25, .75].forEach(f => { g.fillStyle = radial(x + S * f, y + S * .35, 2, S * .42, rgb(255, 210, 140, 1), 'rgba(0,0,0,0)'); g.fillRect(x, y, S, S); }); }, // 11 두 개의 조명
+    (x, y) => { g.fillStyle = rgb(8, 14, 20, 1); g.fillRect(x, y, S, S); for (let i = 0; i < 60; i++) { g.fillStyle = rd() < .5 ? rgb(60, 255, 130, 1) : rgb(90, 160, 255, 1); g.fillRect(x + rd() * S, y + rd() * S, 3, 3); } },        // 12 서버룸
+    (x, y) => { g.fillStyle = rgb(30, 34, 40, 1); g.fillRect(x, y, S, S); g.fillStyle = rgb(230, 235, 245, 1); g.fillRect(x + S * .42, y, S * .16, S); },                              // 13 계단실(세로 빛)
+    (x, y) => { g.fillStyle = rgb(250, 248, 240, 1); g.fillRect(x, y, S, S); g.fillStyle = 'rgba(0,0,0,0.4)'; for (let i = 1; i < 4; i++) g.fillRect(x, y + i * S / 4, S, 3); },        // 14 매장 쇼케이스
+    (x, y) => { g.fillStyle = rgb(14, 12, 12, 1); g.fillRect(x, y, S, S); }                                                                                                        // 15 거의 꺼진 방
+  ];
+  painters.forEach((fn, i) => {
+    const x = (i % 4) * S, y = Math.floor(i / 4) * S; g.save(); g.beginPath(); g.rect(x, y, S, S); g.clip(); fn(x, y);
+    g.fillStyle = '#000'; const b = Math.max(2, S / 32); g.fillRect(x, y, S, b); g.fillRect(x, y + S - b, S, b); g.fillRect(x, y, b, S); g.fillRect(x + S - b, y, b, S);   // 블리딩 방지 테두리
+    g.restore();
+  });
+  return cv;
+}
+
+/* ============================================================================
+ * 5. 아스팔트 (D / R / H) — 골재 알갱이 · 타르 패치 · 타이어 자국 · 균열 (createAsphaltMaterial 용)
+ * ========================================================================== */
+function genAsphalt(S, seed) {
+  const mk = () => { const c = document.createElement('canvas'); c.width = c.height = S; return c; };
+  const cD = mk(), cR = mk(), cH = mk(), gD = cD.getContext('2d'), gR = cR.getContext('2d'), gH = cH.getContext('2d');
+  const rd = rng(seed ^ 0xa5a5a5);
+  gD.fillStyle = 'rgb(54,55,58)'; gD.fillRect(0, 0, S, S); gR.fillStyle = 'rgb(0,225,0)'; gR.fillRect(0, 0, S, S); gH.fillStyle = 'rgb(128,128,128)'; gH.fillRect(0, 0, S, S);
+  const wrapDraw = (fn) => { for (const ox of [-S, 0, S]) for (const oy of [-S, 0, S]) fn(ox, oy); };   // 타일링을 위한 9방향 래핑
+  for (let i = 0; i < S * S / 14; i++) {                                   // 골재 알갱이
+    const x = rd() * S, y = rd() * S, v = 30 + rd() * 95, s = 1 + rd() * 2.2, l = rd();
+    gD.fillStyle = `rgba(${v | 0},${v | 0},${(v + 4) | 0},${0.45 + 0.4 * rd()})`; gD.fillRect(x, y, s, s);
+    gH.fillStyle = `rgba(${(128 + (l - .5) * 150) | 0},0,0,0)`; gH.fillStyle = `rgb(${(l * 255) | 0},${(l * 255) | 0},${(l * 255) | 0})`; gH.globalAlpha = 0.6; gH.fillRect(x, y, s, s); gH.globalAlpha = 1;
+    gR.fillStyle = `rgb(0,${(200 + 55 * rd()) | 0},0)`; gR.globalAlpha = 0.5; gR.fillRect(x, y, s, s); gR.globalAlpha = 1;
+  }
+  for (let i = 0; i < 24; i++) {                                           // 타르 보수 패치
+    const x = rd() * S, y = rd() * S, w = S * (0.05 + 0.12 * rd()), h = S * (0.03 + 0.1 * rd());
+    wrapDraw((ox, oy) => { gD.fillStyle = `rgba(20,20,22,${0.18 + 0.2 * rd()})`; gD.fillRect(x + ox, y + oy, w, h); gR.fillStyle = 'rgba(0,150,0,0.35)'; gR.fillRect(x + ox, y + oy, w, h); });
+  }
+  for (const f of [0.30, 0.68]) wrapDraw((ox) => { const g = gD.createLinearGradient(S * f + ox - 22, 0, S * f + ox + 22, 0); g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(0.5, 'rgba(0,0,0,0.20)'); g.addColorStop(1, 'rgba(0,0,0,0)'); gD.fillStyle = g; gD.fillRect(S * f + ox - 22, 0, 44, S); });   // 타이어 자국
+  gD.strokeStyle = 'rgba(8,8,9,0.7)'; gH.strokeStyle = 'rgb(30,30,30)'; gD.lineWidth = 1.2; gH.lineWidth = 2;
+  for (let i = 0; i < 7; i++) {                                            // 균열
+    let x = rd() * S, y = rd() * S; gD.beginPath(); gH.beginPath(); gD.moveTo(x, y); gH.moveTo(x, y);
+    for (let k = 0; k < 16; k++) { x += (rd() - 0.5) * S * 0.05; y += rd() * S * 0.05; gD.lineTo(x, y); gH.lineTo(x, y); }
+    gD.stroke(); gH.stroke();
+  }
+  return { D: cD, R: cR, H: cH };
+}
+
+const TEX = { genDetailMaps, genNoiseTexture, genFacadeSheet, genRoomAtlas, genAsphalt, makeField, sampleField, ihash, rng };
+
+/* ============================================================================
+ * 6. GLSL 조각들
+ * ========================================================================== */
+const GLSL = {};
+
+/* ---- 하늘 돔 (HDR 선형 출력; 톤매핑은 후처리 Grade 패스에서) ---- */
+GLSL.skyVS = `varying vec3 vDir; void main(){ vDir = position; vec4 p = projectionMatrix * modelViewMatrix * vec4(position,1.0); gl_Position = p.xyww; }`;
+GLSL.skyFS = `varying vec3 vDir;
+uniform vec3 uZenith, uHorizon, uSunDir, uSunColor;
+uniform float uTime, uCover, uDark, uSunI, uNight, uGlow;
+float h21(vec2 p){ p = fract(p*vec2(123.34,456.21)); p += dot(p,p+45.32); return fract(p.x*p.y); }
+float vn(vec2 p){ vec2 i=floor(p), f=fract(p); f=f*f*(3.0-2.0*f);
+  return mix(mix(h21(i),h21(i+vec2(1,0)),f.x), mix(h21(i+vec2(0,1)),h21(i+vec2(1,1)),f.x), f.y); }
+float fbm(vec2 p){ float a=0.5,s=0.0; for(int i=0;i<5;i++){ s+=a*vn(p); p=p*2.03+vec2(17.1,9.2); a*=0.5; } return s; }
+void main(){
+  vec3 d = normalize(vDir);
+  float up = clamp(d.y, 0.0, 1.0);
+  vec3 sky = mix(uHorizon, uZenith, pow(up, 0.5));
+  sky = mix(sky, uHorizon * 0.85, smoothstep(0.0, -0.2, d.y));
+  float sd = max(dot(d, uSunDir), 0.0);
+  float clear = 1.0 - uCover;
+  sky += uSunColor * (pow(sd, 900.0) * 4.0 + pow(sd, 28.0) * 0.32) * uSunI * clear;
+  if (d.y > -0.02) {
+    vec2 cp = d.xz / (max(d.y, 0.0) + 0.16) * 1.1 + vec2(uTime * 0.006, uTime * 0.0035);
+    float n = 0.62 * fbm(cp * 1.25) + 0.38 * fbm(cp * 3.3 + 7.0);
+    float lo = mix(0.60, 0.18, uCover), hi = mix(0.88, 0.66, uCover);
+    float c = smoothstep(lo, hi, n) * smoothstep(-0.02, 0.10, d.y);
+    float thick = smoothstep(lo, hi + 0.1, n);
+    vec3 lit = uHorizon * mix(1.12, 0.92, uCover) + uSunColor * uSunI * 0.10 * clear * (0.4 + 0.6 * pow(sd, 3.0));
+    vec3 shade = mix(uHorizon, uZenith, 0.35) * mix(0.55, 0.32, uDark);
+    vec3 cc = mix(lit, shade, clamp(thick * (0.35 + 0.6 * uDark), 0.0, 1.0));
+    sky = mix(sky, cc, c * mix(0.5, 0.97, uCover));
+  }
+  sky = mix(sky, mix(uHorizon, uZenith, 0.3) * mix(1.0, 0.7, uDark), uCover * 0.30 * smoothstep(-0.1, 0.5, d.y));
+  float st = step(0.9965, h21(floor(d.xz / (d.y + 0.35) * 220.0))) * smoothstep(0.1, 0.5, d.y);
+  sky += vec3(0.9, 0.95, 1.0) * st * uNight * (1.0 - uCover) * 0.6;
+  sky += vec3(0.9, 0.5, 0.25) * uGlow * uNight * exp(-max(d.y, 0.0) * 5.5) * (0.35 + 0.65 * uCover);   // 도시 광해(구름에 반사)
+  gl_FragColor = vec4(sky, 1.0);
+}`;
+
+/* ---- 환경맵용 스카이라인 상자 (창문 격자 + 야간 점등 + FogExp2) ---- */
+GLSL.cityVS = `varying vec2 vUv; varying vec3 vW; varying float vSeed; attribute float aSeed;
+void main(){ vUv = uv; vSeed = aSeed;
+#ifdef USE_INSTANCING
+  vec4 wp = modelMatrix * instanceMatrix * vec4(position,1.0);
+#else
+  vec4 wp = modelMatrix * vec4(position,1.0);
+#endif
+  vW = wp.xyz; gl_Position = projectionMatrix * viewMatrix * wp; }`;
+GLSL.cityFS = `varying vec2 vUv; varying vec3 vW; varying float vSeed;
+uniform sampler2D tWin; uniform vec3 uFog; uniform float uFogD, uDay, uWall; uniform vec3 uCam;
+void main(){
+  vec2 uv = vec2(vUv.x * (3.0 + floor(vSeed * 5.0)), vUv.y * (4.0 + floor(fract(vSeed * 7.0) * 12.0)));
+  vec3 w = texture2D(tWin, uv).rgb;
+  float lum = dot(w, vec3(0.333));
+  vec3 wall = vec3(0.30, 0.31, 0.33) * (0.7 + 0.6 * fract(vSeed * 13.0)) * uWall;
+  vec3 c = wall * uDay + wall * 0.05 + w * (1.0 - uDay) * 2.2 * step(0.55, lum);
+  c = mix(c, c * 0.25 + vec3(0.02, 0.03, 0.05) * uWall, smoothstep(0.30, 0.0, lum) * 0.5 * uDay);
+  float dist = length(vW - uCam);
+  float f = 1.0 - exp(-uFogD * uFogD * dist * dist);
+  gl_FragColor = vec4(mix(c, uFog, clamp(f, 0.0, 1.0)), 1.0);
+}`;
+
+/* ---- 비 줄기(선분) ---- */
+GLSL.rainVS = `attribute vec3 aRnd; uniform float uTime, uInt; uniform vec3 uCam; uniform vec3 uBox; varying float vA;
+void main(){
+  float spd = 24.0 + 10.0 * aRnd.z;
+  vec3 p = aRnd * uBox;
+  p.y = mod(p.y - uTime * spd, uBox.y);
+  p.x = mod(p.x + uTime * 2.2 * aRnd.z, uBox.x);
+  vec3 c = uCam - uBox * 0.5;
+  vec3 w = c + p; w.x = c.x + mod(p.x, uBox.x); w.z = c.z + mod(p.z, uBox.z);
+  float tip = position.y;                         // 0 = 꼬리, 1 = 머리
+  w.y += tip * 0.9; w.x += tip * 0.12;
+  vA = (0.10 + 0.35 * aRnd.y) * uInt * (0.35 + 0.65 * tip);
+  gl_Position = projectionMatrix * viewMatrix * vec4(w, 1.0);
+}`;
+GLSL.rainFS = `varying float vA; void main(){ gl_FragColor = vec4(vec3(0.75, 0.82, 0.92) * 1.6, vA); }`;
+
+/* ---- 공용: 물웅덩이(불규칙) / 파문 / 표면 변위 — 도로 머티리얼 & SSR 패스가 같은 함수를 쓴다 ---- */
+GLSL.wetCommon = `
+uniform sampler2D tRceN; uniform float uRceWet, uRcePud, uRceRain, uRceTime;
+float rceH(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+// 서로 약수가 아닌 3개 스케일 + 도메인 워프 → 반복 패턴이 사실상 없는 유기적 랜덤 웅덩이
+float rcePuddle(vec2 p){
+  vec4 a = texture2D(tRceN, p * (1.0 / 137.0));
+  vec4 b = texture2D(tRceN, p * (1.0 / 43.7) + vec2(0.37, 0.71) + (a.rg - 0.5) * 0.22);
+  vec4 c = texture2D(tRceN, p * (1.0 / 12.9) + vec2(0.13, 0.52) + (b.ba - 0.5) * 0.12);
+  float n = a.r * 0.46 + b.g * 0.34 + c.a * 0.20;
+  float thr = mix(1.02, 0.60, clamp(uRcePud, 0.0, 1.0));
+  return smoothstep(thr, thr + 0.06, n);
+}
+vec2 rceRipple(vec2 p, float t, float rain){
+  vec2 g = vec2(0.0);
+  for (int k = 0; k < 2; k++) {
+    vec2 q = p * (1.15 + 0.7 * float(k)) + float(k) * 17.3, id = floor(q), f = fract(q) - 0.5;
+    float h = rceH(id + float(k) * 3.1), ph = fract(t * (0.8 + 0.4 * h) + h);
+    vec2 c = (vec2(rceH(id + 1.7), rceH(id + 3.1)) - 0.5) * 0.5;
+    vec2 dv = f - c; float d = length(dv) + 1e-4, r = ph * 0.48;
+    float ring = sin((d - r) * 48.0) * smoothstep(0.07, 0.0, abs(d - r)) * (1.0 - ph) * step(h, rain);
+    g += dv / d * ring;
+  }
+  return g;
+}`;
+
+/* ---- 도로/지면 머티리얼 패치 조각 ---- */
+GLSL.groundVSDecl = `varying vec3 vRceW;`;
+GLSL.groundVSBody = `vRceW = (modelMatrix * vec4(transformed, 1.0)).xyz;`;
+GLSL.groundFSDecl = `varying vec3 vRceW; uniform float uRceOn, uRceSSR, uRceEnvK, uRceGroundY; uniform samplerCube tRceEnv;
+float rceP_ = 0.0, rceWk_ = 0.0;
+` + GLSL.wetCommon;
+GLSL.groundColor = `
+rceP_ = 0.0; rceWk_ = 0.0;
+if (uRceOn > 0.5 && uRceWet > 0.01) {
+  float pf = RCE_PUD;
+  rceP_ = rcePuddle(vRceW.xz) * pf;
+  float lumA = dot(diffuseColor.rgb, vec3(0.299, 0.587, 0.114));
+  float paint = smoothstep(0.30, 0.55, lumA);
+  rceWk_ = uRceWet;
+  diffuseColor.rgb *= mix(1.0, 0.50, uRceWet * (1.0 - 0.5 * paint)) * mix(1.0, 0.62, rceP_);
+}`;
+GLSL.groundRough = `
+if (rceWk_ > 0.0) {
+  float nh = texture2D(tRceN, vRceW.xz * 0.9).b;
+  float wetR = mix(0.30 + 0.10 * (nh - 0.5), 0.025, rceP_);
+  roughnessFactor = mix(roughnessFactor, wetR, rceWk_ * (0.55 + 0.45 * rceP_));
+}`;
+GLSL.groundNormal = `
+if (rceWk_ > 0.0) {
+  // 미세 노이즈 범프(젖은 아스팔트) — 화면 미분 기반 표면 그래디언트
+  float hN = texture2D(tRceN, vRceW.xz * 2.3).b * 0.55 + texture2D(tRceN, vRceW.xz * 7.1).b * 0.45;
+  vec3 sp = -vViewPosition; vec3 sx = dFdx(sp), sy = dFdy(sp);
+  vec3 rnA = cross(sy, normal), rnB = cross(normal, sx); float det = dot(sx, rnA);
+  vec3 grad = sign(det) * (dFdx(hN) * rnA + dFdy(hN) * rnB);
+  normal = normalize(abs(det) * normal - 0.0022 * (1.0 - rceP_) * grad);
+  // 웅덩이: 수면은 평평 + 비 오는 동안 파문
+  vec3 upV = normalize((viewMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xyz);
+  normal = normalize(mix(normal, upV, rceP_ * 0.92));
+  vec2 rp = rceRipple(vRceW.xz, uRceTime, uRceRain) * rceP_ * 0.55;
+  vec3 gv = (viewMatrix * vec4(rp.x, 0.0, rp.y, 0.0)).xyz;
+  normal = normalize(normal - gv);
+}`;
+GLSL.groundEmissive = `
+if (rceWk_ > 0.0) {
+  vec3 vd = normalize(vViewPosition);
+  vec3 Rw = inverseTransformDirection(reflect(-vd, normal), viewMatrix);
+  float ndv = clamp(dot(normal, vd), 0.0, 1.0);
+  float F = 0.03 + 0.97 * pow(1.0 - ndv, 5.0);
+  vec3 env = textureCube(tRceEnv, Rw, roughnessFactor * 7.0).rgb * uRceEnvK;
+  float k = mix(0.30, 1.0, rceP_) * rceWk_ * mix(1.0, 0.5, uRceSSR);
+  totalEmissiveRadiance += env * F * k * (1.0 + 2.0 * rceP_);
+}`;
+
+/* ---- SSR 패스: 지면(젖은 노면)에 한정한 스크린스페이스 반사 ---- */
+GLSL.ssrVS = `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
+GLSL.ssrFS = `varying vec2 vUv;
+uniform sampler2D tDiffuse, tNormal, tDepth;
+uniform mat4 uProj, uInvProj, uCamWorld, uView;
+uniform float uNear, uFar, uGroundY, uStrength, uMaxDist, uFadeFar;
+#include <packing>
+` + GLSL.wetCommon + `
+vec3 viewPos(vec2 uv, float d){ vec4 c = vec4(uv * 2.0 - 1.0, d * 2.0 - 1.0, 1.0); vec4 v = uInvProj * c; return v.xyz / v.w; }
+void main(){
+  vec4 base = texture2D(tDiffuse, vUv);
+  float d = texture2D(tDepth, vUv).x;
+  if (d >= 0.99999 || uRceWet < 0.03) { gl_FragColor = base; return; }
+  vec3 P = viewPos(vUv, d);
+  vec3 N = normalize(texture2D(tNormal, vUv).xyz * 2.0 - 1.0);
+  vec3 Pw = (uCamWorld * vec4(P, 1.0)).xyz;
+  vec3 upV = normalize((uView * vec4(0.0, 1.0, 0.0, 0.0)).xyz);
+  float gate = smoothstep(0.80, 0.95, dot(N, upV)) * (1.0 - smoothstep(1.2, 3.0, Pw.y - uGroundY)) * (1.0 - smoothstep(uFadeFar * 0.6, uFadeFar, -P.z));
+  if (gate < 0.01) { gl_FragColor = base; return; }
+  float pud = rcePuddle(Pw.xz);
+  float refl = mix(0.28, 1.0, pud) * uRceWet * gate * uStrength;
+  vec3 V = normalize(P), Rv = reflect(V, N);
+  float F = 0.03 + 0.97 * pow(1.0 - clamp(dot(N, -V), 0.0, 1.0), 5.0);
+  vec3 ray = P + N * 0.06; float stp = 0.35; vec2 hit = vec2(-1.0); float hitK = 0.0; float travelled = 0.0;
+  vec3 prev = ray;
+  for (int i = 0; i < 30; i++) {
+    prev = ray; ray += Rv * stp; travelled += stp; stp *= 1.17;
+    if (ray.z > -uNear || travelled > uMaxDist) break;
+    vec4 cp = uProj * vec4(ray, 1.0); vec2 uv = cp.xy / cp.w * 0.5 + 0.5;
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) break;
+    float sd = texture2D(tDepth, uv).x; if (sd >= 0.99999) continue;
+    float sz = -viewPos(uv, sd).z, rz = -ray.z;
+    if (rz > sz && rz - sz < max(0.45, rz * 0.05)) {
+      vec3 a = prev, b = ray;
+      for (int k = 0; k < 5; k++) { vec3 m = 0.5 * (a + b); vec4 mc = uProj * vec4(m, 1.0); vec2 mu = mc.xy / mc.w * 0.5 + 0.5;
+        float msd = texture2D(tDepth, mu).x; float msz = -viewPos(mu, msd).z; if (-m.z > msz) b = m; else a = m; }
+      vec4 hc = uProj * vec4(b, 1.0); hit = hc.xy / hc.w * 0.5 + 0.5;
+      float e = min(min(hit.x, 1.0 - hit.x), min(hit.y, 1.0 - hit.y));
+      hitK = smoothstep(0.0, 0.08, e) * (1.0 - travelled / uMaxDist);
+      break;
+    }
+  }
+  if (hitK > 0.0) {
+    float blur = (1.0 - pud) * 0.0045 * clamp(travelled * 0.08, 0.2, 1.5);
+    vec3 col = texture2D(tDiffuse, hit).rgb * 0.4;
+    col += texture2D(tDiffuse, hit + vec2(blur, 0.0)).rgb * 0.15 + texture2D(tDiffuse, hit - vec2(blur, 0.0)).rgb * 0.15;
+    col += texture2D(tDiffuse, hit + vec2(0.0, blur)).rgb * 0.15 + texture2D(tDiffuse, hit - vec2(0.0, blur)).rgb * 0.15;
+    base.rgb += min(col, vec3(12.0)) * F * refl * hitK * 1.6;
+  }
+  gl_FragColor = base;
+}`;
+
+/* ---- SSAO 합성: AO 를 거리 페이드/강도와 함께 곱연산 ---- */
+GLSL.aoApplyFS = `varying vec2 vUv; uniform sampler2D tAO, tDepth; uniform float uK, uNear, uFar, uF0, uF1;
+#include <packing>
+void main(){
+  float ao = texture2D(tAO, vUv).r; float d = texture2D(tDepth, vUv).x;
+  float z = -perspectiveDepthToViewZ(d, uNear, uFar);
+  float k = uK * (1.0 - smoothstep(uF0, uF1, z)) * step(d, 0.99999);
+  gl_FragColor = vec4(vec3(mix(1.0, ao, k)), 1.0);
+}`;
+
+
+/* ---- 레이 트레이싱 그림자 (1) 화면공간 레이마칭 접촉 그림자: 각 픽셀에서 태양 방향으로 실제 광선을 쏘아 깊이 버퍼와 교차 검사 ---- */
+GLSL.contactFS = `varying vec2 vUv; uniform sampler2D tDepth, tNormal; uniform mat4 uProj, uInvProj; uniform vec3 uSunVS;
+uniform float uNear, uFar, uK, uLen, uThick, uF0, uF1;
+#include <packing>
+float ignC(vec2 p){ return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715)))); }
+vec3 vposC(vec2 uv, float d){ vec4 c = uInvProj * vec4(uv * 2.0 - 1.0, d * 2.0 - 1.0, 1.0); return c.xyz / c.w; }
+void main(){
+  float d = texture2D(tDepth, vUv).x;
+  if (d >= 0.99999 || uK < 0.002) { gl_FragColor = vec4(1.0); return; }
+  vec3 p = vposC(vUv, d); float z = -p.z;
+  float fade = 1.0 - smoothstep(uF0, uF1, z);
+  vec3 n = normalize(texture2D(tNormal, vUv).xyz * 2.0 - 1.0);
+  float ndl = dot(n, uSunVS);
+  fade *= smoothstep(0.02, 0.35, ndl);                    // 이미 태양 반대편인 면은 건너뜀(이중 어두워짐 방지)
+  if (fade < 0.002) { gl_FragColor = vec4(1.0); return; }
+  float j = ignC(gl_FragCoord.xy), occ = 0.0, bias = 0.05 + 0.004 * z;
+  vec3 o = p + n * (0.03 + 0.002 * z);
+  for (int i = 0; i < RCE_CS_STEPS; i++) {
+    float t = (float(i) + j) / float(RCE_CS_STEPS);
+    vec3 q = o + uSunVS * (t * t * uLen + 0.04);            // 가까운 곳을 촘촘하게 샘플링
+    vec4 cl = uProj * vec4(q, 1.0);
+    vec2 uv = cl.xy / cl.w * 0.5 + 0.5;
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) break;
+    float sd = texture2D(tDepth, uv).x;
+    if (sd >= 0.99999) continue;
+    float diff = (-q.z) - (-perspectiveDepthToViewZ(sd, uNear, uFar));
+    if (diff > bias && diff < uThick + t * uLen * 0.6) occ = max(occ, 1.0 - 0.8 * t);   // 멀수록 옅어지는 반그림자
+  }
+  gl_FragColor = vec4(vec3(1.0 - uK * fade * occ), 1.0);
+}`;
+
+/* ---- 레이 트레이싱 그림자 (2) PCSS: 차폐물 탐색 → 수광면-차폐물 거리로 반그림자 폭 계산 → 가변 커널 필터 (그림자맵 광선 추적) ---- */
+GLSL.pcssBlock = (searchTaps, filterTaps, maxPen) => `#if defined( SHADOWMAP_TYPE_PCF )
+	{
+		vec3 sdx = dFdx( shadowCoord.xyz ); vec3 sdy = dFdy( shadowCoord.xyz );
+		float sdet = sdx.x * sdy.y - sdx.y * sdy.x;
+		vec2 slope = vec2( 0.0 );
+		if ( abs( sdet ) > 1e-14 ) {
+			slope = vec2( sdy.y * sdx.z - sdx.y * sdy.z, sdx.x * sdy.z - sdy.x * sdx.z ) / sdet;
+			slope = clamp( slope, vec2( -8.0 ), vec2( 8.0 ) );
+		}
+		vec2 texel = 1.0 / shadowMapSize;
+		float ang = 6.2831853 * fract( 52.9829189 * fract( dot( gl_FragCoord.xy, vec2( 0.06711056, 0.00583715 ) ) ) );
+		float blk = 0.0; float cnt = 0.0;
+		for ( int i = 0; i < ${searchTaps}; i ++ ) {
+			float fi = float( i );
+			float aa = fi * 2.399963 + ang;
+			vec2 o = vec2( cos( aa ), sin( aa ) ) * ( sqrt( ( fi + 0.5 ) / ${searchTaps}.0 ) * ${maxPen}.0 ) * texel;
+			float dd = unpackRGBAToDepth( texture2D( shadowMap, shadowCoord.xy + o ) );
+			float pz = dot( o, slope );
+			if ( dd < shadowCoord.z + pz ) { blk += dd - pz; cnt += 1.0; }
+		}
+		if ( cnt < 0.5 ) { shadow = 1.0; }
+		else {
+			float pen = clamp( shadowRadius * max( shadowCoord.z - blk / cnt, 0.0 ), 1.0, ${maxPen}.0 );
+			float lit = 0.0;
+			for ( int j = 0; j < ${filterTaps}; j ++ ) {
+				float fj = float( j );
+				float a2 = fj * 2.399963 + ang + 1.7;
+				vec2 o2 = vec2( cos( a2 ), sin( a2 ) ) * ( sqrt( ( fj + 0.5 ) / ${filterTaps}.0 ) * pen ) * texel;
+				lit += texture2DCompare( shadowMap, shadowCoord.xy + o2, shadowCoord.z + dot( o2, slope ) );
+			}
+			shadow = lit / ${filterTaps}.0;
+		}
+	}
+`;
+
+/* ---- 최종 그레이드: 노출 + ACESFilmic + 비네트/그레인/색수차 + 출력 인코딩 ---- */
+GLSL.gradeFS = `uniform sampler2D tDiffuse; uniform float uExposure, uVig, uGrain, uCA, uTime, uSat, uHDR; uniform vec2 uRes; varying vec2 vUv;
+const mat3 ACESIn = mat3(vec3(0.59719, 0.07600, 0.02840), vec3(0.35458, 0.90834, 0.13383), vec3(0.04823, 0.01566, 0.83777));
+const mat3 ACESOut = mat3(vec3(1.60475, -0.10208, -0.00327), vec3(-0.53108, 1.10813, -0.07276), vec3(-0.07367, -0.00605, 1.07602));
+vec3 RRT(vec3 v){ vec3 a = v * (v + 0.0245786) - 0.000090537; vec3 b = v * (0.983729 * v + 0.4329510) + 0.238081; return a / b; }
+vec3 aces(vec3 c){ c *= uExposure / 0.6; c = ACESIn * c; c = RRT(c); c = ACESOut * c; return clamp(c, 0.0, 1.0); }
+float h21(vec2 p){ p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+void main(){
+  vec2 c = vUv - 0.5; float r2 = dot(c, c);
+  vec3 col;
+  col.r = texture2D(tDiffuse, vUv + c * r2 * uCA).r; col.g = texture2D(tDiffuse, vUv).g; col.b = texture2D(tDiffuse, vUv - c * r2 * uCA).b;
+  col = uHDR > 0.5 ? aces(max(col, 0.0)) : col;
+  float l = dot(col, vec3(0.2126, 0.7152, 0.0722)); col = mix(vec3(l), col, uSat);
+  col *= 1.0 - uVig * smoothstep(0.12, 0.62, r2);
+  col += (h21(vUv * uRes + fract(uTime) * 91.7) - 0.5) * uGrain;
+  gl_FragColor = linearToOutputTexel(vec4(max(col, 0.0), 1.0));
+}`;
+
+/* ============================================================================
+ * 7. RealisticCityEnvironment
+ * ========================================================================== */
+const HAS = (n) => !!(THREE[n]);
+const lerpC = (a, b, t) => a.clone().lerp(b, t);
+
+class RealisticCityEnvironment {
+  /**
+   * @param {THREE.Scene} scene  @param {THREE.WebGLRenderer} renderer  @param {THREE.PerspectiveCamera} camera
+   * @param {object} [options]  RealisticCityEnvironment.DEFAULTS 참고
+   */
+  constructor(scene, renderer, camera, options) {
+    if (!scene || !renderer || !camera) throw new Error('[RealisticCityEnvironment] constructor(scene, renderer, camera) 가 모두 필요합니다.');
+    this.scene = scene; this.renderer = renderer; this.camera = camera;
+    const D = RealisticCityEnvironment.DEFAULTS, o = options || {};
+    this.opt = Object.assign({}, D, o, {
+      post: Object.assign({}, D.post, o.post), shadows: Object.assign({}, D.shadows, o.shadows), bloom: Object.assign({}, D.bloom, o.bloom),
+      ssao: Object.assign({}, D.ssao, o.ssao), ssr: Object.assign({}, D.ssr, o.ssr), grade: Object.assign({}, D.grade, o.grade),
+      rain: Object.assign({}, D.rain, o.rain)
+    });
+    this.ready = false; this.active = false; this.failed = false; this.time = 0;
+    this.state = { timeOfDay: this.opt.timeOfDay, overcast: 0.9, rain: 0, wetTarget: 0, wet: 0, pud: 0 };
+    this._wx = { overcast: 0.9, rain: 0 };       // 날씨 목표
+    this.tex = {}; this.materials = []; this._patched = new WeakSet();
+    this._W = 0; this._H = 0; this._envT = -99; this._envKey = ''; this._prev = null;
+    // 모든 패치된 셰이더가 공유하는 uniform 객체(값이 바뀌면 전부 즉시 반영)
+    this.U = {
+      uRceOn: { value: 0 }, uRceDetail: { value: 1 }, uRceReflK: { value: 1 }, uRceEnvK: { value: 1 }, uRceTile: { value: 1 / this.opt.tileMeters },
+      uRceTileM: { value: this.opt.tileMeters }, uRceFacadeTiles: { value: new THREE.Vector2(this.opt.facadeCols, this.opt.facadeRows) },
+      uRceWet: { value: 0 }, uRcePud: { value: 0 }, uRceRain: { value: 0 }, uRceTime: { value: 0 }, uRceSSR: { value: 0 }, uRceGroundY: { value: 0 },
+      tRceD: { value: null }, tRceR: { value: null }, tRceH: { value: null }, tRceE: { value: null }, tRceFD: { value: null }, tRceFE: { value: null },
+      tRceN: { value: null }, tRceEnv: { value: null }
+    };
+    this._missing = RealisticCityEnvironment.missingPostDeps();
+  }
+
+  static missingPostDeps() {
+    return ['EffectComposer', 'RenderPass', 'ShaderPass', 'UnrealBloomPass', 'SSAOPass', 'SSAOShader', 'SimplexNoise', 'CopyShader', 'LuminosityHighPassShader', 'FullScreenQuad'].filter(n => !THREE[n]);
+  }
+
+  /* --------------------------------------------------------------- init */
+  async init() {
+    const o = this.opt, r = this.renderer;
+    const prog = (p, msg) => { if (o.onProgress) try { o.onProgress(p, msg); } catch (e) {} };
+    // (5) 렌더러: ACESFilmic + PCFSoft 그림자 자동 세팅
+    r.toneMapping = THREE.ACESFilmicToneMapping;
+    if (!(r.toneMappingExposure > 0)) r.toneMappingExposure = 1.0;
+    if (o.forceShadows) { r.shadowMap.enabled = true; }
+    r.shadowMap.type = THREE.PCFSoftShadowMap;
+    this._findLights();
+    // FogExp2 (이미 있으면 재사용)
+    if (!this.scene.fog || !this.scene.fog.isFogExp2) this.scene.fog = new THREE.FogExp2(0x9aa3ad, 0.0011);
+    this.hdr = !!(o.post.hdr && (r.capabilities.isWebGL2 ? (r.extensions.has('EXT_color_buffer_float') || r.extensions.has('EXT_color_buffer_half_float')) : r.extensions.has('OES_texture_half_float')));
+    // (2) 텍스처
+    prog(0.02, '노이즈/파사드 텍스처');
+    this.tex.noise = TEX.genNoiseTexture(o.seed); this.U.tRceN.value = this.tex.noise; await nextTick();
+    const sheet = TEX.genFacadeSheet(o.facadeCols, o.facadeRows, o.facadeCellPx, o.seed, false);
+    this.tex.sheet = sheet; this.windowCount = sheet.windowCount;
+    this.tex.fD = this._canvasTex(sheet.D, true); this.tex.fE = this._canvasTex(sheet.E, true);
+    this.U.tRceFD.value = this.tex.fD; this.U.tRceFE.value = this.tex.fE; await nextTick();
+    this.tex.room = this._canvasTex(TEX.genRoomAtlas(256, o.seed), true); this.U.tRceE.value = this.tex.room; await nextTick();
+    prog(0.08, '벽면 디테일 텍스처(' + o.textureSize + '²)');
+    const det = await TEX.genDetailMaps(o.textureSize, o.seed, (p) => prog(0.08 + 0.55 * p, '벽면 디테일 텍스처'));
+    this.tex.detail = det; this.U.tRceD.value = det.D; this.U.tRceR.value = det.R; this.U.tRceH.value = det.H;
+    // (2-b) 하늘 + 환경 큐브맵
+    prog(0.7, '하늘/환경맵');
+    this._buildSky(); this._buildEnv();
+    if (o.rain.particles) this._buildRain();
+    this._updateAtmosphere(0, true); this._captureEnv(true);
+    // (5-b) 컴포저
+    prog(0.9, '후처리');
+    if (o.post.enabled) { if (this._missing.length) console.warn('[RCE] 후처리 비활성 — 누락 스크립트:', this._missing.join(', ')); else try { this._buildComposer(); } catch (e) { console.warn('[RCE] 컴포저 생성 실패', e); this.composer = null; } }
+    this.ready = true; prog(1, '완료');
+    if (o.autoEnable) this.enable();
+    return this;
+  }
+
+  _canvasTex(cv, srgbLike) {
+    const t = new THREE.CanvasTexture(cv); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = 8;
+    t.encoding = THREE.LinearEncoding; t.needsUpdate = true; return t;
+  }
+  _findLights() {
+    this.sun = this.opt.sunLight || null; this.hemi = this.opt.hemiLight || null;
+    this.scene.traverse(o => { if (!this.sun && o.isDirectionalLight) this.sun = o; if (!this.hemi && o.isHemisphereLight) this.hemi = o; });
+    this.ownLights = false;
+    if (this.opt.atmosphere === 'internal' && (!this.sun || !this.hemi)) {
+      this.ownLights = true;
+      if (!this.sun) { this.sun = new THREE.DirectionalLight(0xffffff, 1); this.sun.castShadow = true; this.sun.shadow.mapSize.set(2048, 2048); const c = this.sun.shadow.camera; c.left = c.bottom = -150; c.right = c.top = 150; c.near = 1; c.far = 1500; this.scene.add(this.sun, this.sun.target); }
+      if (!this.hemi) { this.hemi = new THREE.HemisphereLight(0xbfd0e0, 0x3a3630, 0.9); this.scene.add(this.hemi); }
+    }
+  }
+
+  /* -------------------------------------------------------- 하늘 / 환경 */
+  _buildSky() {
+    const mat = new THREE.ShaderMaterial({
+      vertexShader: GLSL.skyVS, fragmentShader: GLSL.skyFS, side: THREE.BackSide, depthWrite: false, depthTest: false, fog: false,
+      uniforms: { uZenith: { value: new THREE.Color(0.2, 0.25, 0.32) }, uHorizon: { value: new THREE.Color(0.6, 0.64, 0.68) }, uSunDir: { value: new THREE.Vector3(0, 1, 0) },
+        uSunColor: { value: new THREE.Color(1, 0.95, 0.85) }, uTime: { value: 0 }, uCover: { value: 0.9 }, uDark: { value: 0.5 }, uSunI: { value: 1 }, uNight: { value: 0 }, uGlow: { value: 0.35 } }
+    });
+    this.skyMat = mat;
+    this.sky = new THREE.Mesh(new THREE.SphereGeometry(1000, 32, 16), mat);
+    this.sky.frustumCulled = false; this.sky.renderOrder = -1000; this.sky.name = 'RCE_Sky'; this.sky.userData.rceSkip = true;
+    this.scene.add(this.sky);
+    // 환경 캡처용 복제(자체 uniform 공유)
+    this._envSky = new THREE.Mesh(new THREE.SphereGeometry(1000, 24, 12), mat);
+    this._envSky.frustumCulled = false; this._envSky.renderOrder = -1000;
+  }
+  _buildEnv() {
+    const o = this.opt, rd = TEX.rng(o.seed + 99);
+    // 스카이라인: 링 형태로 흩어진 고층 상자 + 창문 점등 텍스처
+    const win = document.createElement('canvas'); win.width = 128; win.height = 256; const g = win.getContext('2d'); g.fillStyle = '#000'; g.fillRect(0, 0, 128, 256);
+    for (let y = 0; y < 32; y++) for (let x = 0; x < 16; x++) if (rd() < 0.33) { const w = rd(); g.fillStyle = w < 0.6 ? '#ffc880' : w < 0.85 ? '#fff0dc' : '#a8d0ff'; g.fillRect(x * 8 + 1, y * 8 + 1, 5, 5); }
+    const wt = new THREE.CanvasTexture(win); wt.wrapS = wt.wrapT = THREE.RepeatWrapping; wt.magFilter = THREE.NearestFilter;
+    const N = o.envBuildings, geo = new THREE.BoxBufferGeometry(1, 1, 1), seeds = new Float32Array(N);
+    for (let i = 0; i < N; i++) seeds[i] = rd(); geo.setAttribute('aSeed', new THREE.InstancedBufferAttribute(seeds, 1));
+    this._cityMat = new THREE.ShaderMaterial({ vertexShader: GLSL.cityVS, fragmentShader: GLSL.cityFS, uniforms: { tWin: { value: wt }, uFog: { value: new THREE.Color() }, uFogD: { value: 0.001 }, uDay: { value: 1 }, uWall: { value: 1 }, uCam: { value: new THREE.Vector3() } } });
+    const im = new THREE.InstancedMesh(geo, this._cityMat, N), m = new THREE.Matrix4(), q = new THREE.Quaternion(), p = new THREE.Vector3(), s = new THREE.Vector3();
+    for (let i = 0; i < N; i++) {
+      const a = rd() * TAU, d = 120 + Math.pow(rd(), 0.7) * 1400, w = 18 + rd() * 55, h = 25 + Math.pow(rd(), 2.2) * 330 * (1.0 - d / 2400);
+      p.set(Math.cos(a) * d, h / 2 - 30, Math.sin(a) * d); s.set(w, h, w * (0.7 + 0.6 * rd())); q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), a + rd() * 0.5); m.compose(p, q, s); im.setMatrixAt(i, m);
+    }
+    im.frustumCulled = false;
+    this._envScene = new THREE.Scene(); this._envScene.add(this._envSky, im);
+    // 지면(어두운 원판)
+    const ground = new THREE.Mesh(new THREE.CircleBufferGeometry(2600, 32), new THREE.MeshBasicMaterial({ color: 0x15171a })); ground.rotation.x = -Math.PI / 2; ground.position.y = -30; this._envScene.add(ground); this._envGround = ground;
+    const type = this.hdr ? THREE.HalfFloatType : THREE.UnsignedByteType;
+    this.envRT = new THREE.WebGLCubeRenderTarget(o.envSize, { type, format: THREE.RGBAFormat, generateMipmaps: true, minFilter: THREE.LinearMipmapLinearFilter, magFilter: THREE.LinearFilter });
+    this.cubeCam = new THREE.CubeCamera(1, 4000, this.envRT);
+    this.envScale = this.hdr ? 1 : 0.5;
+    this.U.tRceEnv.value = this.envRT.texture;
+    try { this.pmrem = new THREE.PMREMGenerator(this.renderer); } catch (e) { this.pmrem = null; }
+  }
+  _captureEnv(force) {
+    const r = this.renderer, A = this._atm; if (!A) return;
+    const key = [Math.round(this.state.timeOfDay * 4), Math.round(this.state.overcast * 10), Math.round(this.state.wet * 4)].join('|');
+    if (!force && (key === this._envKey || this.time - this._envT < this.opt.envInterval)) return;
+    this._envKey = key; this._envT = this.time;
+    const cm = this._cityMat.uniforms; cm.uFog.value.copy(A.fogColor); cm.uFogD.value = Math.max(0.0006, A.fogDensity * 0.9); cm.uDay.value = A.day; cm.uWall.value = this.hdr ? 1.0 : 0.5;
+    this._envGround.material.color.copy(A.fogColor).multiplyScalar(0.18 + 0.2 * A.day);
+    const tm = r.toneMapping, xr = r.xr.enabled, au = r.shadowMap.autoUpdate, rt = r.getRenderTarget(), pr = this.skyMat.uniforms;
+    const sc = this.hdr ? 1 : 0.5; this._skyScale(sc);
+    r.toneMapping = THREE.NoToneMapping; r.xr.enabled = false; r.shadowMap.autoUpdate = false;
+    this.cubeCam.position.set(0, 2, 0);
+    try { this.cubeCam.update(r, this._envScene); } catch (e) { console.warn('[RCE] 환경맵 캡처 실패', e); }
+    r.toneMapping = tm; r.xr.enabled = xr; r.shadowMap.autoUpdate = au; r.setRenderTarget(rt); this._skyScale(1);
+    this.U.uRceEnvK.value = 1 / sc;
+    if (this.pmrem && this.opt.pmrem) { try { const t = this.pmrem.fromCubemap(this.envRT.texture); if (this.pmremRT) this.pmremRT.dispose(); this.pmremRT = t; this._applyEnvMaps(); } catch (e) { this.pmrem = null; } }
+  }
+  _skyScale(k) { const u = this.skyMat.uniforms; if (k === 1 && this._skyBackup) { u.uZenith.value.copy(this._skyBackup.z); u.uHorizon.value.copy(this._skyBackup.h); u.uSunI.value = this._skyBackup.i; this._skyBackup = null; } else if (k !== 1) { this._skyBackup = { z: u.uZenith.value.clone(), h: u.uHorizon.value.clone(), i: u.uSunI.value }; u.uZenith.value.multiplyScalar(k); u.uHorizon.value.multiplyScalar(k); u.uSunI.value *= k; } }
+  _applyEnvMaps() { const t = this.pmremRT ? this.pmremRT.texture : this.envRT.texture; for (const m of this.materials) { if (m.userData.rceEnv) { m.envMap = t; m.needsUpdate = true; } } }
+  get envTexture() { return this.pmremRT ? this.pmremRT.texture : this.envRT.texture; }
+
+  /* -------------------------------------------------- 비(선분 파티클, 단독 사용용) */
+  _buildRain() {
+    const n = this.opt.rain.count, geo = new THREE.BufferGeometry(), pos = new Float32Array(n * 2 * 3), rnd = new Float32Array(n * 2 * 3), rd = TEX.rng(7);
+    for (let i = 0; i < n; i++) { const a = rd(), b = rd(), c = rd(); for (let k = 0; k < 2; k++) { pos[(i * 2 + k) * 3 + 1] = k; rnd.set([a, b, c], (i * 2 + k) * 3); } }
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3)); geo.setAttribute('aRnd', new THREE.BufferAttribute(rnd, 3));
+    const mat = new THREE.ShaderMaterial({ vertexShader: GLSL.rainVS, fragmentShader: GLSL.rainFS, transparent: true, depthWrite: false, fog: false, uniforms: { uTime: { value: 0 }, uInt: { value: 0 }, uCam: { value: new THREE.Vector3() }, uBox: { value: new THREE.Vector3(60, 40, 60) } } });
+    this.rainMesh = new THREE.LineSegments(geo, mat); this.rainMesh.frustumCulled = false; this.rainMesh.visible = false; this.rainMesh.userData.rceSkip = true; this.scene.add(this.rainMesh);
+  }
+
+  /* ---------------------------------------------------- 날씨 / 시간 API */
+  setWeather(name) {
+    const W = { clear: [0.08, 0, 0], partly: [0.4, 0, 0], overcast: [0.92, 0, 0.35], rain: [0.96, 0.75, 1], storm: [1, 1, 1], fog: [0.7, 0, 0.2] }[name] || [0.9, 0, 0];
+    this._wx.overcast = W[0]; this._wx.rain = W[1]; this.state.wetTarget = W[2]; this.weatherName = name;
+  }
+  /** 외부(게임)가 날씨 상태를 직접 공급할 때: {timeOfDay, overcast, rain, wet} */
+  setState(s) {
+    if (s.timeOfDay !== undefined) this.state.timeOfDay = s.timeOfDay;
+    if (s.overcast !== undefined) { this._wx.overcast = s.overcast; this.state.overcast = s.overcast; }
+    if (s.rain !== undefined) { this._wx.rain = s.rain; this.state.rain = s.rain; }
+    if (s.wet !== undefined) this.state.wetTarget = s.wet;
+  }
+  setTimeOfDay(h) { this.state.timeOfDay = ((h % 24) + 24) % 24; }
+  setRain(v) { this._wx.rain = clamp(v, 0, 1); this.state.wetTarget = Math.max(this.state.wetTarget, v > 0 ? 1 : 0); }
+
+  _sunDir(t) {
+    if (this.opt.getSunDirection) { const d = this.opt.getSunDirection(t); if (d) return d.clone().normalize(); }
+    const a = (t - 6) / 24 * TAU, el = Math.sin(a) * 1.05, az = t / 24 * TAU + 1.2;
+    return new THREE.Vector3(Math.cos(el) * Math.sin(az), Math.sin(el), Math.cos(el) * Math.cos(az)).normalize();
+  }
+  _updateAtmosphere(dt, force) {
+    const S = this.state, k = (tau) => 1 - Math.exp(-dt / tau);
+    if (force) { S.overcast = this._wx.overcast; S.rain = this._wx.rain; } else { S.overcast += (this._wx.overcast - S.overcast) * k(8); S.rain += (this._wx.rain - S.rain) * k(5); }
+    const wt = Math.max(S.wetTarget, S.rain > 0.05 ? 1 : 0);
+    S.wet += (wt - S.wet) * (force ? 1 : (wt > S.wet ? k(7) : k(120)));
+    const pudT = S.rain > 0.3 ? S.rain : 0;
+    S.pud += (pudT - S.pud) * (force ? 1 : (pudT > S.pud ? k(30) : k(260)));
+    const sd = this._sunDir(S.timeOfDay), el = Math.asin(clamp(sd.y, -1, 1)) * 57.2958, day = sstep(-6, 8, el), oc = S.overcast;
+    this._sunW = (el > -4 ? sd : sd.clone().negate().setY(Math.abs(sd.y) + 0.3).normalize()).clone(); this._rtsK = Math.max(0.15, day * (1 - 0.8 * oc)) * (el > -4 ? 1 : 0.4);   // 접촉 그림자 세기: 맑을수록 선명, 흐리면 옅게
+    const ext = this.opt.atmosphere === 'external';
+    let zen, hor, fogC, fogD, sunC, sunI;
+    if (ext) {                                                      // 게임이 라이트/안개를 관리: 그 값을 읽어 하늘만 일치시킨다
+      fogC = this.scene.fog.color.clone(); fogD = this.scene.fog.density;
+      zen = this.scene.background && this.scene.background.isColor ? this.scene.background.clone() : fogC.clone().multiplyScalar(0.6);
+      hor = fogC.clone(); sunC = this.sun ? this.sun.color.clone() : new THREE.Color(1, .95, .85); sunI = this.sun ? this.sun.intensity : 1;
+    } else {
+      const clearZ = new THREE.Color(0.10, 0.27, 0.62), clearH = new THREE.Color(0.58, 0.74, 0.90), ovH = new THREE.Color(0.52, 0.55, 0.59), ovZ = new THREE.Color(0.30, 0.33, 0.37);
+      const dusk = sstep(14, -1, el) * sstep(-9, -1, el);
+      zen = lerpC(clearZ, ovZ, oc); hor = lerpC(clearH, ovH, oc);
+      hor.lerp(new THREE.Color(0.95, 0.52, 0.30), dusk * (1 - oc * 0.7) * 0.8);
+      const nz = new THREE.Color(0.006, 0.012, 0.03), nh = new THREE.Color(0.03, 0.035, 0.05);
+      zen = lerpC(nz, zen, day); hor = lerpC(nh, hor, day);
+      const lum = 0.35 + 0.65 * day; zen.multiplyScalar(lum * mixf(1, 0.75, S.rain)); hor.multiplyScalar(lum * mixf(1, 0.7, S.rain));
+      fogC = hor.clone().multiplyScalar(0.92); fogD = mixf(0.00042, 0.0016, oc) * (1 + 1.3 * S.rain);
+      sunC = new THREE.Color(1, 0.93, 0.80).lerp(new THREE.Color(1, 0.55, 0.28), dusk); sunI = (el > -4 ? 1.9 * sstep(-2, 25, el) : 0.15) * (1 - 0.92 * oc);
+      this.scene.fog.color.copy(fogC); this.scene.fog.density = fogD;
+      if (this.scene.background && this.scene.background.isColor) this.scene.background.copy(zen);
+      if (this.sun) { this.sun.color.copy(sunC); this.sun.intensity = sunI; if (this.ownLights) { const t = this.camera.position; this.sun.position.copy(t).addScaledVector(el > -4 ? sd : sd.clone().negate().setY(0.5), 400); this.sun.target.position.copy(t); this.sun.target.updateMatrixWorld(); } }
+      if (this.hemi) { this.hemi.color.copy(lerpC(new THREE.Color(0.8, 0.88, 1), new THREE.Color(0.78, 0.8, 0.84), oc)); this.hemi.groundColor.set(0x3a3630); this.hemi.intensity = (0.25 + 0.75 * day) * (0.85 + 0.35 * oc); }
+      this.renderer.toneMappingExposure = this.opt.exposure * mixf(1.05, 1.25, 1 - day) * mixf(1, 1.1, oc);
+    }
+    const u = this.skyMat.uniforms;
+    if (!this._skyBackup) { u.uZenith.value.copy(zen); u.uHorizon.value.copy(hor); u.uSunI.value = ext ? clamp(sunI, 0, 3) * (1 - 0.92 * oc) : sunI; }
+    u.uSunDir.value.copy(el > -4 ? sd : sd.clone().negate().setY(Math.abs(sd.y) + 0.3).normalize()); u.uSunColor.value.copy(sunC);
+    u.uCover.value = oc; u.uDark.value = clamp(0.25 + oc * 0.5 + S.rain * 0.25 - day * 0.2, 0, 1); u.uNight.value = 1 - day; u.uGlow.value = this.opt.cityGlow;
+    this._atm = { fogColor: fogC, fogDensity: fogD, day, el, sunDir: sd };
+    this.U.uRceWet.value = S.wet; this.U.uRcePud.value = S.pud; this.U.uRceRain.value = S.rain;
+  }
+
+  /* ------------------------------------------------------------- update */
+  update(deltaTime) {
+    if (!this.ready) return;
+    const dt = Math.min(0.25, Math.max(0, deltaTime || 0)); this.time += dt;
+    this.U.uRceTime.value = this.time;
+    if (this.opt.getGroundY) { const gy = this.opt.getGroundY(); if (typeof gy === 'number') this.U.uRceGroundY.value = gy; }
+    this._updateAtmosphere(dt, false);
+    this.skyMat.uniforms.uTime.value = this.time;
+    this.sky.position.copy(this.camera.position);
+    this.sky.visible = this.active;
+    if (this.rainMesh) {
+      const m = this.rainMesh, u = m.material.uniforms; m.visible = this.active && this.state.rain > 0.02;
+      u.uTime.value = this.time; u.uInt.value = this.state.rain; u.uCam.value.copy(this.camera.position);
+      if (m.visible) { const ub = u.uBox.value; u.uCam.value.x += ub.x * 0.5; u.uCam.value.z += ub.z * 0.5; }
+    }
+    this._captureEnv(false);
+    if (this.composer && this.active) {
+      // 다른 시스템(품질 전환 등)이 ACES 를 되돌렸다면 HDR 파이프라인 규칙대로 복구(이중 톤매핑 방지)
+      if (this.hdr && this.renderer.toneMapping !== THREE.NoToneMapping) { this.renderer.toneMapping = THREE.NoToneMapping; this._flagMaterials(); }
+      if (this._rts && this._pcssOK && this.renderer.shadowMap.type !== THREE.PCFShadowMap) { this.renderer.shadowMap.type = THREE.PCFShadowMap; this._flagMaterials(); }   // 품질 전환 등이 되돌렸다면 복구
+      this._updatePost();
+    }
+  }
+
+  /* ------------------------------------------- 머티리얼 패치 (텍스처 계층만) */
+  /** 게임의 건물 셰이더(onBeforeCompile 의 shader 인자)에 절차 텍스처 계층을 덧씌운다. 지오메트리/UV/데이터는 건드리지 않는다. */
+  patchBuildingShader(sh) {
+    if (!sh || !sh.fragmentShader || sh.__rce) return sh; sh.__rce = true;
+    for (const k of ['uRceOn', 'uRceDetail', 'uRceReflK', 'uRceEnvK', 'uRceTile', 'uRceTileM', 'uRceFacadeTiles', 'uRceWet', 'uRceTime', 'tRceD', 'tRceR', 'tRceH', 'tRceE', 'tRceFD', 'tRceFE', 'tRceEnv']) sh.uniforms[k] = this.U[k];
+    let f = sh.fragmentShader, miss = [];
+    const rep = (a, b) => { if (f.indexOf(a) < 0) { miss.push(a.slice(0, 48)); return; } f = f.replace(a, () => b); };
+    rep('uniform float uGlassR;', GLSL_BLD.decl);
+    rep('float shadowK = 1.0 - 0.45 * shd * (1.0 - uWinGlow * 0.55);', GLSL_BLD.near + '\nfloat shadowK = 1.0 - 0.45 * shd * (1.0 - uWinGlow * 0.55);');
+    rep('emi += lc * lit * gls * uWinQ * lightK * (0.6 + 0.9 * h21(cellId + 7.3)) * (ground ? 1.2 : 1.0);', GLSL_BLD.room);
+    rep('gUse = nearK > 0.005 || length(bump) > 0.0 ? 1.0 : 0.0;', 'gUse = nearK > 0.005 || length(bump) > 0.0 || rceUse_ > 0.5 ? 1.0 : 0.0;');
+    rep('vec3 avg2 = mix(gWC, gGC * 1.5, pFam < 0.5 ? 0.78 : 0.34) * (0.86 + 0.28 * ton) * mix(0.62, 1.0, smoothstep(0.0, 40.0, y));', 'vec3 avg2 = mix(gWC, gGC * 1.5, pFam < 0.5 ? 0.78 : 0.34) * (0.86 + 0.28 * ton) * mix(0.62, 1.0, smoothstep(0.0, 40.0, y));\n' + GLSL_BLD.fadeA);
+    rep('col = mix(avg2, col, fk); emi *= fk; gls *= fk;', 'col = mix(avg2, col, fk); emi *= fk; gls *= fk;\nemi += rceFE_ * (1.0 - fk);');
+    rep('vfxWin = pFam < 0.5 ? 0.55 : 0.22;', 'vfxWin = pFam < 0.5 ? 0.55 : 0.22;\n' + GLSL_BLD.far);
+    if (miss.length) console.warn('[RCE] 건물 셰이더 패치 일부 실패(게임 셰이더가 바뀌었을 수 있음):', miss);
+    sh.fragmentShader = f; return sh;
+  }
+
+  /** 도로/보도/지표 머티리얼(UV 있는 MeshStandardMaterial 계열)에 젖은 아스팔트·랜덤 웅덩이·반사를 덧씌운다. */
+  patchGroundMaterial(mat, opts) {
+    if (!mat || this._patched.has(mat)) return mat; this._patched.add(mat);
+    const pud = (opts && opts.puddleScale !== undefined) ? opts.puddleScale : 1, self = this, prev = mat.onBeforeCompile, prevKey = mat.customProgramCacheKey ? mat.customProgramCacheKey() : (prev ? prev.toString() : '');
+    mat.extensions = Object.assign({}, mat.extensions, { derivatives: true });
+    mat.onBeforeCompile = function (sh, rr) {
+      if (prev) prev.call(this, sh, rr);
+      for (const k of ['uRceOn', 'uRceSSR', 'uRceEnvK', 'uRceGroundY', 'uRceWet', 'uRcePud', 'uRceRain', 'uRceTime', 'tRceN', 'tRceEnv']) sh.uniforms[k] = self.U[k];
+      sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\n' + GLSL.groundVSDecl).replace('#include <begin_vertex>', '#include <begin_vertex>\n' + GLSL.groundVSBody);
+      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\n' + GLSL.groundFSDecl)
+        .replace('#include <normal_fragment_begin>', '#include <normal_fragment_begin>\n' + GLSL.groundColor.replace('RCE_PUD', pud.toFixed(2)) + GLSL.groundRough)
+        .replace('#include <normal_fragment_maps>', '#include <normal_fragment_maps>\n' + GLSL.groundNormal)
+        .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n' + GLSL.groundEmissive);
+    };
+    mat.customProgramCacheKey = () => 'rce_ground_' + pud + '_' + prevKey;
+    mat.needsUpdate = true; return mat;
+  }
+
+  /* ----------------------------------- 표준 PBR 머티리얼(UV 메시용) 생성기 */
+  _ensureFull() {
+    if (this.tex.full) return;
+    const o = this.opt, s = TEX.genFacadeSheet(o.facadeCols, o.facadeRows, o.facadeCellPx, o.seed, true);
+    this.tex.full = { D: this._canvasTex(s.D), E: this._canvasTex(s.E), R: this._canvasTex(s.R), H: this._canvasTex(s.H) };
+    const bump = this.tex.full.H; bump.anisotropy = 8;
+  }
+  /** MeshPhysicalMaterial: 수천 개 창문 파사드(Diffuse/Roughness(+Metalness+Clearcoat 마스크)/Bump/Emissive). repeat 로 타일 수 조절 */
+  createFacadeMaterial(opts) {
+    this._ensureFull(); const T = this.tex.full, p = Object.assign({ standard: false, repeat: [1, 1], emissiveIntensity: 1.6, bump: 1.2, envMapIntensity: 1 }, opts);
+    const common = { map: T.D, roughnessMap: T.R, metalnessMap: T.R, roughness: 1, metalness: 1, bumpMap: T.H, bumpScale: p.bump, emissive: new THREE.Color(1, 1, 1), emissiveMap: T.E, emissiveIntensity: p.emissiveIntensity, envMapIntensity: p.envMapIntensity };
+    let m;
+    if (p.standard) m = new THREE.MeshStandardMaterial(common);
+    else { m = new THREE.MeshPhysicalMaterial(Object.assign(common, { clearcoat: 1, clearcoatMap: T.R, clearcoatRoughness: 0.04, reflectivity: 0.5 })); }
+    for (const t of [T.D, T.R, T.H, T.E]) t.repeat.set(p.repeat[0], p.repeat[1]);
+    m.userData.rceEnv = true; m.envMap = this.envTexture; this.materials.push(m); return m;
+  }
+  createStandardFacadeMaterial(opts) { return this.createFacadeMaterial(Object.assign({}, opts, { standard: true })); }
+  /** 젖은 아스팔트 MeshStandardMaterial (낮은 roughness + 미세 노이즈 범프 + 랜덤 웅덩이 + 환경 반사) */
+  createAsphaltMaterial(opts) {
+    if (!this.tex.asphalt) { const a = TEX.genAsphalt(1024, this.opt.seed); this.tex.asphalt = { D: this._canvasTex(a.D), R: this._canvasTex(a.R), H: this._canvasTex(a.H) }; }
+    const A = this.tex.asphalt, p = Object.assign({ repeat: [60, 60], bump: 1.0 }, opts);
+    for (const t of [A.D, A.R, A.H]) t.repeat.set(p.repeat[0], p.repeat[1]);
+    const m = new THREE.MeshStandardMaterial({ map: A.D, roughnessMap: A.R, roughness: 1, metalness: 0, bumpMap: A.H, bumpScale: p.bump, envMapIntensity: 1 });
+    m.userData.rceEnv = true; m.envMap = this.envTexture; this.patchGroundMaterial(m, p); this.materials.push(m); return m;
+  }
+  /** 지면 평면(젖은 아스팔트) 헬퍼 */
+  createRoad(width, depth) { const mesh = new THREE.Mesh(new THREE.PlaneBufferGeometry(width, depth), this.createAsphaltMaterial({ repeat: [width / 6, depth / 6] })); mesh.rotation.x = -Math.PI / 2; mesh.receiveShadow = true; return mesh; }
+
+  /* ---------------------------------------------------------- 후처리 */
+  _buildComposer() {
+    const r = this.renderer, o = this.opt, P = o.post, size = new THREE.Vector2(); r.getDrawingBufferSize(size);
+    const W = Math.max(2, size.x | 0), H = Math.max(2, size.y | 0), type = this.hdr ? THREE.HalfFloatType : THREE.UnsignedByteType;
+    const ms = r.capabilities.isWebGL2 && P.msaa > 0 && HAS('WebGLMultisampleRenderTarget');
+    const rtOpt = { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, format: THREE.RGBAFormat, type };
+    const rt = ms ? new THREE.WebGLMultisampleRenderTarget(W, H, rtOpt) : new THREE.WebGLRenderTarget(W, H, rtOpt);
+    if (ms) rt.samples = P.msaa;
+    const c = this.composer = new THREE.EffectComposer(r, rt); c.setPixelRatio(1); c.setSize(W, H);
+    this._W = W; this._H = H;
+    this.passes = {};
+    this.passes.render = new THREE.RenderPass(this.scene, this.camera); c.addPass(this.passes.render);
+    if (P.ssao || P.ssr || P.contact) { this.passes.gbuf = new RceGBufferPass(this, W, H); c.addPass(this.passes.gbuf); }
+    if (P.ssr) { this.passes.ssr = new RceSSRPass(this); c.addPass(this.passes.ssr); }
+    if (P.bloom) {
+      const b = this.passes.bloom = new THREE.UnrealBloomPass(new THREE.Vector2(W, H), o.bloom.strength, o.bloom.radius, o.bloom.threshold);
+      if (this.hdr) for (const t of [b.renderTargetBright].concat(b.renderTargetsHorizontal, b.renderTargetsVertical)) t.texture.type = THREE.HalfFloatType;
+      c.addPass(b);
+    }
+    this.passes.grade = new THREE.ShaderPass(new THREE.ShaderMaterial({ uniforms: { tDiffuse: { value: null }, uExposure: { value: 1 }, uVig: { value: o.grade.vignette }, uGrain: { value: o.grade.grain }, uCA: { value: o.grade.chromatic },
+      uTime: { value: 0 }, uSat: { value: o.grade.saturation }, uHDR: { value: this.hdr ? 1 : 0 }, uRes: { value: new THREE.Vector2(W, H) } }, vertexShader: GLSL.ssrVS, fragmentShader: GLSL.gradeFS }));
+    c.addPass(this.passes.grade);
+  }
+  _updatePost() {
+    const r = this.renderer, g = this.passes.grade.uniforms; g.uExposure.value = Math.max(0.05, r.toneMappingExposure || 1); g.uTime.value = this.time;
+    this.U.uRceSSR.value = (this.passes.ssr && this.passes.ssr.enabled) ? 1 : 0;
+  }
+  _syncSize() {
+    const s = this._sz || (this._sz = new THREE.Vector2()); this.renderer.getDrawingBufferSize(s);
+    const W = Math.max(2, s.x | 0), H = Math.max(2, s.y | 0);
+    if (W !== this._W || H !== this._H) { this._W = W; this._H = H; this.composer.setSize(W, H); this.passes.grade.uniforms.uRes.value.set(W, H); }
+  }
+
+  /** 후처리 파이프라인으로 한 프레임 렌더. 성공하면 true (게임 루프에서 false 면 기존 렌더로 폴백) */
+  render(deltaTime) {
+    if (!this.active || !this.ready || !this.composer || this.failed) return false;
+    this._syncSize();
+    const r = this.renderer, tm = r.toneMapping;
+    if (this.hdr) r.toneMapping = THREE.NoToneMapping;
+    try { this.composer.render(deltaTime || 0.016); }
+    catch (e) { console.warn('[RCE] 렌더 실패 → 기존 렌더러로 폴백', e); this.failed = true; r.toneMapping = tm; this.disable(); return false; }
+    r.toneMapping = tm; return true;
+  }
+  /** 컴포저 없이 단순 렌더(ACES 직접) */
+  renderSimple() { this.renderer.render(this.scene, this.camera); }
+  resize() { if (this.composer) this._syncSize(); }
+
+  /* ---------------------------------------------------- 켜기 / 끄기 */
+  _flagMaterials() { this.scene.traverse(o => { const m = o.material; if (m) (Array.isArray(m) ? m : [m]).forEach(x => { x.needsUpdate = true; }); }); }
+  enable() {
+    if (this.active || !this.ready) return this;
+    this.active = true; this.U.uRceOn.value = 1; this.sky.visible = true;
+    this._prevTM = this.renderer.toneMapping;
+    if (this.composer && this.hdr) { this.renderer.toneMapping = THREE.NoToneMapping; this._flagMaterials(); }
+    this.setRayShadows(this.opt.shadows.enabled);
+    return this;
+  }
+  disable() {
+    if (!this.active) return this;
+    this.active = false; this.U.uRceOn.value = 0; this.sky.visible = false; if (this.rainMesh) this.rainMesh.visible = false;
+    if (this.composer && this.hdr) { this.renderer.toneMapping = THREE.ACESFilmicToneMapping; this._flagMaterials(); }
+    this.setRayShadows(false);
+    return this;
+  }
+  setQuality(p) { Object.assign(this.opt.post, p); }
+  /** 'ssao' | 'ssr' | 'bloom' 런타임 on/off */
+  /** 레이 트레이싱 그림자 ON/OFF — PCSS(가변 반그림자) + 접촉 그림자(화면공간 레이마칭). 실제 하드웨어 RT 가 아닌 WebGL 근사 구현 */
+  setRayShadows(on) {
+    on = !!on; this._rts = on;
+    const r = this.renderer, sm = r.shadowMap;
+    if (on && this.opt.shadows.pcss && this._installPcss()) { if (sm.type !== THREE.PCFShadowMap) { sm.type = THREE.PCFShadowMap; this._flagMaterials(); } }
+    else if (sm.type === THREE.PCFShadowMap) { sm.type = THREE.PCFSoftShadowMap; this._flagMaterials(); }
+    this.setEffect('contact', on);
+    return on;
+  }
+  // PCSS 를 three 의 PCF 분기에 삽입(게임은 PCF_SOFT 분기만 사용 → 프로그램 캐시 키(shadowMapType)가 달라져 안전하게 재컴파일/복귀)
+  _installPcss() {
+    if (this._pcssOK === true) return true; if (this._pcssOK === false) return false;
+    this._pcssOK = false;
+    try {
+      const SC = THREE.ShaderChunk, o = this.opt.shadows; let chunk = SC.shadowmap_pars_fragment;
+      const re = /#if defined\( SHADOWMAP_TYPE_PCF \)[\s\S]*?(?=#elif defined\( SHADOWMAP_TYPE_PCF_SOFT \))/;
+      if (!re.test(chunk)) return false;
+      chunk = chunk.replace(re, GLSL.pcssBlock(o.searchTaps | 0, o.filterTaps | 0, o.maxPenumbra | 0));
+      const gl = document.createElement('canvas').getContext('webgl2'); if (!gl) return false;       // dFdx 필요(WebGL2)
+      const fs = '#version 300 es\nprecision highp float; precision highp int;\n#define varying in\n#define texture2D texture\nout highp vec4 pc_fragColor;\n#define gl_FragColor pc_fragColor\n' +
+        '#define USE_SHADOWMAP\n#define NUM_DIR_LIGHT_SHADOWS 1\n#define NUM_SPOT_LIGHT_SHADOWS 0\n#define NUM_POINT_LIGHT_SHADOWS 0\n#define SHADOWMAP_TYPE_PCF\n' +
+        SC.packing + '\n' + chunk + '\nvoid main(){ gl_FragColor = vec4( getShadow( directionalShadowMap[0], vec2( 1024.0 ), 0.0, 100.0, vDirectionalShadowCoord[0] ) ); }';
+      const sh = gl.createShader(gl.FRAGMENT_SHADER); gl.shaderSource(sh, fs); gl.compileShader(sh);
+      const ok = gl.getShaderParameter(sh, gl.COMPILE_STATUS);
+      if (!ok) console.warn('[RCE] PCSS 패치 건너뜀:', gl.getShaderInfoLog(sh));
+      try { const ext = gl.getExtension('WEBGL_lose_context'); if (ext) ext.loseContext(); } catch (e) {}
+      if (!ok) return false;
+      SC.shadowmap_pars_fragment = chunk; this._pcssOK = true; return true;
+    } catch (e) { console.warn('[RCE] PCSS 오류', e); return false; }
+  }
+
+  setEffect(name, on) {
+    this.opt.post[name] = !!on; const P = this.passes || {};
+    if (name === 'ssr' && P.ssr) P.ssr.enabled = !!on;
+    if (name === 'bloom' && P.bloom) P.bloom.enabled = !!on;
+    if (P.gbuf) P.gbuf.enabled = !!(this.opt.post.ssao || this.opt.post.ssr || this.opt.post.contact);
+  }
+
+  dispose() {
+    this.disable(); this.scene.remove(this.sky); if (this.rainMesh) this.scene.remove(this.rainMesh);
+    for (const k in this.tex) { const t = this.tex[k]; if (t && t.dispose) t.dispose(); }
+    if (this.envRT) this.envRT.dispose(); if (this.pmremRT) this.pmremRT.dispose(); if (this.composer) this.composer.renderTarget1.dispose(), this.composer.renderTarget2.dispose();
+  }
+}
+
+RealisticCityEnvironment.DEFAULTS = {
+  seed: 20240607, textureSize: 2048, tileMeters: 4.0, facadeCols: 32, facadeRows: 64, facadeCellPx: 32,
+  envSize: 256, envBuildings: 420, envInterval: 6, pmrem: true, cityGlow: 0.35, exposure: 1.0, timeOfDay: 18.5,
+  atmosphere: 'internal',      // 'internal' = 모듈이 라이트/안개/배경을 직접 구동 · 'external' = 게임이 구동(모듈은 읽기만)
+  autoEnable: true, forceShadows: true, sunLight: null, hemiLight: null, getSunDirection: null, getGroundY: null, onProgress: null,
+  post: { enabled: true, hdr: true, msaa: 4, ssao: true, ssr: true, bloom: true, contact: true },
+  shadows: { enabled: true, pcss: true, searchTaps: 12, filterTaps: 20, maxPenumbra: 12, contactLen: 6, contactSteps: 20, contactStrength: 0.6, contactThick: 1.2, fadeNear: 90, fadeFar: 240 },
+  bloom: { strength: 0.55, radius: 0.55, threshold: 1.0 },
+  ssao: { kernelRadius: 4.5, minDistance: 0.00006, maxDistance: 0.0025, strength: 0.9, scale: 0.6, fadeNear: 90, fadeFar: 260 },
+  ssr: { strength: 1.0, maxDistance: 90, fadeFar: 420, scale: 1 },
+  grade: { vignette: 0.28, grain: 0.018, chromatic: 0.012, saturation: 1.0 },
+  rain: { particles: true, count: 9000 }
+};
+
+/* ---- SSAOPass 확장: RenderPass 결과를 재사용(장면 2회 렌더만), 24bit 깊이, 법선=flatShading, 그림자 재렌더 방지 ---- */
+class RceGBufferPass extends THREE.SSAOPass {
+  constructor(env, W, H) {
+    super(env.scene, env.camera, W, H); this.env = env; this.needsSwap = false;
+    const o = env.opt.ssao; this.kernelRadius = o.kernelRadius; this.minDistance = o.minDistance; this.maxDistance = o.maxDistance;
+    this.normalRenderTarget.depthTexture.type = THREE.UnsignedIntType;          // 16bit → 24bit (원거리 AO 노이즈 방지)
+    this.normalMaterial.flatShading = true;                                       // 건물 지오메트리엔 normal 속성이 없다 → 화면 미분 법선
+    this.aoApply = new THREE.ShaderMaterial({ vertexShader: GLSL.ssrVS, fragmentShader: GLSL.aoApplyFS, depthTest: false, depthWrite: false, transparent: true,
+      blending: THREE.CustomBlending, blendSrc: THREE.DstColorFactor, blendDst: THREE.ZeroFactor, blendEquation: THREE.AddEquation,
+      uniforms: { tAO: { value: null }, tDepth: { value: null }, uK: { value: o.strength }, uNear: { value: 0.1 }, uFar: { value: 1000 }, uF0: { value: o.fadeNear }, uF1: { value: o.fadeFar } } });
+    const sh = env.opt.shadows;
+    this.contactMat = new THREE.ShaderMaterial({ vertexShader: GLSL.ssrVS, fragmentShader: GLSL.contactFS.replace(/RCE_CS_STEPS/g, String(sh.contactSteps | 0)), depthTest: false, depthWrite: false, transparent: true,
+      blending: THREE.CustomBlending, blendSrc: THREE.DstColorFactor, blendDst: THREE.ZeroFactor, blendEquation: THREE.AddEquation,
+      uniforms: { tDepth: { value: null }, tNormal: { value: null }, uProj: { value: new THREE.Matrix4() }, uInvProj: { value: new THREE.Matrix4() }, uSunVS: { value: new THREE.Vector3(0, 1, 0) },
+        uNear: { value: 0.1 }, uFar: { value: 1000 }, uK: { value: 0 }, uLen: { value: sh.contactLen }, uThick: { value: sh.contactThick }, uF0: { value: sh.fadeNear }, uF1: { value: sh.fadeFar } } });
+    this._scale = o.scale; this.setSize(W, H);
+  }
+  setSize(w, h) { const s = this._scale || 1, W = Math.max(2, Math.round(w * s)), H = Math.max(2, Math.round(h * s)); super.setSize(W, H); this._full = [w, h]; }
+  overrideVisibility() { super.overrideVisibility(); const cache = this._visibilityCache; for (const o of [this.env.sky, this.env.rainMesh]) if (o) { cache.set(o, o.visible); o.visible = false; } }
+  render(renderer, writeBuffer, readBuffer) {
+    const env = this.env, cam = this.camera, sm = renderer.shadowMap, au = sm.autoUpdate, wantAO = env.opt.post.ssao;
+    this.ssaoMaterial.uniforms.cameraNear.value = cam.near; this.ssaoMaterial.uniforms.cameraFar.value = cam.far;
+    this.ssaoMaterial.uniforms.cameraProjectionMatrix.value.copy(cam.projectionMatrix); this.ssaoMaterial.uniforms.cameraInverseProjectionMatrix.value.copy(cam.projectionMatrixInverse);
+    sm.autoUpdate = false;
+    this.overrideVisibility(); this.renderOverride(renderer, this.normalMaterial, this.normalRenderTarget, 0x7777ff, 1.0); this.restoreVisibility();
+    sm.autoUpdate = au;
+    if (env.opt.post.contact && env._rts && env._sunW) {                           // 접촉 그림자(레이마칭) — 광원 방향으로 광선 추적
+      const cu = this.contactMat.uniforms;
+      cu.tDepth.value = this.normalRenderTarget.depthTexture; cu.tNormal.value = this.normalRenderTarget.texture;
+      cu.uProj.value.copy(cam.projectionMatrix); cu.uInvProj.value.copy(cam.projectionMatrixInverse); cu.uNear.value = cam.near; cu.uFar.value = cam.far;
+      cu.uSunVS.value.copy(env._sunW).transformDirection(cam.matrixWorldInverse);
+      cu.uK.value = env.opt.shadows.contactStrength * env._rtsK;
+      this.renderPass(renderer, this.contactMat, readBuffer);
+    }
+    if (!wantAO) return;
+    this.ssaoMaterial.uniforms.kernelRadius.value = this.kernelRadius; this.ssaoMaterial.uniforms.minDistance.value = this.minDistance; this.ssaoMaterial.uniforms.maxDistance.value = this.maxDistance;
+    this.ssaoMaterial.uniforms.tDiffuse.value = readBuffer.texture;
+    this.renderPass(renderer, this.ssaoMaterial, this.ssaoRenderTarget); this.renderPass(renderer, this.blurMaterial, this.blurRenderTarget);
+    const u = this.aoApply.uniforms; u.tAO.value = this.blurRenderTarget.texture; u.tDepth.value = this.normalRenderTarget.depthTexture; u.uNear.value = cam.near; u.uFar.value = cam.far; u.uK.value = env.opt.ssao.strength;
+    this.renderPass(renderer, this.aoApply, readBuffer);                           // readBuffer 에 AO 곱연산
+  }
+}
+/* ---- 젖은 지면 SSR ---- */
+class RceSSRPass extends THREE.ShaderPass {
+  constructor(env) {
+    super({ uniforms: Object.assign({ tDiffuse: { value: null }, tNormal: { value: null }, tDepth: { value: null }, uProj: { value: new THREE.Matrix4() }, uInvProj: { value: new THREE.Matrix4() },
+      uCamWorld: { value: new THREE.Matrix4() }, uView: { value: new THREE.Matrix4() }, uNear: { value: 0.1 }, uFar: { value: 1000 }, uGroundY: env.U.uRceGroundY, uStrength: { value: 1 }, uMaxDist: { value: 90 }, uFadeFar: { value: 420 } },
+      { tRceN: env.U.tRceN, uRceWet: env.U.uRceWet, uRcePud: env.U.uRcePud, uRceRain: env.U.uRceRain, uRceTime: env.U.uRceTime }), vertexShader: GLSL.ssrVS, fragmentShader: GLSL.ssrFS });
+    this.env = env;
+  }
+  render(renderer, writeBuffer, readBuffer, dt, mask) {
+    const e = this.env, cam = e.camera, g = e.passes.gbuf, u = this.uniforms;
+    u.tNormal.value = g.normalRenderTarget.texture; u.tDepth.value = g.normalRenderTarget.depthTexture;
+    u.uProj.value.copy(cam.projectionMatrix); u.uInvProj.value.copy(cam.projectionMatrixInverse); u.uCamWorld.value.copy(cam.matrixWorld); u.uView.value.copy(cam.matrixWorldInverse);
+    u.uNear.value = cam.near; u.uFar.value = cam.far; u.uStrength.value = e.opt.ssr.strength; u.uMaxDist.value = e.opt.ssr.maxDistance; u.uFadeFar.value = e.opt.ssr.fadeFar;
+    super.render(renderer, writeBuffer, readBuffer, dt, mask);
+  }
+}
+
+/* ---- 건물 셰이더 패치 GLSL (게임의 NM_WALL 변수명 사용: u,y,yy,col,rough,emi,gls,gDN,T3,wn,vv,cdist,seed,pFam,gBrick,gStone,uvW,cellId,lc,lit,pBW,pFH,gWC,gGC) ---- */
+const GLSL_BLD = {};
+GLSL_BLD.decl = `uniform float uGlassR;
+uniform float uRceOn, uRceDetail, uRceReflK, uRceEnvK, uRceTile, uRceTileM; uniform vec2 uRceFacadeTiles;
+#ifndef GBUF
+uniform sampler2D tRceD, tRceR, tRceH, tRceE, tRceFD, tRceFE; uniform samplerCube tRceEnv; uniform float uRceWet, uRceTime;
+void rceFar(float u, float yy, vec3 wn, vec3 vv, out vec3 alb, out vec3 emc){
+  vec2 fp = vec2(u / (pBW * uRceFacadeTiles.x), yy / (pFH * uRceFacadeTiles.y));
+  vec3 fD = texture2D(tRceFD, fp).rgb, fE = texture2D(tRceFE, fp).rgb;
+  float gm = 1.0 - smoothstep(0.38, 0.52, dot(fD, vec3(0.3333)));
+  if (pFam < 0.5) gm = mix(gm, 1.0, 0.75);
+  alb = mix(gWC, gGC * 1.2, gm);
+  float ndv = clamp(abs(dot(-vv, wn)), 0.0, 1.0);
+  vec3 env = textureCube(tRceEnv, reflect(vv, wn), 3.5).rgb * uRceEnvK;
+  emc = fE * uWinGlow * 1.4 * gm + env * gm * (0.10 + 0.50 * pow(1.0 - ndv, 4.0)) * uRceReflK * (pFam < 0.5 ? 1.0 : 0.5);
+}
+#endif
+`;
+GLSL_BLD.near = `float rceUse_ = 0.0;
+#ifndef GBUF
+if (uRceOn > 0.5) {
+  float dK = 1.0 - smoothstep(55.0, 340.0, cdist);
+  float sM = 1.0 - clamp(gls, 0.0, 1.0), glM = clamp(gls, 0.0, 1.0) * uWinQ;
+  vec2 rp = vec2(u, y) * uRceTile + vec2(fract(seed * 91.7), fract(seed * 37.3));
+  float bs = step(0.5, pFam);
+  float mB = gBrick * bs, mS = (1.0 - mB) * gStone * bs, mC = 1.0 - mB - mS; vec3 mw = vec3(mC, mS, mB);
+  float eT = 0.0016;
+  vec4 dT = texture2D(tRceD, rp), rT = texture2D(tRceR, rp), h0v = texture2D(tRceH, rp), hxv = texture2D(tRceH, rp + vec2(eT, 0.0)), hyv = texture2D(tRceH, rp + vec2(0.0, eT));
+  float k = dK * sM * uRceDetail;
+  float dv = dot(dT.rgb, mw), rv = dot(rT.rgb, mw), h0 = dot(h0v.rgb, mw), hx = dot(hxv.rgb, mw), hy = dot(hyv.rgb, mw);
+  float wetW = uRceWet * sM;
+  col *= mix(1.0, clamp(dv * 2.0, 0.40, 1.7), k);
+  col *= mix(1.0, 0.74 - 0.1 * (1.0 - smoothstep(0.0, 4.0, y)), wetW * dK);
+  rough = mix(rough, clamp(rough * (0.62 + 0.76 * rv), 0.04, 1.0), k);
+  rough *= mix(1.0, 0.62, wetW * dK);
+  float relief = mix(0.004, 0.009, mS + mB);
+  vec2 gd = vec2(hx - h0, hy - h0) / (eT * uRceTileM) * relief;
+  gDN += -(gd.x * T3 + gd.y * vec3(0.0, 1.0, 0.0)) * 0.85 * k;
+  // --- 유리: 먼지/물때 + 비 오는 날 흘러내리는 물줄기 + 빗방울 비드 + 환경 반사
+  vec4 dTr = texture2D(tRceD, rp + vec2(0.0, uRceTime * 0.012 * uRceWet));
+  float dirt = mix(dT.a, max(dT.a, dTr.a), uRceWet);
+  float dKg = glM * dK;
+  col = mix(col, col * 0.55 + vec3(0.03, 0.03, 0.025), dKg * dirt * 0.5);
+  rough = mix(rough, 0.55, dKg * dirt * 0.8);
+  float ghx = texture2D(tRceH, rp + vec2(eT, 0.0)).a, ghy = texture2D(tRceH, rp + vec2(0.0, eT)).a, gh0 = h0v.a;
+  vec2 gg = vec2(ghx - gh0, ghy - gh0) / (eT * uRceTileM) * 0.0011 * (0.25 + 2.2 * uRceWet);
+  gDN += -(gg.x * T3 + gg.y * vec3(0.0, 1.0, 0.0)) * dKg;
+  vec3 Rw = reflect(vv, wn); float ndv_ = clamp(abs(dot(-vv, wn)), 0.0, 1.0);
+  float Fg = mix(0.16, 1.0, pow(1.0 - ndv_, 4.0));
+  float lodB = mix(0.4, 4.5, clamp(rough, 0.0, 1.0)) + smoothstep(150.0, 600.0, cdist) * 2.0;
+  emi += textureCube(tRceEnv, Rw, lodB).rgb * uRceEnvK * Fg * glM * uRceReflK * (1.0 - 0.5 * dirt);
+  rceUse_ = step(0.001, k + dKg);
+}
+#endif
+`;
+GLSL_BLD.room = `vec3 wE_ = lc * lit * gls * uWinQ * lightK * (0.6 + 0.9 * h21(cellId + 7.3)) * (ground ? 1.2 : 1.0);
+#ifndef GBUF
+if (uRceOn > 0.5 && gls > 0.01) {
+  float rk_ = 1.0 - smoothstep(60.0, 220.0, cdist);
+  if (rk_ > 0.001) {
+    float rid_ = floor(h21(cellId + seed * 5.1) * 16.0); vec2 rc_ = vec2(mod(rid_, 4.0), floor(rid_ / 4.0));
+    vec3 rm_ = texture2D(tRceE, (rc_ + clamp(uvW, 0.03, 0.97)) * 0.25).rgb;
+    wE_ *= mix(vec3(1.0), rm_ * 2.2 + 0.08, rk_);
+  }
+}
+#endif
+emi += wE_;`;
+GLSL_BLD.fadeA = `vec3 rceFE_ = vec3(0.0);
+#ifndef GBUF
+if (uRceOn > 0.5) { float fK_ = smoothstep(0.5 * uWinFar, 0.95 * uWinFar, cdist);
+  if (fK_ > 0.001) { vec3 fa_, fe_; rceFar(u, yy, wn, vv, fa_, fe_); avg2 = mix(avg2, fa_ * (0.86 + 0.28 * ton) * mix(0.62, 1.0, smoothstep(0.0, 40.0, y)), fK_); rceFE_ = fe_ * fK_; } }
+#endif`;
+GLSL_BLD.far = `
+#ifndef GBUF
+if (uRceOn > 0.5) {
+  vec3 T3f_ = vec3(-wn.z, 0.0, wn.x); float uF_ = dot(vLP.xz - vAnc, T3f_.xz) + seed * 23.7;
+  float gHf_ = gShopT > 0.5 ? (H < 22.0 ? 4.7 : (H < 70.0 ? 5.4 : 8.0)) : 0.0;
+  vec3 fa_, fe_; rceFar(uF_, y - gHf_, wn, vv, fa_, fe_);
+  diffuseColor.rgb = mix(diffuseColor.rgb, fa_ * (0.86 + 0.28 * fbm(vWP.xz * 0.05 + vWP.y * 0.02)) * mix(0.62, 1.0, smoothstep(0.0, 40.0, y)), 0.9);
+  totalEmissiveRadiance += fe_;
+}
+#endif`;
+
+RealisticCityEnvironment.TEX = TEX;
+global.RealisticCityEnvironment = RealisticCityEnvironment;
+if (typeof module !== 'undefined' && module.exports) module.exports = RealisticCityEnvironment;
+})(typeof window !== 'undefined' ? window : globalThis);
+
+</script>
+<script>
+/* ===== RCE ↔ 게임 연결(glue) ============================================================
+ * 게임 코드는 건드리지 않고(건물 지오메트리/데이터 불변), 아래 4곳만 연결한다.
+ *   1) nmWallOBC 래핑  → 건물 외벽 셰이더의 "텍스처 계층"만 확장(디테일 D/R/H, 실내조명 아틀라스, 원거리 창문 시트, 유리 환경 반사)
+ *   2) window.onload 래핑 → init() 직후 RealisticCityEnvironment(scene, renderer, camera) 생성·init()
+ *   3) animate() 의 렌더 호출 앞 한 줄 → window.__rceFrame(dt) 가 true 면 컴포저로 렌더, 아니면 기존 경로
+ *   4) rgsApply 래핑 → RCE 가 켜져 있는 동안 기존 RGS 후처리가 중복으로 켜지지 않게 막음
+ * ===================================================================================== */
+(function () {
+  'use strict';
+  const KEY = 'rceSettings';
+  const S = { on: true, ssao: true, ssr: true, bloom: true, rts: true };
+  try { Object.assign(S, JSON.parse(localStorage.getItem(KEY) || '{}')); } catch (e) {}
+  const save = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} };
+  let rce = null, prevQ = null, queue = [], uiSync = () => {};
+  const MOBILE = () => (typeof GFX_MOBILE !== 'undefined' && GFX_MOBILE);
+
+  // 1) 건물 셰이더 훅
+  const _wall = nmWallOBC;
+  nmWallOBC = function (sh) { _wall.apply(this, arguments); if (rce) rce.patchBuildingShader(sh); else queue.push(sh); };
+  // 4) RGS 중복 방지
+  const _rgs = rgsApply;
+  rgsApply = function (on) { if (on && rce && rce.active) return; return _rgs.apply(this, arguments); };
+
+  function setOn(on) {
+    S.on = !!on; save();
+    if (!rce || !rce.ready) { uiSync(); return; }
+    if (on && !rce.failed) {
+      try { prevQ = localStorage.getItem('rcePrevQ') || prevQ; } catch (e) {}
+      if (!prevQ && (GFX.quality === 'realistic' || RGS.on)) { prevQ = GFX.quality; try { localStorage.setItem('rcePrevQ', prevQ); } catch (e) {} }
+      if (RGS.on || GFX.quality === 'realistic') { try { gfxSetQuality(MOBILE() ? 'ultra' : 'ultra'); } catch (e) { console.warn('RCE takeover', e); } }
+      rce.enable();
+    } else {
+      rce.disable(); if (GFX.sky) GFX.sky.visible = true;
+      let q = prevQ; try { q = q || localStorage.getItem('rcePrevQ'); localStorage.removeItem('rcePrevQ'); } catch (e) {}
+      prevQ = null; if (q) { try { gfxSetQuality(q); } catch (e) {} }
+    }
+    uiSync();
+  }
+
+  // 3) 프레임 훅 (animate 에서 호출)
+  window.__rceFrame = function (dt) {
+    if (!rce || !rce.active) return false;
+    if (RGS.on) { try { rgsApply(false); } catch (e) {} }
+    if (GFX.sky) GFX.sky.visible = false;
+    rce.setState({ timeOfDay: LUX.time, overcast: LUX.oc, rain: LUX.precip, wet: LUX.wetT });
+    rce.update(dt);
+    const ok = rce.render(dt);
+    if (!ok && rce.failed) setOn(false);
+    return ok;
+  };
+
+  // 지면(도로/보도/지표) 머티리얼 패치: 월드가 만들어진 뒤 한 번씩 시도
+  let gTries = 0;
+  function patchGround() {
+    if (!rce || !rce.ready) return false;
+    let road = false, ground = false;
+    try { if (typeof NR !== 'undefined' && NR.mG && NR.mDk && NR.mLc) { NR.mG.forEach(m => rce.patchGroundMaterial(m, { puddleScale: 1 })); rce.patchGroundMaterial(NR.mDk, { puddleScale: 1 }); rce.patchGroundMaterial(NR.mLc, { puddleScale: 0.45 }); road = true; } } catch (e) { console.warn('RCE road', e); }
+    try { scene.traverse(o => { if (o.name === 'NM_Ground' && o.material) { rce.patchGroundMaterial(o.material, { puddleScale: 0.55 }); ground = true; } }); } catch (e) {}
+    return road && ground;
+  }
+
+  function buildUI() {
+    const anchor = document.getElementById('btn-gfx-quality'); if (!anchor) return;
+    const host = anchor.closest('.settings-section'); if (!host) return;
+    const sec = document.createElement('div'); sec.className = 'settings-section';
+    sec.innerHTML = '<span class="settings-label">시네마틱 도시 환경 (RCE) — 절차적 PBR 텍스처 · 젖은 도로 · SSAO · SSR · 블룸</span>' +
+      '<button class="assist-toggle-btn" id="rce-on">RCE: ON</button>' +
+      '<button class="assist-toggle-btn" id="rce-ssao" style="margin-top:6px;">SSAO: ON</button>' +
+      '<button class="assist-toggle-btn" id="rce-ssr" style="margin-top:6px;">젖은 노면 반사(SSR): ON</button>' +
+      '<button class="assist-toggle-btn" id="rce-bloom" style="margin-top:6px;">블룸: ON</button>' +
+      '<button class="assist-toggle-btn" id="rce-rts" style="margin-top:6px;">레이 트레이싱 그림자: ON</button>' +
+      '<span class="settings-label" id="rce-info" style="margin-top:6px;opacity:.7;"></span>';
+    host.parentNode.insertBefore(sec, host);
+    const $ = (id) => document.getElementById(id);
+    const bind = (id, fn) => $(id).addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); fn(); uiSync(); });
+    bind('rce-on', () => setOn(!S.on));
+    bind('rce-ssao', () => { S.ssao = !S.ssao; save(); if (rce) rce.setEffect('ssao', S.ssao); });
+    bind('rce-ssr', () => { S.ssr = !S.ssr; save(); if (rce) rce.setEffect('ssr', S.ssr); });
+    bind('rce-bloom', () => { S.bloom = !S.bloom; save(); if (rce) rce.setEffect('bloom', S.bloom); });
+    bind('rce-rts', () => { S.rts = !S.rts; save(); if (rce && rce.active) rce.setRayShadows(S.rts); else if (rce) rce.opt.shadows.enabled = S.rts; });
+    uiSync = () => {
+      const t = (id, label, v) => { const b = $(id); if (b) { b.textContent = label + ': ' + (v ? 'ON' : 'OFF'); b.classList.toggle('off', !v); } };
+      t('rce-on', 'RCE 시네마틱 환경', S.on && !(rce && rce.failed)); t('rce-ssao', 'SSAO', S.ssao); t('rce-ssr', '젖은 노면 반사(SSR)', S.ssr); t('rce-bloom', '블룸', S.bloom); t('rce-rts', '레이 트레이싱 그림자', S.rts);
+      const i = $('rce-info'); if (i) i.textContent = !rce ? '' : (!rce.ready ? '텍스처 생성 중…' : (rce.failed ? '후처리 오류 → 기존 렌더러 사용 중' : (rce.composer ? '' : '후처리 스크립트 없음 — 텍스처/머티리얼만 적용')));
+    };
+    uiSync();
+  }
+
+  // 2) 부팅
+  function boot() {
+    const mobile = MOBILE();
+    rce = window.RCE = new RealisticCityEnvironment(scene, renderer, camera, {
+      atmosphere: 'external',                      // 라이트/안개/배경은 게임(LUX)이 구동 → 모듈은 읽어서 하늘·반사만 일치
+      textureSize: mobile ? 1024 : 2048, facadeCellPx: mobile ? 16 : 32, envSize: mobile ? 128 : 256, envBuildings: mobile ? 220 : 420,
+      post: { enabled: true, hdr: true, msaa: mobile ? 0 : 4, ssao: !mobile, ssr: !mobile, bloom: true, contact: !mobile },
+      shadows: { enabled: S.rts, searchTaps: mobile ? 8 : 12, filterTaps: mobile ? 12 : 20, maxPenumbra: mobile ? 8 : 12, contactSteps: mobile ? 12 : 20 },
+      ssao: { scale: 0.6 }, rain: { particles: false },   // 비 입자는 게임의 LUXR 이 담당
+      forceShadows: false, autoEnable: false,
+      getSunDirection: () => luxSunVec(LUX.time), getGroundY: () => GROUND_Y, timeOfDay: LUX.time
+    });
+    queue.forEach(sh => rce.patchBuildingShader(sh)); queue = [];
+    buildUI();
+    rce.init().then(() => {
+      rce.setEffect('ssao', S.ssao && !mobile); rce.setEffect('ssr', S.ssr && !mobile); rce.setEffect('bloom', S.bloom);
+      if (S.on) setOn(true); else uiSync();
+      const iv = setInterval(() => { if (patchGround() || ++gTries > 90) clearInterval(iv); }, 2000);
+    }).catch(e => { console.warn('RCE init 실패', e); if (rce) rce.failed = true; uiSync(); });
+  }
+  const _onload = window.onload;
+  window.onload = function () { const r = _onload ? _onload.apply(this, arguments) : undefined; try { boot(); } catch (e) { console.warn('RCE boot', e); } return r; };
+})();
+
 </script>
 </body>
 </html>
