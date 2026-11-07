@@ -10636,6 +10636,12 @@ class RealisticCityEnvironment {
     let f = sh.fragmentShader, miss = [];
     const rep = (a, b) => { if (f.indexOf(a) < 0) { miss.push(a.slice(0, 48)); return; } f = f.replace(a, () => b); };
     rep('uniform float uGlassR;', GLSL_BLD.decl);
+    // 게임 설정 '건물 디테일 거리'(→ uWinFar)가 근거리 디테일(창틀·범프·상점·인테리어)에도 비례해 적용되도록 하드코딩된 거리 컷을 스케일(기본 700m 설정 = 원래 값)
+    rep('float nearK = (1.0 - smoothstep(45.0, 150.0, cdist))', 'float nearK = (1.0 - smoothstep(45.0 * RCE_DS, 150.0 * RCE_DS, cdist))');
+    rep('if (cdist < 60.0 && lnn > 0.08) {', 'if (cdist < 60.0 * RCE_DI && lnn > 0.08) {');
+    rep('* (1.0 - smoothstep(35.0, 60.0, cdist));', '* (1.0 - smoothstep(35.0 * RCE_DI, 60.0 * RCE_DI, cdist));');
+    rep('if (cdist < 70.0 && gls > 0.01) {', 'if (cdist < 70.0 * RCE_DI && gls > 0.01) {');
+    rep('float imK = (1.0 - smoothstep(30.0, 70.0, cdist))', 'float imK = (1.0 - smoothstep(30.0 * RCE_DI, 70.0 * RCE_DI, cdist))');
     rep('float shadowK = 1.0 - 0.45 * shd * (1.0 - uWinGlow * 0.55);', GLSL_BLD.near + '\nfloat shadowK = 1.0 - 0.45 * shd * (1.0 - uWinGlow * 0.55);');
     rep('emi += lc * lit * gls * uWinQ * lightK * (0.6 + 0.9 * h21(cellId + 7.3)) * (ground ? 1.2 : 1.0);', GLSL_BLD.room);
     rep('gUse = nearK > 0.005 || length(bump) > 0.0 ? 1.0 : 0.0;', 'gUse = nearK > 0.005 || length(bump) > 0.0 || rceUse_ > 0.5 ? 1.0 : 0.0;');
@@ -10881,6 +10887,8 @@ class RceSSRPass extends THREE.ShaderPass {
 const GLSL_BLD = {};
 GLSL_BLD.decl = `uniform float uGlassR;
 uniform float uRceOn, uRceDetail, uRceReflK, uRceEnvK, uRceTile, uRceTileM; uniform vec2 uRceFacadeTiles;
+#define RCE_DS (uRceOn > 0.5 ? clamp(uWinFar / 455.0, 0.7, 2.5) : 1.0)
+#define RCE_DI (uRceOn > 0.5 ? clamp(uWinFar / 455.0, 0.7, 1.7) : 1.0)
 #ifndef GBUF
 uniform sampler2D tRceD, tRceR, tRceH, tRceE, tRceFD, tRceFE; uniform samplerCube tRceEnv; uniform float uRceWet, uRceTime;
 void rceFar(float u, float yy, vec3 wn, vec3 vv, out vec3 alb, out vec3 emc){
@@ -10898,7 +10906,7 @@ void rceFar(float u, float yy, vec3 wn, vec3 vv, out vec3 alb, out vec3 emc){
 GLSL_BLD.near = `float rceUse_ = 0.0;
 #ifndef GBUF
 if (uRceOn > 0.5) {
-  float dK = 1.0 - smoothstep(55.0, 340.0, cdist);
+  float dK = 1.0 - smoothstep(55.0 * RCE_DS, 340.0 * RCE_DS, cdist);
   float sM = 1.0 - clamp(gls, 0.0, 1.0), glM = clamp(gls, 0.0, 1.0) * uWinQ;
   vec2 rp = vec2(u, y) * uRceTile + vec2(fract(seed * 91.7), fract(seed * 37.3));
   float bs = step(0.5, pFam);
@@ -10977,7 +10985,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = RealisticC
 (function () {
   'use strict';
   const KEY = 'rceSettings';
-  const S = { on: true, ssao: true, ssr: true, bloom: true, rts: true };
+  const S = { on: true, ssao: true, ssr: true, bloom: true, rts: true, sun1: true };
   try { Object.assign(S, JSON.parse(localStorage.getItem(KEY) || '{}')); } catch (e) {}
   const save = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} };
   let rce = null, prevQ = null, queue = [], uiSync = () => {};
@@ -10999,21 +11007,53 @@ if (typeof module !== 'undefined' && module.exports) module.exports = RealisticC
       if (RGS.on || GFX.quality === 'realistic') { try { gfxSetQuality(MOBILE() ? 'ultra' : 'ultra'); } catch (e) { console.warn('RCE takeover', e); } }
       rce.enable();
     } else {
-      rce.disable(); if (GFX.sky) GFX.sky.visible = true;
+      rce.disable(); restoreLights(); if (GFX.sky) GFX.sky.visible = true;
       let q = prevQ; try { q = q || localStorage.getItem('rcePrevQ'); localStorage.removeItem('rcePrevQ'); } catch (e) {}
       prevQ = null; if (q) { try { gfxSetQuality(q); } catch (e) {} }
     }
     uiSync();
   }
 
+  // ---- 광원 = 태양 하나 ----------------------------------------------------------------------
+  // 울트라 품질이 추가하는 보조 방향광(림 라이트·2번째 태양)을 끄고, 반구광(평면 앰비언트)을 낮춰 태양 그림자가 또렷하게 보이게 한다.
+  // 반구광/태양 세기는 "렌더 직전에만" 바꾸고 직후 원복 → 게임의 날씨/시간 로직은 영향 없음.
+  let hidden = [], hemis = [], lightScan = 0;
+  const HEMI_K = 0.4, SUN_FLOOR = 0.85;
+  function singleSunSetup() {
+    hidden.forEach(l => { l.visible = true; }); hidden = []; hemis = [];
+    scene.traverse(o => {
+      if (!o.isLight) return;
+      if (o.isHemisphereLight) hemis.push(o);
+      else if (o !== sunLight && (o.isDirectionalLight || o.isSpotLight || o.isPointLight) && o.visible && !o.userData.keepLight) { o.visible = false; hidden.push(o); }
+    });
+    lightScan = 0;
+  }
+  function ensureSunShadows() {
+    if (typeof sunLight === 'undefined' || !sunLight) return;
+    if (!renderer.shadowMap.enabled || !sunLight.castShadow) {
+      renderer.shadowMap.enabled = true; sunLight.castShadow = true; sunLight.visible = true;
+      try { gfxReapplyShadowParams(); } catch (e) {} try { rce._flagMaterials(); } catch (e) {}
+      if (rce.opt.shadows.enabled) rce.setRayShadows(true);
+    }
+  }
+  function restoreLights() { hidden.forEach(l => { l.visible = true; }); hidden = []; hemis = []; }
+
   // 3) 프레임 훅 (animate 에서 호출)
   window.__rceFrame = function (dt) {
     if (!rce || !rce.active) return false;
     if (RGS.on) { try { rgsApply(false); } catch (e) {} }
     if (GFX.sky) GFX.sky.visible = false;
+    if (S.sun1) {
+      if (!hemis.length || ++lightScan > 240 || hidden.some(l => l.visible)) singleSunSetup();
+      ensureSunShadows();
+    }
     rce.setState({ timeOfDay: LUX.time, overcast: LUX.oc, rain: LUX.precip, wet: LUX.wetT });
     rce.update(dt);
-    const ok = rce.render(dt);
+    const hi = S.sun1 ? hemis.map(h => h.intensity) : null, si = sunLight.intensity;
+    if (S.sun1) { hemis.forEach((h, i) => { h.intensity = hi[i] * HEMI_K; }); if (si > 0.05) sunLight.intensity = Math.max(si, SUN_FLOOR); }
+    let ok;
+    try { ok = rce.render(dt); }
+    finally { if (S.sun1) { hemis.forEach((h, i) => { h.intensity = hi[i]; }); sunLight.intensity = si; } }
     if (!ok && rce.failed) setOn(false);
     return ok;
   };
@@ -11038,6 +11078,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = RealisticC
       '<button class="assist-toggle-btn" id="rce-ssr" style="margin-top:6px;">젖은 노면 반사(SSR): ON</button>' +
       '<button class="assist-toggle-btn" id="rce-bloom" style="margin-top:6px;">블룸: ON</button>' +
       '<button class="assist-toggle-btn" id="rce-rts" style="margin-top:6px;">레이 트레이싱 그림자: ON</button>' +
+      '<button class="assist-toggle-btn" id="rce-sun1" style="margin-top:6px;">광원: 태양 하나만: ON</button>' +
       '<span class="settings-label" id="rce-info" style="margin-top:6px;opacity:.7;"></span>';
     host.parentNode.insertBefore(sec, host);
     const $ = (id) => document.getElementById(id);
@@ -11046,10 +11087,11 @@ if (typeof module !== 'undefined' && module.exports) module.exports = RealisticC
     bind('rce-ssao', () => { S.ssao = !S.ssao; save(); if (rce) rce.setEffect('ssao', S.ssao); });
     bind('rce-ssr', () => { S.ssr = !S.ssr; save(); if (rce) rce.setEffect('ssr', S.ssr); });
     bind('rce-bloom', () => { S.bloom = !S.bloom; save(); if (rce) rce.setEffect('bloom', S.bloom); });
+    bind('rce-sun1', () => { S.sun1 = !S.sun1; save(); if (!S.sun1) restoreLights(); });
     bind('rce-rts', () => { S.rts = !S.rts; save(); if (rce && rce.active) rce.setRayShadows(S.rts); else if (rce) rce.opt.shadows.enabled = S.rts; });
     uiSync = () => {
       const t = (id, label, v) => { const b = $(id); if (b) { b.textContent = label + ': ' + (v ? 'ON' : 'OFF'); b.classList.toggle('off', !v); } };
-      t('rce-on', 'RCE 시네마틱 환경', S.on && !(rce && rce.failed)); t('rce-ssao', 'SSAO', S.ssao); t('rce-ssr', '젖은 노면 반사(SSR)', S.ssr); t('rce-bloom', '블룸', S.bloom); t('rce-rts', '레이 트레이싱 그림자', S.rts);
+      t('rce-on', 'RCE 시네마틱 환경', S.on && !(rce && rce.failed)); t('rce-ssao', 'SSAO', S.ssao); t('rce-ssr', '젖은 노면 반사(SSR)', S.ssr); t('rce-bloom', '블룸', S.bloom); t('rce-rts', '레이 트레이싱 그림자', S.rts); t('rce-sun1', '광원: 태양 하나만', S.sun1);
       const i = $('rce-info'); if (i) i.textContent = !rce ? '' : (!rce.ready ? '텍스처 생성 중…' : (rce.failed ? '후처리 오류 → 기존 렌더러 사용 중' : (rce.composer ? '' : '후처리 스크립트 없음 — 텍스처/머티리얼만 적용')));
     };
     uiSync();
