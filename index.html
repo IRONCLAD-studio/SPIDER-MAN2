@@ -3976,7 +3976,7 @@ async function nmBuildPart(P, pi, R, mat, prog) {
     g.setIndex(new THREE.BufferAttribute(X.slice(0, pi2), 1)); g.computeBoundingSphere();
     try { g.attributes.position.onUpload(function () { this.array = null; }); g.attributes.color.onUpload(function () { this.array = null; }); g.attributes.aSty.onUpload(function () { this.array = null; }); g.attributes.aTop.onUpload(function () { this.array = null; }); g.attributes.aTr.onUpload(function () { this.array = null; }); g.attributes.aBc.onUpload(function () { this.array = null; }); g.attributes.aWn.onUpload(function () { this.array = null; }); g.index.onUpload(function () { this.array = null; }); } catch (e) {}
     const mesh = new THREE.Mesh(g, mat); mesh.name = 'OpenStreetMap_Manhattan_Buildings_' + pi + '_' + key; mesh.position.set(cx0, 0, cz0);
-    scene.add(mesh); NM.cellMeshes.push({ mesh, x: cx0 + 200, z: cz0 + 200 });
+    mesh.receiveShadow = true; scene.add(mesh); NM.cellMeshes.push({ mesh, x: cx0 + 200, z: cz0 + 200 });   // 지붕·외벽도 다른 건물의 그림자를 받는다
     if (++cn % 6 === 0) { if (prog) prog(cn / cells.size); await nmYield(); }
   }
 }
@@ -4201,7 +4201,7 @@ float pvF(vec2 p) { float a = 0.5, s = 0.0; for (int i = 0; i < 4; i++) { s += a
     }
     const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(P, 3)); g.setAttribute('color', new THREE.Float32BufferAttribute(C, 3)); g.setAttribute('normal', new THREE.Float32BufferAttribute(Nn, 3));
     g.setIndex(X.length > 0 ? new THREE.Uint32BufferAttribute(X, 1) : null); g.computeBoundingSphere();
-    const m = new THREE.Mesh(g, mat); m.name = 'NM_Ground'; m.position.set(ox, 0, oz); scene.add(m); NM.cellMeshes.push({ mesh: m, x: ox + 200, z: oz + 200, ground: true });
+    const m = new THREE.Mesh(g, mat); m.name = 'NM_Ground'; m.position.set(ox, 0, oz); m.receiveShadow = true; scene.add(m); NM.cellMeshes.push({ mesh: m, x: ox + 200, z: oz + 200, ground: true });
   }
   const sea = new THREE.Mesh(new THREE.PlaneGeometry(90000, 90000).rotateX(-Math.PI / 2), new THREE.MeshStandardMaterial({ color: 0x0b1a2e, roughness: 0.25, metalness: 0.2 }));
   sea.position.set(R.x0 + NM.mw / 2, -1.5, R.z0 + NM.mh / 2); sea.name = 'NM_Sea'; scene.add(sea);
@@ -5259,7 +5259,7 @@ float lcWave(vec2 w) { return lcF(w * 0.45 + vec2(uLcT * 0.06, uLcT * 0.045)) + 
   const tg = nrTreeGeo(), tm = new THREE.Matrix4(), tq = new THREE.Quaternion(), tp = new THREE.Vector3(), ts = new THREE.Vector3(), tc = new THREE.Color(), up = new THREE.Vector3(0, 1, 0);
   let nT = 0, nV = 0;
   for (const [key, C] of NR.chunks) {
-    const mk = (B, mat, ro, nm, r) => { if (!B.v) return; const m = new THREE.Mesh(nrGeo(B), mat); m.name = nm; m.position.set(C.x0, 0, C.z0); m.renderOrder = ro; scene.add(m); NM.cellMeshes.push({ mesh: m, x: C.x0 + NR_CH / 2, z: C.z0 + NR_CH / 2, r }); nV += B.v; };
+    const mk = (B, mat, ro, nm, r) => { if (!B.v) return; const m = new THREE.Mesh(nrGeo(B), mat); m.name = nm; m.position.set(C.x0, 0, C.z0); m.renderOrder = ro; m.receiveShadow = true; scene.add(m); NM.cellMeshes.push({ mesh: m, x: C.x0 + NR_CH / 2, z: C.z0 + NR_CH / 2, r }); nV += B.v; };
     const sq = (NR._seq = (NR._seq || 0) + 1) * 1e-5; mk(C.lc, NR.mLc, 1 + sq, 'NR_Land', 0); mk(C.g0, NR.mG[0], 2 + sq, 'NR_Road', 0); mk(C.g1, NR.mG[1], 2.1 + sq, 'NR_Road1', 0); mk(C.g2, NR.mG[2], 2.2 + sq, 'NR_Cross', 0); mk(C.g3, NR.mG[3], 2.3 + sq, 'NR_Walk', 0); mk(C.dk, NR.mDk, 3, 'NR_Deck', 0); mk(C.pr, NR.mPr, 0, 'NR_Props', 1300); mk(C.pl, NR.mPl, 0, 'NR_Lights', 1300);
     if (C.tr.length) {
       const im = new THREE.InstancedMesh(tg, NR.mTr, C.tr.length); im.name = 'NR_Trees'; im.frustumCulled = false;
@@ -7710,7 +7710,19 @@ function gfxFreezeStatic() {
     c.traverse(o => { if (o.isMesh && o !== GFXS.mesh) o.receiveShadow = true; o.matrixAutoUpdate = false; });
   }
 }
+function gfxMarkReceivers() {
+  const skip = new Set([spideyGroup, targetMarker, webMesh, typeof waypointGroup !== 'undefined' ? waypointGroup : null, speedLinesGroup, GFXS.mesh, GFX2.proxy2, GFX.sky, sunLight, hemiLightRef]);
+  if (typeof RGS !== 'undefined' && RGS.gfx && RGS.gfx.root) skip.add(RGS.gfx.root);
+  if (typeof rce !== 'undefined' && rce && rce.sky) skip.add(rce.sky);
+  const walk = (o) => {
+    if (skip.has(o)) return;
+    if (o.isMesh && o.userData._rs !== 1) { o.userData._rs = 1; const m = Array.isArray(o.material) ? o.material[0] : o.material; if (m && m.depthWrite !== false && !m.transparent) o.receiveShadow = true; }
+    const ch = o.children; for (let i = 0; i < ch.length; i++) walk(ch[i]);
+  };
+  for (const c of scene.children) walk(c);
+}
 function gfxUpdate() {
+  if ((GFX._rsTick = (GFX._rsTick || 0) + 1) % 40 === 1) { try { gfxMarkReceivers(); } catch (e) {} }
   try { wglUpdate(); } catch (e) { if (!window.__wglErr) { window.__wglErr = 1; console.warn("windowGlow", e); } }
   gfx2Update();
   if (GFX.quality !== 'low' && GFX.envTex && (GFX.envTick = (GFX.envTick || 0) + 1) % 180 === 0) gfxApplyEnv();
@@ -9398,7 +9410,7 @@ const RGS_HS_CALC = `
    - 같은 높이장으로 반구 방향 AO 광선도 쏜다(RTAO). 플레이어 등 동적 물체는 스크린 공간 접촉 그림자(SSRT)로 보완. */
 const RGS_HS_RT = `
  uniform highp sampler2D tH0,tH1,tH2,tH3,tH4;uniform mat4 uProj,uCamWorld;uniform vec3 uSunW,uSunView;uniform vec2 uPx,uHFo;uniform vec4 uHFp;
- uniform float uTanSun,uSoft,uContactLen,uThick,uCS;
+ uniform float uTanSun,uSoft,uContactLen,uThick,uCS,uPlR;uniform vec3 uPlA,uPlB;
  varying vec2 vUv;
  float hfAt(int k,vec2 uv){if(k==0)return texture2D(tH0,uv).r;if(k==1)return texture2D(tH1,uv).r;if(k==2)return texture2D(tH2,uv).r;if(k==3)return texture2D(tH3,uv).r;return texture2D(tH4,uv).r;}
  vec2 hfUV(vec2 xz){return vec2((xz.x-uHFo.x)/uHFp.x,(uHFo.y-xz.y)/uHFp.x);}
@@ -9425,6 +9437,18 @@ const RGS_HS_RT = `
   }
   return 1.;
  }
+ float plOcc(vec3 o,vec3 L){   // 플레이어(캡슐)가 태양 광선을 가리는 정도: 1=가리지 않음, 0=완전히 가림 (경계는 부드럽게)
+  if(uPlR<=0.)return 1.;
+  vec3 ab=uPlB-uPlA;float abl=dot(ab,ab);vec3 r=o-uPlA;float dd;
+  if(abl<1e-5){float s=max(-dot(L,r),0.);dd=length(o+L*s-uPlA);}
+  else{
+   float f=dot(ab,r),c=dot(L,r),b=dot(L,ab),den=abl-b*b;
+   float t=den>1e-6?clamp((f-b*c)/den,0.,1.):clamp(f/abl,0.,1.);
+   float s=max(b*t-c,0.);t=clamp((b*s+f)/abl,0.,1.);
+   dd=length(o+L*s-(uPlA+ab*t));
+  }
+  return smoothstep(uPlR*.55,uPlR*1.25,dd);
+ }
  float rtShadow(vec3 wp,vec3 nw,vec3 L,float ign){
   vec3 o=wp+nw*.45;
   vec3 T=normalize(abs(L.y)<.99?cross(L,vec3(0.,1.,0.)):vec3(1.,0.,0.));vec3 B=cross(L,T);
@@ -9432,7 +9456,7 @@ const RGS_HS_RT = `
   for(int i=0;i<HF_RAYS;i++){
    float a=(ign+float(i)/float(HF_RAYS))*6.2831853,r=sqrt(fract(ign*7.31+float(i)*.618));
    vec3 Lj=normalize(L+(T*cos(a)+B*sin(a))*r*uTanSun*uSoft);
-   s+=sunTrace(o,Lj);
+   s+=sunTrace(o,Lj)*plOcc(o,Lj);
   }
   return s/float(HF_RAYS);
  }
@@ -9517,7 +9541,9 @@ class RGSRT {
   update() {
     if (!this.lv) this._init();
     const cam = this.g.camera, px = cam.position.x, pz = cam.position.z, now = performance.now();
-    if (this.built && Math.hypot(px - this.cx, pz - this.cz) < 600 && now - this.t < 90000) return;
+    const sig = (typeof NM !== 'undefined' && NM.cellMeshes) ? NM.cellMeshes.length : 0;
+    if (this.built && Math.hypot(px - this.cx, pz - this.cz) < 600 && now - this.t < 90000 && !(sig - (this.sig || 0) >= 6 && now - this.t > 4000)) return;
+    this.sig = sig;
     this.build(px, pz);
   }
   build(px, pz) {
@@ -9985,7 +10011,7 @@ class RGSHybrid {
         this.matCalcRT = new THREE.ShaderMaterial({ defines: dd, vertexShader: RGS_VS, fragmentShader: RGS_HS_COMMON + RGS_HS_RT, depthTest: false, depthWrite: false,
           uniforms: { tDepth: { value: null }, tH0: { value: null }, tH1: { value: null }, tH2: { value: null }, tH3: { value: null }, tH4: { value: null },
             uInvProj: { value: M() }, uProj: { value: M() }, uCamWorld: { value: M() }, uSunW: { value: new THREE.Vector3() }, uSunView: { value: new THREE.Vector3() }, uPx: { value: V() }, uHFo: { value: V() }, uHFp: { value: new THREE.Vector4() },
-            uTanSun: { value: 0.0047 }, uSoft: { value: 1 }, uContactLen: { value: 3 }, uThick: { value: 1.4 }, uCS: { value: 1 } } });
+            uTanSun: { value: 0.0047 }, uSoft: { value: 1 }, uContactLen: { value: 3 }, uThick: { value: 1.4 }, uCS: { value: 1 }, uPlA: { value: new THREE.Vector3() }, uPlB: { value: new THREE.Vector3() }, uPlR: { value: -1 } } });
       }
     } catch (e) { console.warn('[RGS] RT shadow init failed, PCSS fallback', e); this.rt = null; this.matCalcRT = null; }
     const R = g._sr; this.lightCam = new THREE.OrthographicCamera(-R, R, R, -R, 1, R * 4);
@@ -10029,6 +10055,20 @@ class RGSHybrid {
     u.uSunW.value.copy(g.sunDir); u.uSunView.value.copy(g.sunDir).transformDirection(cam.matrixWorldInverse);
     u.uPx.value.set(1 / this.depthRT.width, 1 / this.depthRT.height);
     u.uTanSun.value = 0.0047; u.uSoft.value = P.soft; u.uContactLen.value = P.contactLen; u.uThick.value = P.thick; u.uCS.value = LUX.cs;
+    // 플레이어를 가장 긴 축 방향의 캡슐로 근사해서 태양 광선 차폐체로 추가 (높이 지도에는 동적 물체가 없으므로)
+    const sg = (typeof spideyGroup !== 'undefined') ? spideyGroup : null; u.uPlR.value = -1;
+    if (sg && sg.visible) {
+      const b = this._pb || (this._pb = new THREE.Box3()), sz = this._ps || (this._ps = new THREE.Vector3()), ct = this._pc || (this._pc = new THREE.Vector3());
+      b.setFromObject(sg);
+      if (!b.isEmpty()) {
+        b.getSize(sz); b.getCenter(ct);
+        const L3 = [sz.x, sz.y, sz.z], ax = (sz.x >= sz.y && sz.x >= sz.z) ? 0 : (sz.y >= sz.z ? 1 : 2), len = L3[ax];
+        if (len <= 3.5) {
+          const R = Math.min(0.6, Math.max(0.25, (L3[(ax + 1) % 3] + L3[(ax + 2) % 3]) / 4)), half = Math.max(0, len / 2 - R), dv = [0, 0, 0]; dv[ax] = half;
+          u.uPlA.value.set(ct.x - dv[0], ct.y - dv[1], ct.z - dv[2]); u.uPlB.value.set(ct.x + dv[0], ct.y + dv[1], ct.z + dv[2]); u.uPlR.value = R;
+        } else { sg.getWorldPosition(ct); u.uPlA.value.set(ct.x, ct.y + 0.3, ct.z); u.uPlB.value.set(ct.x, ct.y + 1.5, ct.z); u.uPlR.value = 0.4; }
+      }
+    }
     rt.bind(u);
     g._pass(this.matCalcRT, this.shadowRT);
     if (!this._rtChecked) { this._rtChecked = true; if (RGSRT.bad(r, this.matCalcRT)) { console.error('[RGS] RT shadow shader failed -> PCSS fallback'); rt.ok = false; return false; } }
