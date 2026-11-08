@@ -8548,16 +8548,17 @@ function init() {
   sunLight = new THREE.DirectionalLight(0xfffbeb, 1.15);
   sunLight.position.set(200, 450, 180);
   scene.add(sunLight);
-  gfxInit();
-  applyWeatherTheme(currentWeatherMode);   // 시작 시 환경광·태양·하늘·그림자를 같은 시간대로 일치
+  try { gfxInit(); } catch (e) { console.error('[init] gfxInit(); 실패', e); window.__initErr=(window.__initErr||'')+' '+'gfxInit'; }
+  try { applyWeatherTheme(currentWeatherMode); } catch (e) { console.error('[init] applyWeatherTheme(currentWeatherMode); 실패', e); window.__initErr=(window.__initErr||'')+' '+'applyWeatherTheme(currentWeatherMode);'; }   // 시작 시 환경광·태양·하늘·그림자를 같은 시간대로 일치
 
   nmLoadWorld();
-  createTargetAndWebMarkers();
-  createWaypointMarkers();
-  createRealScaleSpiderMan();
-  gfxMarkCasters();
-  createSpeedLines();
-  setupControls();
+  try { createTargetAndWebMarkers(); } catch (e) { console.error('[init] createTargetAndWebMarkers(); 실패', e); window.__initErr=(window.__initErr||'')+' '+'createTargetAndWebMarkers'; }
+  try { createWaypointMarkers(); } catch (e) { console.error('[init] createWaypointMarkers(); 실패', e); window.__initErr=(window.__initErr||'')+' '+'createWaypointMarkers'; }
+  try { createRealScaleSpiderMan(); } catch (e) { console.error('[init] createRealScaleSpiderMan(); 실패', e); window.__initErr=(window.__initErr||'')+' '+'createRealScaleSpiderMan'; }
+  try { gfxMarkCasters(); } catch (e) { console.error('[init] gfxMarkCasters(); 실패', e); window.__initErr=(window.__initErr||'')+' '+'gfxMarkCasters'; }
+  try { createSpeedLines(); } catch (e) { console.error('[init] createSpeedLines(); 실패', e); window.__initErr=(window.__initErr||'')+' '+'createSpeedLines'; }
+  try { setupControls(); } catch (e) { console.error('[init] setupControls 실패', e); }
+  if (window.__initErr) { const st=document.getElementById('load-status'); if (st) st.textContent='일부 초기화 실패:'+window.__initErr+' (콘솔 확인)'; }
 
   // 시작 전 대기 화면에서도 플랫아이언 빌딩 정면이 보이도록 초기 위치 설정
   applySpawn(SPAWNS[0]);
