@@ -5723,7 +5723,7 @@ function createRealScaleSpiderMan() {
   spideyGroup.add(spideyPivot);
   scene.add(spideyGroup);
 
-  window.__bndRig = { ready:false, bones:{}, base:{}, mixer:null, model:null };
+  window.__bndRig = { ready:false, bones:{}, base:{}, list:[], restW:{}, mixer:null, model:null };
   if (!(THREE && THREE.GLTFLoader)) throw new Error('GLTFLoader 로드 실패(CDN 차단)');
   const loader = new THREE.GLTFLoader();
     fetch('spiderman_bnd.glb.gz')
@@ -5753,10 +5753,16 @@ function createRealScaleSpiderMan() {
 
     const rig = window.__bndRig;
     rig.model = model;
+    const qm = new THREE.Quaternion(); model.getWorldQuaternion(qm);
     model.traverse((o) => {
       if (o.isBone) {
-        rig.bones[o.name] = o;
-        rig.base[o.name] = o.quaternion.clone();
+        // three.js 는 노드 이름에서 '.' 를 제거한다(DEF_THIGH.L → DEF_THIGHL). 원본 이름(userData.name)으로 등록해야 모션 코드가 뼈를 찾는다.
+        const k = (o.userData && o.userData.name) || o.name;
+        rig.bones[k] = o; if (o.name !== k) rig.bones[o.name] = o;
+        rig.base[k] = o.quaternion.clone();
+        const qb = new THREE.Quaternion(); o.getWorldQuaternion(qb);
+        rig.restW[k] = qm.clone().invert().multiply(qb);
+        rig.list.push([k, o]);
       }
       // 보존된 재질/텍스처를 덮어쓰지 않는다.
       if (o.isMesh) { o.frustumCulled = true; }
@@ -8126,12 +8132,21 @@ function updateSpiderManRig(dt) {
     put('DEF_HEAD',0.015*Math.sin(performance.now()*0.001),0,0);
   }
 
-  for (const [name,bone] of Object.entries(rig.bones)) {
+  // 포즈 각도는 '모델 기준 축'(X=좌우, Y=위, Z=앞)으로 쓰여 있다. Blender 뼈의 로컬 축은 제각각이라
+  // 휴식 자세의 월드 회전(restW)으로 변환해서 적용해야 의도한 방향으로 움직인다.
+  const poseSan = {}; for (const k in pose) poseSan[k.replace(/[\[\]\.:\/]/g,'')] = pose[k];
+  const _qd = new THREE.Quaternion(), _qa = new THREE.Quaternion(), _e = new THREE.Euler();
+  for (const [name,bone] of rig.list) {
     const base = rig.base[name];
     if (!base) continue;
     bone.quaternion.copy(base);
-    const p = pose[name];
-    if (p) bone.quaternion.multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(p[0],p[1],p[2],'XYZ')));
+    const p = pose[name] || poseSan[name];
+    if (p) {
+      _e.set(p[0],p[1],p[2],'XYZ'); _qd.setFromEuler(_e);
+      const W = rig.restW[name];
+      if (W) { _qa.copy(W).invert().multiply(_qd).multiply(W); bone.quaternion.multiply(_qa); }
+      else bone.quaternion.multiply(_qd);
+    }
   }
 
   // Web line endpoint follows the actual right-hand deform bone if present.
