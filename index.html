@@ -6947,7 +6947,7 @@ const GFX_PRESETS = {
   high:   { label: '높음 (고화질 그림자+블룸)', maxPR: 2.0, shadow: 2048, bShadow: true,  bloom: true, loadR: 900, shR: 190 },
   ultra:  { label: '최고급 (울트라: 반사·빛줄기·시네마 후처리)', maxPR: 2.0, shadow: 4096, bShadow: true, bloom: true, ultra: true, loadR: 1200, shR: 230 },
   cinema: { label: '시네마틱 (SSR·볼류메트릭·모션블러·AO·2단 그림자)', maxPR: 2.0, shadow: 4096, bShadow: true, bloom: true, ultra: true, cinema: true, loadR: 1200, shR: 230 },
-  realistic: { label: '리얼리스틱 (PCSS+SSRT 그림자·SSAO·대기·날씨·글레어)', maxPR: 2.0, shadow: 0, bShadow: false, bloom: true, ultra: true, cinema: true, realistic: true, loadR: 1200, shR: 230 }
+  realistic: { label: '리얼리스틱 (RT Shadow + RTAO)', maxPR: 2.0, shadow: 0, bShadow: false, bloom: true, ultra: true, cinema: true, realistic: true, loadR: 1200, shR: 230 }
 };
 
 // ---------- 사용자 설정: 디테일 거리 · 청크 거리 · 그림자 거리/디테일 (localStorage 저장) ----------
@@ -7714,7 +7714,13 @@ function gfxUpdate() {
   try { wglUpdate(); } catch (e) { if (!window.__wglErr) { window.__wglErr = 1; console.warn("windowGlow", e); } }
   gfx2Update();
   if (GFX.quality !== 'low' && GFX.envTex && (GFX.envTick = (GFX.envTick || 0) + 1) % 180 === 0) gfxApplyEnv();
-  if (GFX.sky) { GFX.sky.position.copy(camera.position); const _C = GFX_CLOUD[currentWeatherMode] || GFX_CLOUD.night; GFX.sky.material.uniforms.cTime.value = performance.now() * 0.001 * _C.wind; }
+  {   // 하늘은 항상 하나만, 항상 카메라 중심: 동결(matrixAutoUpdate=false)되거나 다른 하늘과 겹치면 구의 가장자리(원호)가 보인다
+    const _g2 = (typeof RGS !== 'undefined' && RGS.on && RGS.gfx), _r2 = (typeof rce !== 'undefined' && rce && rce.active);
+    if (GFX.sky && (_g2 || _r2) && GFX.sky.visible) GFX.sky.visible = false;
+    if (_g2 && RGS.gfx.root) { RGS.gfx.root.matrixAutoUpdate = true; RGS.gfx.root.position.copy(camera.position); }
+    if (_r2 && rce.sky) { rce.sky.matrixAutoUpdate = true; rce.sky.position.copy(camera.position); }
+  }
+  if (GFX.sky) { GFX.sky.matrixAutoUpdate = true; GFX.sky.position.copy(camera.position); const _C = GFX_CLOUD[currentWeatherMode] || GFX_CLOUD.night; GFX.sky.material.uniforms.cTime.value = performance.now() * 0.001 * _C.wind; }
   if (sunLight.castShadow) {
     const p = player.pos, d = GFX.sunDir;
     {
@@ -9199,7 +9205,7 @@ window.LUX = LUX;
 //  - camera.far 를 올리지 않고(G-buffer 가 2600 고정) 하늘·구름·돔은 depth=far(xyww)로 그려 원거리 잘림 방지
 //  - r128 은 레거시 조명(×π)이라 조명 세기를 RGS.cfg.sunK/hemiK 로 보정, 출력에 sRGB 변환은 넣지 않음(게임 기존 색감 유지)
 // =============================================================================
-RGS.cfg = { sunK: 0.55, hemiK: 2.6, expoK: 1.3, skyLift: 0.8, ssao: true, ssaoRadius: 2.5, ssaoPower: 1.25, bloom: true, bodycam: true, glare: 0.6, soft: 1.6 };
+RGS.cfg = { sunK: 0.55, hemiK: 2.6, expoK: 1.3, skyLift: 0.8, ssao: true, ssaoRadius: 2.5, ssaoPower: 1.25, bloom: true, bodycam: true, glare: 0.6, soft: 1.6, rt: true };
 try { const _s = JSON.parse(localStorage.getItem('rgsSettings') || 'null'); if (_s) for (const k in RGS.cfg) if (_s[k] !== undefined) RGS.cfg[k] = _s[k]; } catch (e) {}
 function rgsSave() { try { localStorage.setItem('rgsSettings', JSON.stringify(RGS.cfg)); } catch (e) {} }
 
@@ -9382,8 +9388,159 @@ const RGS_HS_CALC = `
   float ign=IGN(gl_FragCoord.xy*2.);
   float S=min(pcss(wp,nw,ndl,ign),mix(1.,contact(p,n,ign),clamp(uCS,0.,1.)));
   S=mix(1.,S,smoothstep(-.02,.15,ndl));
-  gl_FragColor=vec4(S,0.,0.,1.);}
+  gl_FragColor=vec4(S,1.,0.,1.);}
 `;
+
+/* ================= 레이트레이싱 태양 그림자 + RTAO =================
+   건물 높이장(위에서 내려다본 고도 맵 + 최대값 피라미드)을 월드 공간에서 직접 광선 추적한다.
+   - 태양 광선은 실제 태양 벡터(uSunW)를 그대로 따라가므로 그림자 방향이 태양과 항상 일치하고, 사전 계산된 그림자 맵의 범위/해상도 한계가 없다.
+   - 광선이 건물 위를 지나가는지 높이로 판정하므로 건물을 통과한 빛이 생길 수 없다.
+   - 같은 높이장으로 반구 방향 AO 광선도 쏜다(RTAO). 플레이어 등 동적 물체는 스크린 공간 접촉 그림자(SSRT)로 보완. */
+const RGS_HS_RT = `
+ uniform highp sampler2D tH0,tH1,tH2,tH3,tH4;uniform mat4 uProj,uCamWorld;uniform vec3 uSunW,uSunView;uniform vec2 uPx,uHFo;uniform vec4 uHFp;
+ uniform float uTanSun,uSoft,uContactLen,uThick,uCS;
+ varying vec2 vUv;
+ float hfAt(int k,vec2 uv){if(k==0)return texture2D(tH0,uv).r;if(k==1)return texture2D(tH1,uv).r;if(k==2)return texture2D(tH2,uv).r;if(k==3)return texture2D(tH3,uv).r;return texture2D(tH4,uv).r;}
+ vec2 hfUV(vec2 xz){return vec2((xz.x-uHFo.x)/uHFp.x,(uHFo.y-xz.y)/uHFp.x);}
+ float hfH0(vec2 xz){vec2 uv=hfUV(xz);if(uv.x<=0.||uv.x>=1.||uv.y<=0.||uv.y>=1.)return -1.;return texture2D(tH0,uv).r;}
+ float sunTrace(vec3 o,vec3 L){
+  if(L.y<.012)return 0.;
+  float hl=length(L.xz);vec2 dir=hl>1e-4?L.xz/hl:vec2(1.,0.);float sl=L.y/max(hl,1e-4);
+  vec2 gd=vec2(dir.x,-dir.y);
+  float base=uHFp.x/uHFp.y;
+  float t=2.;int k=1;
+  for(int i=0;i<HF_ITERS;i++){
+   vec2 xz=o.xz+dir*t;float ry=o.y+sl*t;
+   if(ry>uHFp.z)return 1.;
+   vec2 uv=hfUV(xz);
+   if(uv.x<=0.||uv.x>=1.||uv.y<=0.||uv.y>=1.)return 1.;
+   float cs=base*exp2(float(k));
+   vec2 gp=uv*uHFp.x/cs;vec2 cell=floor(gp);
+   float M=hfAt(k,(cell+.5)*cs/uHFp.x);
+   if(ry>M+uHFp.w){
+    float tx=gd.x>1e-5?(cell.x+1.-gp.x)/gd.x:(gd.x<-1e-5?(cell.x-gp.x)/gd.x:1e9);
+    float ty=gd.y>1e-5?(cell.y+1.-gp.y)/gd.y:(gd.y<-1e-5?(cell.y-gp.y)/gd.y:1e9);
+    t+=min(tx,ty)*cs+.02*cs;k=min(k+1,4);
+   }else{if(k==0)return 0.;k--;}
+  }
+  return 1.;
+ }
+ float rtShadow(vec3 wp,vec3 nw,vec3 L,float ign){
+  vec3 o=wp+nw*.45;
+  vec3 T=normalize(abs(L.y)<.99?cross(L,vec3(0.,1.,0.)):vec3(1.,0.,0.));vec3 B=cross(L,T);
+  float s=0.;
+  for(int i=0;i<HF_RAYS;i++){
+   float a=(ign+float(i)/float(HF_RAYS))*6.2831853,r=sqrt(fract(ign*7.31+float(i)*.618));
+   vec3 Lj=normalize(L+(T*cos(a)+B*sin(a))*r*uTanSun*uSoft);
+   s+=sunTrace(o,Lj);
+  }
+  return s/float(HF_RAYS);
+ }
+ float rtAO(vec3 wp,vec3 nw,float ign){
+  vec3 o=wp+nw*1.;
+  vec3 T=normalize(abs(nw.y)<.99?cross(nw,vec3(0.,1.,0.)):vec3(1.,0.,0.));vec3 B=cross(nw,T);
+  float occ=0.;
+  for(int i=0;i<AO_RAYS;i++){
+   float u1=fract(ign+float(i)*.61803),u2=fract(ign*3.7+float(i)*.7548776);
+   float r=sqrt(u1),a=u2*6.2831853;
+   vec3 d=normalize(T*(r*cos(a))+B*(r*sin(a))+nw*sqrt(max(1.-u1,.03)));
+   float o1=0.;
+   for(int j=0;j<5;j++){
+    float dist=1.5+float(j*j)*.9+float(j)*1.1;
+    vec3 P=o+d*dist;float h=hfH0(P.xz);
+    if(h>P.y+.6){o1=1.-dist/19.;break;}
+   }
+   occ+=o1;
+  }
+  return 1.-occ/float(AO_RAYS);
+ }
+ float contact(vec3 p,vec3 n,float ign){
+  float dist=length(p);
+  float len=clamp(uContactLen*(1.+dist*.02),.5,9.),thick=uThick*(1.+dist*.03);
+  vec3 o=p+n*(.03+dist*.0015);
+  for(int i=0;i<SSRT_STEPS;i++){
+   float f=(float(i)+ign)/float(SSRT_STEPS);
+   float t=len*(f*f*.7+f*.3)+.02;
+   vec3 s=o+uSunView*t;
+   vec4 cl=uProj*vec4(s,1.);if(cl.w<=0.)break;
+   vec2 suv=cl.xy/cl.w*.5+.5;
+   if(suv.x<0.||suv.x>1.||suv.y<0.||suv.y>1.)break;
+   float sd=texture2D(tDepth,suv).r;if(sd>=.99999)continue;
+   float sz=-uProj[3][2]/(sd*2.-1.+uProj[2][2]);
+   float diff=sz-s.z;
+   if(diff>.02+t*.05&&diff<thick)return 0.;
+  }
+  return 1.;
+ }
+ void main(){
+  float d=texture2D(tDepth,vUv).r;
+  if(d>=.99999){gl_FragColor=vec4(1.,1.,0.,1.);return;}
+  vec3 p=viewPos(vUv,d);
+  vec2 e=uPx;
+  vec3 pr=viewPos(vUv+vec2(e.x,0.),texture2D(tDepth,vUv+vec2(e.x,0.)).r),pl=viewPos(vUv-vec2(e.x,0.),texture2D(tDepth,vUv-vec2(e.x,0.)).r);
+  vec3 pu=viewPos(vUv+vec2(0.,e.y),texture2D(tDepth,vUv+vec2(0.,e.y)).r),pd=viewPos(vUv-vec2(0.,e.y),texture2D(tDepth,vUv-vec2(0.,e.y)).r);
+  vec3 dx=abs(pr.z-p.z)<abs(p.z-pl.z)?pr-p:p-pl,dy=abs(pu.z-p.z)<abs(p.z-pd.z)?pu-p:p-pd;
+  vec3 n=normalize(cross(dx,dy));if(dot(n,-p)<0.)n=-n;
+  float ndl=dot(n,uSunView);
+  vec3 wp=(uCamWorld*vec4(p,1.)).xyz,nw=normalize((uCamWorld*vec4(n,0.)).xyz);
+  float ign=IGN(gl_FragCoord.xy*2.);
+  float ao=rtAO(wp,nw,ign);
+  float S=1.;
+  if(ndl>-.02){
+   S=rtShadow(wp,nw,uSunW,ign);
+   S=min(S,mix(1.,contact(p,n,ign),clamp(uCS,0.,1.)));
+   S=mix(1.,S,smoothstep(-.02,.15,ndl));
+  }
+  gl_FragColor=vec4(S,ao,0.,1.);}
+`;
+const RGS_HS_MAX = `uniform sampler2D tSrc;uniform vec2 uTx;varying vec2 vUv;
+ void main(){vec2 o=uTx*.5;
+  float a=texture2D(tSrc,vUv+vec2(-o.x,-o.y)).r,b=texture2D(tSrc,vUv+vec2(o.x,-o.y)).r,c=texture2D(tSrc,vUv+vec2(-o.x,o.y)).r,d=texture2D(tSrc,vUv+vec2(o.x,o.y)).r;
+  gl_FragColor=vec4(max(max(a,b),max(c,d)),0.,0.,1.);}`;
+
+class RGSRT {
+  constructor(g) { this.g = g; this.ok = true; this.built = false; this.cx = 1e9; this.cz = 1e9; this.t = 0; this.N = 1536; this.W = 3072; this.Hmax = 620; this.lv = null; }
+  _init() {
+    const r = this.g.renderer, f32 = r.extensions.has('EXT_color_buffer_float');
+    if (!r.capabilities.isWebGL2 || !(f32 || r.extensions.has('EXT_color_buffer_half_float'))) throw new Error('float render target unsupported');
+    const type = f32 ? THREE.FloatType : THREE.HalfFloatType;
+    this.lv = [];
+    for (let i = 0; i < 5; i++) { const n = this.N >> i; this.lv.push(new THREE.WebGLRenderTarget(n, n, { format: THREE.RedFormat, type, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, depthBuffer: i === 0, stencilBuffer: false })); }
+    this.cam = new THREE.OrthographicCamera(-this.W / 2, this.W / 2, this.W / 2, -this.W / 2, 1, 1400);
+    this.matH = new THREE.ShaderMaterial({ side: THREE.DoubleSide, depthTest: true, depthWrite: true, fog: false,
+      vertexShader: 'varying float vY;void main(){vec4 q=vec4(position,1.);\n#ifdef USE_INSTANCING\nq=instanceMatrix*q;\n#endif\nq=modelMatrix*q;vY=q.y;gl_Position=projectionMatrix*viewMatrix*q;}',
+      fragmentShader: 'varying float vY;void main(){gl_FragColor=vec4(vY,0.,0.,1.);}' });
+    this.matMax = new THREE.ShaderMaterial({ vertexShader: RGS_VS, fragmentShader: RGS_HS_MAX, depthTest: false, depthWrite: false, uniforms: { tSrc: { value: null }, uTx: { value: new THREE.Vector2() } } });
+  }
+  static bad(r, mat) { const pr = r.properties.get(mat), cp = pr && pr.currentProgram; return !!(cp && cp.diagnostics && cp.diagnostics.runnable === false); }
+  /* 플레이어가 멀리 이동했거나 오래됐을 때만 높이장을 다시 만든다(위에서 본 씬을 한 번 렌더) */
+  update() {
+    if (!this.lv) this._init();
+    const cam = this.g.camera, px = cam.position.x, pz = cam.position.z, now = performance.now();
+    if (this.built && Math.hypot(px - this.cx, pz - this.cz) < 600 && now - this.t < 90000) return;
+    this.build(px, pz);
+  }
+  build(px, pz) {
+    const g = this.g, r = g.renderer, sc = g.scene, c = this.cam, h = this.W / 2;
+    this.cx = Math.round(px / 64) * 64; this.cz = Math.round(pz / 64) * 64; this.t = performance.now();
+    c.position.set(this.cx, 1000, this.cz); c.up.set(0, 0, -1); c.lookAt(this.cx, 0, this.cz); c.updateProjectionMatrix(); c.updateMatrixWorld();
+    const sg = (typeof spideyGroup !== 'undefined') ? spideyGroup : null, sv = sg ? sg.visible : false; if (sg) sg.visible = false;
+    const bg = sc.background, cc = r.getClearColor(new THREE.Color()), ca = r.getClearAlpha(); sc.background = null;
+    try {
+      sc.overrideMaterial = this.matH;
+      r.setRenderTarget(this.lv[0]); r.setClearColor(0x000000, 1); r.clear(true, true, true); r.render(sc, c);
+      sc.overrideMaterial = null;
+      for (let i = 1; i < 5; i++) { this.matMax.uniforms.tSrc.value = this.lv[i - 1].texture; const n = this.N >> (i - 1); this.matMax.uniforms.uTx.value.set(1 / n, 1 / n); g._pass(this.matMax, this.lv[i]); }
+      if (RGSRT.bad(r, this.matH) || RGSRT.bad(r, this.matMax)) throw new Error('RT height shaders failed to compile');
+      this.built = true;
+    } finally { sc.overrideMaterial = null; sc.background = bg; r.setClearColor(cc, ca); if (sg) sg.visible = sv; }
+  }
+  bind(u) {
+    for (let i = 0; i < 5; i++) u['tH' + i].value = this.lv[i].texture;
+    u.uHFo.value.set(this.cx - this.W / 2, this.cz + this.W / 2); u.uHFp.value.set(this.W, this.N, this.Hmax, 0.5);
+  }
+}
+
 const RGS_HS_COMP = `
  uniform sampler2D tDiffuse;uniform highp sampler2D tShadow;uniform mat4 uCamWorld;uniform vec2 uSPx;uniform float uStrength,uAO;uniform vec3 uTint;
  varying vec2 vUv;
@@ -9391,18 +9548,18 @@ const RGS_HS_COMP = `
   vec4 c=texture2D(tDiffuse,vUv);float d=texture2D(tDepth,vUv).r;
   if(d>=.99999||uStrength<.002){gl_FragColor=c;return;}
   vec3 p=viewPos(vUv,d);float zc=-p.z;
-  float sw=0.,ss=0.;
+  float sw=0.,ss=0.,sa=0.;
   for(int j=-1;j<=1;j++)for(int i=-1;i<=1;i++){
    vec2 q=(floor((vUv+vec2(float(i),float(j))*uSPx)/uSPx)+.5)*uSPx;
    float sd=texture2D(tDepth,q).r;if(sd>=.99999)continue;
    float zs=-viewPos(q,sd).z;
    float w=exp(-abs(zs-zc)/(zc*.012+.04))*(1.-.2*length(vec2(float(i),float(j))));
-   ss+=texture2D(tShadow,q).r*w;sw+=w;}
-  float S=sw>.0001?ss/sw:1.;
+   vec4 tq=texture2D(tShadow,q);ss+=tq.r*w;sa+=tq.g*w;sw+=w;}
+  float S=sw>.0001?ss/sw:1.;float A=sw>.0001?sa/sw:1.;
   vec3 wp=(uCamWorld*vec4(p,1.)).xyz;
   float hao=mix(1.,.6,exp(-max(wp.y,0.)*.045));
   vec3 sh=mix(vec3(1.),mix(uTint,vec3(1.),S),uStrength);
-  gl_FragColor=vec4(c.rgb*sh*mix(1.,hao,uAO*uStrength*(.35+.65*(1.-S))),c.a);}
+  gl_FragColor=vec4(c.rgb*sh*mix(1.,hao,uAO*uStrength*(.35+.65*(1.-S)))*mix(1.,A,clamp(uAO,0.,1.)*.9),c.a);}
 `;
 /* SSAO: 카메라 깊이에서 법선을 복원해 반구 샘플링(깊이 재사용 · 반해상도 계산 · 깊이 인식 업샘플) */
 const RGS_SSAO_CALC = `
@@ -9820,6 +9977,17 @@ class RGSHybrid {
         uBias: { value: 0 }, uSlope: { value: 0 }, uNormalBias: { value: 0 }, uLightRange: { value: 1 }, uInvSpan: { value: 1 }, uSearchUV: { value: 0 }, uTanSun: { value: 0.0093 }, uSoft: { value: 1 }, uMinPen: { value: 0.3 }, uMaxPen: { value: 6 }, uContactLen: { value: 3 }, uThick: { value: 1.4 }, uCS: { value: 1 } } });
     this.matComp = new THREE.ShaderMaterial({ vertexShader: RGS_VS, fragmentShader: RGS_HS_COMMON + RGS_HS_COMP, depthTest: false, depthWrite: false,
       uniforms: { tDiffuse: { value: null }, tDepth: { value: null }, tShadow: { value: null }, uInvProj: { value: M() }, uCamWorld: { value: M() }, uSPx: { value: V() }, uStrength: { value: 0 }, uAO: { value: 0.8 }, uTint: { value: new THREE.Color(0.3, 0.36, 0.47) } } });
+    this.rt = null; this.matCalcRT = null;
+    try {
+      if (RGS.cfg.rt !== false && !/[?&]rgsrt=0/.test(location.search)) {
+        this.rt = new RGSRT(g);
+        const dd = { HF_ITERS: mobile ? 48 : 80, HF_RAYS: mobile ? 1 : 2, AO_RAYS: mobile ? 3 : 6, SSRT_STEPS: mobile ? 16 : 22 };
+        this.matCalcRT = new THREE.ShaderMaterial({ defines: dd, vertexShader: RGS_VS, fragmentShader: RGS_HS_COMMON + RGS_HS_RT, depthTest: false, depthWrite: false,
+          uniforms: { tDepth: { value: null }, tH0: { value: null }, tH1: { value: null }, tH2: { value: null }, tH3: { value: null }, tH4: { value: null },
+            uInvProj: { value: M() }, uProj: { value: M() }, uCamWorld: { value: M() }, uSunW: { value: new THREE.Vector3() }, uSunView: { value: new THREE.Vector3() }, uPx: { value: V() }, uHFo: { value: V() }, uHFp: { value: new THREE.Vector4() },
+            uTanSun: { value: 0.0047 }, uSoft: { value: 1 }, uContactLen: { value: 3 }, uThick: { value: 1.4 }, uCS: { value: 1 } } });
+      }
+    } catch (e) { console.warn('[RGS] RT shadow init failed, PCSS fallback', e); this.rt = null; this.matCalcRT = null; }
     const R = g._sr; this.lightCam = new THREE.OrthographicCamera(-R, R, R, -R, 1, R * 4);
     this._v = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()];
     this.lightRT = this._mkDepthRT(this.lightSize, this.lightSize); this.depthRT = null; this.shadowRT = null;
@@ -9833,7 +10001,7 @@ class RGSHybrid {
   setSize(w, h) {
     if (this.depthRT) this.depthRT.dispose(); if (this.shadowRT) this.shadowRT.dispose();
     this.depthRT = this._mkDepthRT(w, h);
-    this.shadowRT = new THREE.WebGLRenderTarget(Math.max(2, w * this.scale | 0), Math.max(2, h * this.scale | 0), { format: THREE.RedFormat, type: THREE.UnsignedByteType, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, depthBuffer: false, stencilBuffer: false });
+    this.shadowRT = new THREE.WebGLRenderTarget(Math.max(2, w * this.scale | 0), Math.max(2, h * this.scale | 0), { format: THREE.RGBAFormat, type: THREE.UnsignedByteType, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, depthBuffer: false, stencilBuffer: false });
   }
   setRange(R) { const c = this.lightCam; c.left = c.bottom = -R; c.right = c.top = R; c.far = R * 4; c.updateProjectionMatrix(); }
   setLightSize(s) { this.lightSize = s; if (this.lightRT) this.lightRT.dispose(); this.lightRT = this._mkDepthRT(s, s); }
@@ -9850,8 +10018,25 @@ class RGSHybrid {
     cam.updateMatrixWorld(); return tx;
   }
   /* ① 태양 시점 정사영 깊이맵 ② 카메라 깊이 프리패스 ③ PCSS + SSRT 계산(반해상도) */
+  _renderRT() {
+    const rt = this.rt, g = this.g, r = g.renderer, sc = g.scene, cam = g.camera, P = this.params;
+    try { rt.update(); } catch (e) { console.warn('[RGS] RT build failed -> PCSS', e); rt.ok = false; }
+    if (!rt.ok || !rt.built) return false;
+    sc.overrideMaterial = this.matDepth; r.setRenderTarget(this.depthRT); r.clear(true, true, true); r.render(sc, cam); sc.overrideMaterial = null;
+    const u = this.matCalcRT.uniforms;
+    u.tDepth.value = this.depthRT.depthTexture;
+    u.uInvProj.value.copy(cam.projectionMatrixInverse); u.uProj.value.copy(cam.projectionMatrix); u.uCamWorld.value.copy(cam.matrixWorld);
+    u.uSunW.value.copy(g.sunDir); u.uSunView.value.copy(g.sunDir).transformDirection(cam.matrixWorldInverse);
+    u.uPx.value.set(1 / this.depthRT.width, 1 / this.depthRT.height);
+    u.uTanSun.value = 0.0047; u.uSoft.value = P.soft; u.uContactLen.value = P.contactLen; u.uThick.value = P.thick; u.uCS.value = LUX.cs;
+    rt.bind(u);
+    g._pass(this.matCalcRT, this.shadowRT);
+    if (!this._rtChecked) { this._rtChecked = true; if (RGSRT.bad(r, this.matCalcRT)) { console.error('[RGS] RT shadow shader failed -> PCSS fallback'); rt.ok = false; return false; } }
+    return true;
+  }
   renderDepths(needLight) {
     const g = this.g, r = g.renderer, sc = g.scene, cam = g.camera, P = this.params, lc = this.lightCam;
+    if (needLight && this.rt && this.matCalcRT && this.rt.ok && this._renderRT()) return;   // 레이트레이싱 경로(성공 시 PCSS 그림자 맵 패스 생략)
     if (needLight) {
       const R = g._sr, tx = this._updateLightCam(), range = R * 4 - 1;
       sc.overrideMaterial = this.matLight; r.setRenderTarget(this.lightRT); r.clear(true, true, true); r.render(sc, lc);
@@ -10827,7 +11012,7 @@ class RealisticCityEnvironment {
     if (this.opt.getGroundY) { const gy = this.opt.getGroundY(); if (typeof gy === 'number') this.U.uRceGroundY.value = gy; }
     this._updateAtmosphere(dt, false);
     this.skyMat.uniforms.uTime.value = this.time;
-    this.sky.position.copy(this.camera.position);
+    this.sky.matrixAutoUpdate = true; this.sky.position.copy(this.camera.position);
     this.sky.visible = this.active;
     if (this.rainMesh) {
       const m = this.rainMesh, u = m.material.uniforms; m.visible = this.active && this.state.rain > 0.02;
