@@ -124,6 +124,7 @@ canvas { display: block; width: 100%; height: 100%; }
 #start-overlay.hidden { display: none; }
 .start-card { background: #1e293b; border: 2px solid #fbbf24; border-radius: 18px; padding: 24px 28px; text-align: center; max-width: 470px; width: 90%; box-shadow: 0 20px 50px rgba(0,0,0,0.8); }
 .start-badge { display: inline-block; background: rgba(251, 191, 36, 0.2); color: #fde047; border: 1px solid rgba(251, 191, 36, 0.5); font-size: 11px; font-weight: 800; padding: 4px 10px; border-radius: 999px; margin-bottom: 8px; }
+.game-version { display: inline-block; margin: 0 0 8px 6px; color: #94a3b8; font-size: 11px; font-weight: 800; letter-spacing: 0.5px; }
 .start-title { font-size: 24px; font-weight: 900; color: #ffffff; margin: 0 0 6px 0; }
 .start-subtitle { font-size: 12px; color: #cbd5e1; margin-bottom: 14px; line-height: 1.45; }
 .start-controls-guide { background: #0f172a; border-radius: 10px; padding: 10px 14px; text-align: left; font-size: 11px; color: #94a3b8; margin-bottom: 16px; line-height: 1.65; }
@@ -2418,6 +2419,7 @@ canvas { display: block; width: 100%; height: 100%; }
 <div id="start-overlay">
   <div class="start-card">
     <div class="start-badge">MANHATTAN 1:1 · REAL-SCALE MAP</div>
+    <div id="game-version" class="game-version">v5</div>
     <h1 class="start-title">MANHATTAN 1:1 WEB-SWING</h1>
     <div class="start-subtitle">실제 뉴욕 맨해튼 크기(1유닛 = 1m) 그대로의 건물 약 4.6만 동 · 삼각형 366만 개 · 지형 고저차까지 반영한 병합 맵 (001~006)</div>
     <div class="start-controls-guide">
@@ -7001,6 +7003,17 @@ function wireGfxUser() {
   gfxApplyUser(); gfxSyncUserUI();
 }
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', wireGfxUser); else wireGfxUser();
+// ---------- [v5] 법선(normal) 속성이 없는 메시(병합 건물·도로·지형)가 그림자를 못 받던 문제 수정 ----------
+// three.js 의 shadowmap_vertex 는 inverseTransformDirection(transformedNormal) 을 normalize 한다. 건물 병합 지오메트리는 normal 속성이
+// 없어 (0,0,0) → normalize → NaN → 그림자 좌표가 NaN 이 되어 "항상 빛을 받음" 으로 처리된다(지붕·외벽이 다른 건물 그림자를 못 받음).
+// 법선이 0 이면 법선 오프셋만 건너뛰도록 안전 가드를 넣는다.
+(function gfxPatchShadowNormalGuard() {
+  try {
+    const SC = THREE.ShaderChunk, src = 'vec3 shadowWorldNormal = inverseTransformDirection( transformedNormal, viewMatrix );';
+    if (SC.shadowmap_vertex && SC.shadowmap_vertex.indexOf(src) >= 0)
+      SC.shadowmap_vertex = SC.shadowmap_vertex.replace(src, 'vec3 shadowWorldNormal = dot( transformedNormal, transformedNormal ) > 1e-8 ? inverseTransformDirection( transformedNormal, viewMatrix ) : vec3( 0.0 );');
+  } catch (e) { console.warn('shadowNormalGuard', e); }
+})();
 // ---------- 고급 소프트 섀도(PCSS-lite): 접촉부는 선명, 멀수록 부드러운 반그림자 + 경사면 바이어스 ----------
 // 셰이더 컴파일을 실제로 테스트해 통과할 때만 적용(실패 시 기본 PCFSoft 유지)
 (function gfxPatchSoftShadow() {
