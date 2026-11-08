@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Spider-Man NYC · BND Character Build v2.0 · Manhattan 1:1 Real-Scale Map</title>
+<title>Spider-Man NYC · BND Character Build v2.2 · GitHub gzip Asset · Manhattan 1:1 Real-Scale Map</title>
 <style>
 * {
   box-sizing: border-box;
@@ -5723,7 +5723,18 @@ function createRealScaleSpiderMan() {
 
   window.__bndRig = { ready:false, bones:{}, base:{}, mixer:null, model:null };
   const loader = new THREE.GLTFLoader();
-  loader.load('spiderman_bnd.glb', (gltf) => {
+    fetch('spiderman_bnd.glb.gz')
+    .then(async (response) => {
+      if (!response.ok) throw new Error('HTTP ' + response.status + ' loading spiderman_bnd.glb.gz');
+      const compressed = await response.arrayBuffer();
+      if (typeof DecompressionStream === 'undefined') {
+        throw new Error('This browser does not support gzip DecompressionStream');
+      }
+      const stream = new Blob([compressed]).stream().pipeThrough(new DecompressionStream('gzip'));
+      return await new Response(stream).arrayBuffer();
+    })
+    .then((buffer) => {
+      loader.parse(buffer, '', (gltf) => {
     const model = gltf.scene;
     model.updateMatrixWorld(true);
     // 실제 GLB 바운딩 박스를 기준으로 약 1.78m 높이에 맞추고 발바닥을 원점에 배치
@@ -5754,14 +5765,18 @@ function createRealScaleSpiderMan() {
     } else rig.clips = [];
     rig.ready = true;
     console.info('[BND] GLB loaded', Object.keys(rig.bones).length, 'bones; clips:', rig.clips.length);
-  }, (xhr) => {
-    const status = document.getElementById('load-status');
-    if (status && xhr.total) status.textContent = 'BND 캐릭터 로딩 ' + Math.round(xhr.loaded/xhr.total*100) + '%';
-  }, (err) => {
-    console.error('[BND] GLB loading failed:', err);
-    const status = document.getElementById('load-status');
-    if (status) status.textContent = '캐릭터 로딩 실패: spiderman_bnd.glb 파일 확인';
-  });
+        }, (err) => {
+        console.error('[BND] GLB parse failed:', err);
+        const status = document.getElementById('load-status');
+        if (status) status.textContent = '캐릭터 GLB 해석 실패';
+      });
+    })
+    .catch((err) => {
+      console.error('[BND] GLB loading failed:', err);
+      const status = document.getElementById('load-status');
+      if (status) status.textContent = '캐릭터 파일 로딩 실패: ' + err.message;
+    });
+
 }
 
 function createTargetAndWebMarkers() {
