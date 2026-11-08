@@ -2418,7 +2418,6 @@ canvas { display: block; width: 100%; height: 100%; }
 <div id="start-overlay">
   <div class="start-card">
     <div class="start-badge">MANHATTAN 1:1 · REAL-SCALE MAP</div>
-    <div id="game-version" style="text-align:center;margin:-4px 0 8px;font:700 13px system-ui,sans-serif;color:#fbbf24;letter-spacing:.08em">VERSION v4</div>
     <h1 class="start-title">MANHATTAN 1:1 WEB-SWING</h1>
     <div class="start-subtitle">실제 뉴욕 맨해튼 크기(1유닛 = 1m) 그대로의 건물 약 4.6만 동 · 삼각형 366만 개 · 지형 고저차까지 반영한 병합 맵 (001~006)</div>
     <div class="start-controls-guide">
@@ -2537,7 +2536,7 @@ canvas { display: block; width: 100%; height: 100%; }
     <div class="settings-section">
       <span class="settings-label">🌑 그림자 (Shadows)</span>
       <span class="settings-label" style="margin-bottom:2px;">그림자 거리 <span id="gu-shdist-val">600</span> m</span>
-      <input type="range" id="gu-shdist" min="60" max="600" step="10" value="600" style="width:100%;touch-action:none;">
+      <input type="range" id="gu-shdist" min="60" max="1200" step="10" value="800" style="width:100%;touch-action:none;">
       <span class="settings-label" style="margin:10px 0 2px;">그림자 디테일 <span id="gu-shdet-val">높음 (4096)</span></span>
       <input type="range" id="gu-shdet" min="1" max="4" step="1" value="3" style="width:100%;touch-action:none;">
       <div class="assist-desc">그림자 거리: 플레이어 기준 그림자가 그려지는 반경(기본 = 최대 600m).<br>그림자 디테일: 그림자 해상도 1024 / 2048 / 4096 / 8192. 높을수록 경계가 선명하지만 무겁습니다(8192는 PC 전용). 그래픽 품질이 '낮음'이면 그림자가 꺼져 있습니다.</div>
@@ -4258,7 +4257,7 @@ function nmFrame(dt) {
   if (!NM.ready) return; NM.camT += dt; if (NM.camT < 0.3) return; NM.camT = 0;
   const cx = camera.position.x, cz = camera.position.z, R = (GFXU.chunk || 2300) + 250;
   for (const c of NM.cellMeshes) c.mesh.visible = Math.hypot(c.x - cx, c.z - cz) < (c.r || R) + 300;
-  if (window.__winFar) window.__winFar.value = Math.max(50, gfxEffDetail());
+  if (window.__winFar) window.__winFar.value = Math.max(250, gfxEffDetail() * 0.72);
   const gx = Math.floor(player.pos.x / SPATIAL_CELL), gz = Math.floor(player.pos.z / SPATIAL_CELL);
   for (let a = -3; a <= 3; a++) for (let b = -3; b <= 3; b++) nmEnsureCell((gx + a) + ',' + (gz + b));
 }
@@ -6952,7 +6951,7 @@ const GFX_PRESETS = {
 };
 
 // ---------- 사용자 설정: 디테일 거리 · 청크 거리 · 그림자 거리/디테일 (localStorage 저장) ----------
-const GFXU_DEF = { detail: null, chunk: 2300, shDist: 600, shDetail: 3 };   // detail:null = 그래픽 품질 프리셋 값 사용 / 그림자 거리 기본 = 최대(600m)
+const GFXU_DEF = { detail: null, chunk: 2300, shDist: 800, shDetail: 3 };   // detail:null = 그래픽 품질 프리셋 값 사용 / 그림자 거리 기본 = 최대(600m)
 const GFXU = Object.assign({}, GFXU_DEF);
 try { const _s = JSON.parse(localStorage.getItem('gfxUser2') || 'null'); if (_s) for (const k in GFXU_DEF) if (_s[k] !== undefined) GFXU[k] = _s[k]; } catch (e) {}
 const GFX_SH_OFF = 600;                                  // 그림자 카메라를 태양 쪽으로 띄우는 거리(높은 건물 그림자 포함)
@@ -6973,8 +6972,9 @@ function gfxReapplyShadowParams() {
   if (!sunLight || !sunLight.castShadow) return;
   const { size, R } = gfxShadowParams(), s = sunLight.shadow, c = s.camera;
   s.mapSize.set(size, size); GFX.shR = R;
-  c.near = 1; c.far = 1500; c.left = -R; c.right = R; c.top = R; c.bottom = -R; c.updateProjectionMatrix();
-  s.bias = -0.00036; s.normalBias = Math.max(0.25, (2 * R / size) * 1.6);   // 건물 자기 그림자(여드름) 방지: 텍셀 크기에 비례
+  GFX.shOff = Math.max(GFX_SH_OFF, R * 1.4 + 300);                       // 태양 쪽으로 충분히 멀리 둬서 먼 고층 건물도 캐스터로 포함
+  c.near = 1; c.far = GFX.shOff + R * 1.6 + 200; c.left = -R; c.right = R; c.top = R; c.bottom = -R; c.updateProjectionMatrix();
+  s.bias = -0.54 / c.far; s.normalBias = Math.max(0.25, (2 * R / size) * 1.6);   // 건물 자기 그림자(여드름) 방지: 텍셀 크기에 비례
   gfxSoftRadius();
   if (s.map) { s.map.dispose(); s.map = null; }
   GFXS.dirty = true;
@@ -7097,7 +7097,7 @@ function gfxCreateSky() {
     },
     vertexShader: `
       varying vec3 vDir;
-      void main() { vDir = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+      void main() { vDir = position; vec4 p4 = projectionMatrix * modelViewMatrix * vec4(position, 1.0); gl_Position = p4.xyww; }   // 항상 원평면: 카메라 far/돔 반지름에 상관없이 잘리지 않음`,
     fragmentShader: `
       uniform vec3 topColor, horizonColor, bottomColor, sunColor, sunDir;
       uniform float exponent, starAmt, sunI; uniform mat3 starM;
@@ -7120,7 +7120,7 @@ function gfxCreateSky() {
       void main() {
         vec3 d = normalize(vDir);
         float h = d.y;
-        vec3 col = h >= 0.0 ? mix(horizonColor, topColor, pow(h, exponent)) : mix(horizonColor, bottomColor, smoothstep(0.30, 1.0, -h));
+        vec3 col = h >= 0.0 ? mix(horizonColor, topColor, pow(h, exponent)) : mix(horizonColor, bottomColor, pow(-h, 0.55) * 0.6);
 
         // 시간·날씨 반응형 구름: 바람에 흐르고, 태양 쪽 밀도 차이로 밝은 가장자리/어두운 밑면을 만든다.
         vec2 wind = vec2(cTime, cTime * 0.37);
@@ -7130,7 +7130,7 @@ function gfxCreateSky() {
         float cloudField = cloudsA * 0.76 + cloudsB * 0.24;
         float cloudMask = smoothstep(cCoverLo, cCoverHi, cloudField) *
                           smoothstep(-0.10, 0.18, h) *
-                          (1.0 - cTopFade * smoothstep(0.68, 0.96, h));
+                          (1.0 - cTopFade * 0.18 * smoothstep(0.85, 1.0, h));   // 천정 쪽에서 구름이 뚝 끊기지 않게
         float fieldSun = cloudFbm((cloudUV + cSunUV * 0.07) * 1.65 + vec2(2.7, 1.3)) * 0.76 + cloudsB * 0.24;
         float thick = smoothstep(cCoverLo, cCoverHi + 0.22, cloudField);
         float sunSide = clamp(0.5 + (cloudField - fieldSun) * 4.0, 0.0, 1.0);
@@ -7151,7 +7151,7 @@ function gfxCreateSky() {
         #include <tonemapping_fragment>
       }`
   });
-  GFX.sky = new THREE.Mesh(new THREE.SphereGeometry(2200, 24, 12), mat);
+  GFX.sky = new THREE.Mesh(new THREE.SphereGeometry(2200, 64, 32), mat);
   GFX.sky.frustumCulled = false; GFX.sky.renderOrder = -1000;
   scene.add(GFX.sky);
 }
@@ -7180,7 +7180,7 @@ function gfxAfterWeather(mode) {
 // ---------- 건물 그림자 프록시 ----------
 // 6MB짜리 병합 건물 메시를 그림자 패스에 넣으면 매우 느리다. 대신 플레이어 주변(그림자가
 // 닿을 수 있는) 건물만 풋프린트 압출 형태의 저폴리 지오메트리로 모아 그림자 캐스터로 쓴다.
-const GFXS = { mesh: null, pos: null, attr: null, cap: 2160000, cx: 1e9, cz: 1e9, dirty: true, wait: 0 };
+const GFXS = { mesh: null, pos: null, attr: null, cap: 4800000, cx: 1e9, cz: 1e9, dirty: true, wait: 0 };
 function gfxShadowInit() {
   GFXS.pos = new Float32Array(GFXS.cap);
   const g = new THREE.BufferGeometry();
@@ -7196,28 +7196,22 @@ function gfxColTris(col) {
   if (col._gs !== undefined) return col._gs;
   col._gs = null;
   try {
-    const ring = col.ringXZ; let n = ring.length;
-    if (n >= 2 && ring[0].x === ring[n - 1].x && ring[0].z === ring[n - 1].z) n--;
+    const ring0 = col.ringXZ; let n = ring0.length;
+    if (n >= 2 && ring0[0].x === ring0[n - 1].x && ring0[0].z === ring0[n - 1].z) n--;
     const y0 = col.minY || 0, y1 = col.maxY;
-    if (n < 3 || !(y1 - y0 >= 2)) return null;
-    let pts = ring.slice(0, n);
-    const _area = (P) => { let a = 0; for (let i = 0; i < P.length; i++) { const p = P[i], q = P[(i + 1) % P.length]; a += p.x * q.z - q.x * p.z; } return a; };
-    if (n > 80) {   // 정점이 많은 건물: 볼록 껍질로 단순화(그림자가 빠지지 않도록)
-      const S = pts.slice().sort((a, b) => a.x - b.x || a.z - b.z), cr = (o, a, b) => (a.x - o.x) * (b.z - o.z) - (a.z - o.z) * (b.x - o.x), H = [];
-      for (const p of S) { while (H.length >= 2 && cr(H[H.length - 2], H[H.length - 1], p) <= 0) H.pop(); H.push(p); }
-      const lo = H.length + 1;
-      for (let i = S.length - 2; i >= 0; i--) { const p = S[i]; while (H.length >= lo && cr(H[H.length - 2], H[H.length - 1], p) <= 0) H.pop(); H.push(p); }
-      H.pop(); if (H.length >= 3) { pts = H; n = H.length; }
-    }
-    const ring2 = pts; const o = [];
+    if (n < 3 || !(y1 - y0 >= 3)) return null;
+    const ring = [], stp = n > 120 ? Math.ceil(n / 120) : 1;           // 꼭짓점이 많으면 솎아서라도 반드시 캐스터로 만든다
+    for (let i = 0; i < n; i += stp) ring.push(ring0[i]);
+    n = ring.length; if (n < 3) return null;
+    const o = [];
     for (let i = 0; i < n; i++) {
-      const A = ring2[i], B = ring2[(i + 1) % n];
+      const A = ring[i], B = ring[(i + 1) % n];
       o.push(A.x, y0, A.z, B.x, y0, B.z, B.x, y1, B.z, A.x, y0, A.z, B.x, y1, B.z, A.x, y1, A.z);
     }
-    const contour = []; for (let i = 0; i < n; i++) contour.push(new THREE.Vector2(ring2[i].x, ring2[i].z));
-    let tris = THREE.ShapeUtils.triangulateShape(contour, []);
-    if (!tris || !tris.length) tris = Array.from({ length: n - 2 }, (_, i) => [0, i + 1, i + 2]);   // 실패 시 팬 삼각분할
-    for (const t of tris) for (let k = 0; k < 3; k++) { const v = contour[t[k]]; o.push(v.x, y1, v.y); }
+    const contour = []; for (let i = 0; i < n; i++) contour.push(new THREE.Vector2(ring[i].x, ring[i].z));
+    let tris = []; try { tris = THREE.ShapeUtils.triangulateShape(contour, []); } catch (e) { tris = []; }
+    if (!tris.length) { let cx = 0, cz = 0; for (const v of contour) { cx += v.x; cz += v.y; } cx /= n; cz /= n; for (let i = 0; i < n; i++) { const A = contour[i], B = contour[(i + 1) % n]; o.push(A.x, y1, A.y, B.x, y1, B.y, cx, y1, cz); } }   // 삼각분할 실패 시 부채꼴 지붕
+    else for (const t of tris) for (let k = 0; k < 3; k++) { const v = contour[t[k]]; o.push(v.x, y1, v.y); }
     col._gs = Float32Array.from(o);
   } catch (e) { col._gs = null; }
   return col._gs;
@@ -7227,17 +7221,17 @@ function gfxRebuildShadowProxy(px, pz) {
   const seen = new Set(), cands = [];
   const d = GFX.sunDir, hl = Math.hypot(d.x, d.z), sy = Math.max(0.12, d.y);
   const ux = hl > 1e-4 ? -d.x / hl : 0, uz = hl > 1e-4 ? -d.z / hl : 0;   // 그림자가 드리우는 수평 방향
-  const NR = Math.min(8, Math.max(3, Math.ceil(((GFX.shR || 110) * 0.92 + 300) / SPATIAL_CELL)));   // 그림자 거리에 맞춰 탐색 범위 확대
+  const NR = Math.min(12, Math.max(3, Math.ceil(((GFX.shR || 110) * 1.05 + 300) / SPATIAL_CELL)));   // 그림자 거리에 맞춰 탐색 범위 확대
   for (let ox = -NR; ox <= NR; ox++) for (let oz = -NR; oz <= NR; oz++) {
     const list = spatialColliderGrid.get((gx + ox) + ',' + (gz + oz)); if (!list) continue;
     for (let i = 0; i < list.length; i++) {
       const c = list[i]; if (seen.has(c)) continue; seen.add(c);
-      if (!c.maxY || c.maxY - (c.minY || 0) < 5) continue;
-      const len = Math.min(900, (c.maxY - (c.minY || 0)) * hl / sy);            // 그림자 길이
+      if (!c.maxY || c.maxY - (c.minY || 0) < 3) continue;
+      const len = Math.min(1800, (c.maxY - (c.minY || 0)) * hl / sy);            // 그림자 길이
       const rx = px - c.centX, rz = pz - c.centZ;
       const t = len > 1e-3 ? Math.min(1, Math.max(0, (rx * ux + rz * uz) / len)) : 0;
       const dist = Math.hypot(rx - ux * len * t, rz - uz * len * t);              // 플레이어~그림자 선분 거리
-      if (dist < (GFX.shR || 110) * 0.92) cands.push({ c, dist });
+      if (dist < (GFX.shR || 110) * 1.05) cands.push({ c, dist });
     }
   }
   cands.sort((a, b) => a.dist - b.dist);
@@ -7567,7 +7561,7 @@ function gfxApplyEnv() {
     if (seen.has(m) || !m.isMeshStandardMaterial) return; seen.add(m);
     const want = GFX.quality !== 'low' ? GFX.envTex : null;
     if (m.envMap !== want) { m.envMap = want; m.needsUpdate = true; }
-    m.envMapIntensity = 0.04;
+    m.envMapIntensity = m.roughnessMap ? 0.9 : 0.4;
   }); });
 }
 function gfxApplyShadows() {
@@ -7729,10 +7723,10 @@ function gfxUpdate() {
       const cx = p.x * xx + p.z * xz, cy = p.x * yx + p.z * yz;
       const sx = Math.round(cx / tw) * tw - cx, sy = Math.round(cy / tw) * tw - cy;
       sunLight.target.position.set(p.x + xx * sx + yx * sy, yy * sy, p.z + xz * sx + yz * sy);
-      sunLight.position.set(sunLight.target.position.x + d.x * GFX_SH_OFF, sunLight.target.position.y + d.y * GFX_SH_OFF, sunLight.target.position.z + d.z * GFX_SH_OFF);
+      sunLight.position.set(sunLight.target.position.x + d.x * (GFX.shOff || GFX_SH_OFF), sunLight.target.position.y + d.y * (GFX.shOff || GFX_SH_OFF), sunLight.target.position.z + d.z * (GFX.shOff || GFX_SH_OFF));
     }
     sunLight.target.updateMatrixWorld();
-    if (GFXS.mesh.visible && GFXS.wait-- <= 0 && (GFXS.dirty || Math.hypot(p.x - GFXS.cx, p.z - GFXS.cz) > Math.max(18, (GFX.shR || 110) * 0.035))) {
+    if (GFXS.mesh.visible && GFXS.wait-- <= 0 && (GFXS.dirty || Math.hypot(p.x - GFXS.cx, p.z - GFXS.cz) > Math.max(30, (GFX.shR || 110) * 0.1))) {
       gfxRebuildShadowProxy(p.x, p.z); GFXS.wait = 20;
     }
   }
@@ -7925,15 +7919,15 @@ function gfx2Update() {
   if (!RGS.on) {
   // 태양광을 근거리/원거리 캐스케이드로 분배
   if (Math.abs(sunLight.intensity - GFX2.lastMain) > 1e-4) GFX2.base = sunLight.intensity;
-  sunLight.intensity = GFX2.base * 0.6; GFX2.lastMain = sunLight.intensity;
-  GFX2.sun2.color.copy(sunLight.color); GFX2.sun2.intensity = GFX2.base * 0.4;
+  sunLight.intensity = GFX2.base; GFX2.lastMain = sunLight.intensity;
+  GFX2.sun2.color.copy(sunLight.color); GFX2.sun2.intensity = 0;   // 보조 태양(좁은 범위 그림자)은 범위 밖에서 빛이 새므로 사용 안 함
   const tx = Math.round(p.x / 8) * 8, tz = Math.round(p.z / 8) * 8;
   GFX2.sun2.target.position.set(tx, 0, tz); GFX2.sun2.position.set(tx + d.x * 700, Math.max(60, d.y * 700), tz + d.z * 700); GFX2.sun2.target.updateMatrixWorld();
-  GFX2.sun2.castShadow = renderer.shadowMap.enabled && GFX.sunI > 0;
+  GFX2.sun2.castShadow = false;
   if (GFX2.wait2-- <= 0 && Math.hypot(p.x - GFX2.cx2, p.z - GFX2.cz2) > 70) { gfx2RebuildProxy2(p.x, p.z); GFX2.wait2 = 40; }
   // 림라이트: 태양 반대편에서 들어오는 차가운 역광(실루엣 강조)
   const night = currentWeatherMode === 'night', cloudy = currentWeatherMode === 'cloudy';
-  const sunset = currentWeatherMode === 'sunset'; GFX2.rim.color.setHex(night ? 0x4a6fc0 : (cloudy ? 0xa9bfd6 : (sunset ? 0x9aa6ff : 0xbcd8ff))); GFX2.rim.intensity = night ? 0.28 : (cloudy ? 0.35 : (sunset ? 0.45 : 0.25));
+  const sunset = currentWeatherMode === 'sunset'; GFX2.rim.color.setHex(night ? 0x4a6fc0 : (cloudy ? 0xa9bfd6 : (sunset ? 0x9aa6ff : 0xbcd8ff))); GFX2.rim.intensity = 0;   // 태양이 유일한 직사광: 그림자 없는 가짜 림라이트는 건물을 뚫고 빛을 쏘므로 끈다
   GFX2.rim.target.position.set(p.x, p.y, p.z); GFX2.rim.position.set(p.x - d.x * 200 + 40, p.y + 90, p.z - d.z * 200 + 40); GFX2.rim.target.updateMatrixWorld();
   }
   // 네온 사인(타임스퀘어 전광판): 야간·노을·흐림에서 발광 강화 + 깜빡임
@@ -10312,7 +10306,7 @@ const GLSL = {};
 /* ---- 하늘 돔 (HDR 선형 출력; 톤매핑은 후처리 Grade 패스에서) ---- */
 GLSL.skyVS = `varying vec3 vDir; void main(){ vDir = position; vec4 p = projectionMatrix * modelViewMatrix * vec4(position,1.0); gl_Position = p.xyww; }`;
 GLSL.skyFS = `varying vec3 vDir;
-uniform vec3 uZenith, uHorizon, uSunDir, uSunColor, uFogC;
+uniform vec3 uZenith, uHorizon, uSunDir, uSunColor;
 uniform float uTime, uCover, uDark, uSunI, uNight, uGlow;
 float h21(vec2 p){ p = fract(p*vec2(123.34,456.21)); p += dot(p,p+45.32); return fract(p.x*p.y); }
 float vn(vec2 p){ vec2 i=floor(p), f=fract(p); f=f*f*(3.0-2.0*f);
@@ -10322,7 +10316,7 @@ void main(){
   vec3 d = normalize(vDir);
   float up = clamp(d.y, 0.0, 1.0);
   vec3 sky = mix(uHorizon, uZenith, pow(up, 0.5));
-  sky = mix(sky, uFogC, smoothstep(0.012, -0.012, d.y));
+  sky = mix(sky, uHorizon * 0.85, smoothstep(0.0, -0.2, d.y));
   float sd = max(dot(d, uSunDir), 0.0);
   float clear = 1.0 - uCover;
   sky += uSunColor * (pow(sd, 900.0) * 4.0 + pow(sd, 28.0) * 0.32) * uSunI * clear;
@@ -10701,7 +10695,7 @@ class RealisticCityEnvironment {
   _buildSky() {
     const mat = new THREE.ShaderMaterial({
       vertexShader: GLSL.skyVS, fragmentShader: GLSL.skyFS, side: THREE.BackSide, depthWrite: false, depthTest: false, fog: false,
-      uniforms: { uFogC: { value: new THREE.Color(0.6, 0.64, 0.68) }, uZenith: { value: new THREE.Color(0.2, 0.25, 0.32) }, uHorizon: { value: new THREE.Color(0.6, 0.64, 0.68) }, uSunDir: { value: new THREE.Vector3(0, 1, 0) },
+      uniforms: { uZenith: { value: new THREE.Color(0.2, 0.25, 0.32) }, uHorizon: { value: new THREE.Color(0.6, 0.64, 0.68) }, uSunDir: { value: new THREE.Vector3(0, 1, 0) },
         uSunColor: { value: new THREE.Color(1, 0.95, 0.85) }, uTime: { value: 0 }, uCover: { value: 0.9 }, uDark: { value: 0.5 }, uSunI: { value: 1 }, uNight: { value: 0 }, uGlow: { value: 0.35 } }
     });
     this.skyMat = mat;
@@ -11127,7 +11121,7 @@ void rceFar(float u, float yy, vec3 wn, vec3 vv, out vec3 alb, out vec3 emc){
 GLSL_BLD.near = `float rceUse_ = 0.0;
 #ifndef GBUF
 if (uRceOn > 0.5) {
-  float dK = 1.0 - smoothstep(0.12 * uWinFar, uWinFar, cdist);
+  float dK = 1.0 - smoothstep(55.0 * RCE_DS, 340.0 * RCE_DS, cdist);
   float sM = 1.0 - clamp(gls, 0.0, 1.0), glM = clamp(gls, 0.0, 1.0) * uWinQ;
   vec2 rp = vec2(u, y) * uRceTile + vec2(fract(seed * 91.7), fract(seed * 37.3));
   float bs = step(0.5, pFam);
@@ -11155,7 +11149,7 @@ if (uRceOn > 0.5) {
   gDN += -(gg.x * T3 + gg.y * vec3(0.0, 1.0, 0.0)) * dKg;
   vec3 Rw = reflect(vv, wn); float ndv_ = clamp(abs(dot(-vv, wn)), 0.0, 1.0);
   float Fg = mix(0.16, 1.0, pow(1.0 - ndv_, 4.0));
-  float lodB = mix(0.4, 4.5, clamp(rough, 0.0, 1.0)) + smoothstep(0.2 * uWinFar, uWinFar, cdist) * 2.0;
+  float lodB = mix(0.4, 4.5, clamp(rough, 0.0, 1.0)) + smoothstep(150.0, 600.0, cdist) * 2.0;
   emi += textureCube(tRceEnv, Rw, lodB).rgb * uRceEnvK * Fg * glM * uRceReflK * (1.0 - 0.5 * dirt);
   rceUse_ = step(0.001, k + dKg);
 }
@@ -11239,7 +11233,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = RealisticC
   // 울트라 품질이 추가하는 보조 방향광(림 라이트·2번째 태양)을 끄고, 반구광(평면 앰비언트)을 낮춰 태양 그림자가 또렷하게 보이게 한다.
   // 반구광/태양 세기는 "렌더 직전에만" 바꾸고 직후 원복 → 게임의 날씨/시간 로직은 영향 없음.
   let hidden = [], hemis = [], lightScan = 0;
-  const HEMI_K = 0.0, SUN_FLOOR = 0.85;
+  const HEMI_K = 0.4, SUN_FLOOR = 0.85;
   function singleSunSetup() {
     hidden.forEach(l => { l.visible = true; }); hidden = []; hemis = [];
     scene.traverse(o => {
@@ -11342,147 +11336,6 @@ if (typeof module !== 'undefined' && module.exports) module.exports = RealisticC
   window.onload = function () { const r = _onload ? _onload.apply(this, arguments) : undefined; try { boot(); } catch (e) { console.warn('RCE boot', e); } return r; };
 })();
 
-</script>
-
-<script>
-/* ===== SUNFIX: 태양 단일광원 그림자 개선 + 하늘 돔/수평선 이음새 제거 ===== */
-(function () {
-  const SC = THREE.ShaderChunk, FAR_FADE = (d) => 'gl_FragColor.rgb = mix( gl_FragColor.rgb, fogColor, smoothstep( 1700.0, 2450.0, ' + d + ' ) );\n';
-  // 카메라 far(2600m)에서 바다/지형이 뚝 잘려 보이던 것을: 그 직전에 안개색으로 100% 수렴시켜 숨김
-  function patchFog() { if (SC.fog_fragment && SC.fog_fragment.indexOf('smoothstep( 1700.0') < 0) SC.fog_fragment = SC.fog_fragment.replace(/#endif\s*$/, FAR_FADE(SC.fog_fragment.indexOf('vFogDepth') >= 0 ? 'vFogDepth' : 'fogDepth') + '#endif'); }
-  patchFog();
-  if (typeof rgsInstallFog === 'function') { const o = rgsInstallFog; window.rgsInstallFog = rgsInstallFog = function () { const r = o.apply(this, arguments); patchFog(); return r; }; }
-  // RCE 하늘의 지평선 아래 색을 지오메트리 안개색과 동일하게 동기화
-  (function loop() {
-    try { const m = window.RCE && RCE.skyMat; if (m && m.uniforms.uFogC && scene.fog) m.uniforms.uFogC.value.copy(scene.fog.color); } catch (e) {}
-    requestAnimationFrame(loop);
-  })();
-})();
-</script>
-
-<script>
-/* ===== SUNFIX 2: 2단 캐스케이드 태양 그림자 (근거리 600m 선명 + 원거리 ~2.4km) =====
-   - 근거리: 기존 sunLight 그림자맵(고해상도). 원거리: 같은 태양 방향의 두 번째 그림자맵(sfFar).
-   - 두 맵의 담당 구역을 셰이더에서 가중치로 나눠, 태양광이 이중으로 더해지지 않고 빛이 건물을 통과하지 못하게 함. */
-(function () {
-  const SC = THREE.ShaderChunk, MARK = '/*SF_CASCADE*/';
-  const OLD = 'directLight.color *= all( bvec2( directLight.visible, receiveShadow ) ) ? getShadow( directionalShadowMap[ i ], directionalLightShadow.shadowMapSize, directionalLightShadow.shadowBias, directionalLightShadow.shadowRadius, vDirectionalShadowCoord[ i ] ) : 1.0;';
-  const NEW = MARK + `
-		{ float sfV = all( bvec2( directLight.visible, receiveShadow ) ) ? getShadow( directionalShadowMap[ i ], directionalLightShadow.shadowMapSize, directionalLightShadow.shadowBias, directionalLightShadow.shadowRadius, vDirectionalShadowCoord[ i ] ) : 1.0;
-		#if NUM_DIR_LIGHT_SHADOWS > 1
-		{
-			bool sfFar = abs( directionalLightShadow.shadowBias + 0.000777 ) < 0.00002;
-			bool sfF0 = abs( directionalLightShadows[ 0 ].shadowBias + 0.000777 ) < 0.00002;
-			vec4 sfC = vDirectionalShadowCoord[ sfF0 ? 1 : 0 ]; sfC.xyz /= sfC.w;
-			float sfW = 1.0 - smoothstep( 0.42, 0.49, max( abs( sfC.x - 0.5 ), abs( sfC.y - 0.5 ) ) );
-			if ( ! receiveShadow ) sfV = sfFar ? 0.0 : 1.0; else sfV = sfFar ? sfV * ( 1.0 - sfW ) : sfV * sfW;
-		}
-		#endif
-		directLight.color *= sfV; }`;
-  if (SC.lights_fragment_begin.indexOf(MARK) < 0) { if (SC.lights_fragment_begin.indexOf(OLD) < 0) { console.warn('SUNFIX2: light chunk mismatch'); return; } SC.lights_fragment_begin = SC.lights_fragment_begin.replace(OLD, NEW); }
-
-  const SF = { R: 2400, light: null, mesh: null, attr: null, pos: null, cap: 3600000, cx: 1e9, cz: 1e9, job: null, ok: false };
-  function init() {
-    const size = GFX_MOBILE ? 2048 : 4096;
-    const L = new THREE.DirectionalLight(0xffffff, 1); L.userData.keepLight = true; scene.add(L); scene.add(L.target);
-    // 태양과 항상 동일한 색/세기/가시성/그림자 여부 (RCE가 렌더 중 바꾸는 값까지 그대로 따라감)
-    for (const k of ['intensity', 'color', 'visible', 'castShadow']) Object.defineProperty(L, k, { get: () => sunLight[k], set() {}, configurable: true });
-    const s = L.shadow, c = s.camera, D = SF.R + 500;
-    s.mapSize.set(size, size); c.near = 1; c.far = D + SF.R + 700; c.left = -SF.R; c.right = SF.R; c.top = SF.R; c.bottom = -SF.R; c.updateProjectionMatrix();
-    s.bias = -0.000777; s.normalBias = Math.max(1.2, 2 * SF.R / size * 1.6); s.radius = 1.5;
-    SF.D = D; SF.light = L;
-    SF.pos = new Float32Array(SF.cap); SF.attr = new THREE.BufferAttribute(SF.pos, 3); SF.attr.setUsage(THREE.DynamicDrawUsage);
-    const g = new THREE.BufferGeometry(); g.setAttribute('position', SF.attr); g.setDrawRange(0, 0);
-    SF.mesh = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false, side: THREE.DoubleSide }));
-    SF.mesh.name = 'SF_FarShadowProxy'; SF.mesh.frustumCulled = false; SF.mesh.castShadow = true; scene.add(SF.mesh);
-    SF.ok = true;
-  }
-  function startJob(px, pz) {
-    const gx = Math.floor(px / SPATIAL_CELL), gz = Math.floor(pz / SPATIAL_CELL), N = Math.ceil(SF.R * 1.15 / SPATIAL_CELL), cells = [];
-    for (let ox = -N; ox <= N; ox++) for (let oz = -N; oz <= N; oz++) cells.push((gx + ox) + ',' + (gz + oz));
-    SF.job = { px, pz, cells, i: 0, seen: new Set(), cands: [] };
-  }
-  function stepJob() {
-    const j = SF.job, t0 = performance.now(), lim = SF.R * 1.15;
-    while (j.i < j.cells.length && performance.now() - t0 < 3) {
-      const list = spatialColliderGrid.get(j.cells[j.i++]); if (!list) continue;
-      for (let i = 0; i < list.length; i++) { const c = list[i]; if (j.seen.has(c)) continue; j.seen.add(c); if (!c.maxY || c.maxY - (c.minY || 0) < 10) continue; const d = Math.hypot(j.px - c.centX, j.pz - c.centZ); if (d < lim) j.cands.push({ c, d }); }
-    }
-    if (j.i < j.cells.length) return;
-    j.cands.sort((a, b) => a.d - b.d); let n = 0;
-    for (const k of j.cands) { const tr = gfxColTris(k.c); if (!tr) continue; if (n + tr.length > SF.cap) break; SF.pos.set(tr, n); n += tr.length; }
-    SF.attr.updateRange.offset = 0; SF.attr.updateRange.count = n; SF.attr.needsUpdate = true; SF.mesh.geometry.setDrawRange(0, n / 3);
-    SF.cx = j.px; SF.cz = j.pz; SF.job = null;
-  }
-  function update() {
-    if (!SF.ok) { if (typeof sunLight !== 'undefined' && sunLight && typeof player !== 'undefined' && typeof spatialColliderGrid !== 'undefined' && sunLight.castShadow) init(); else return; }
-    const p = player.pos, sp = sunLight.position, st = sunLight.target.position;
-    let dx = sp.x - st.x, dy = sp.y - st.y, dz = sp.z - st.z; const l = Math.hypot(dx, dy, dz) || 1; dx /= l; dy /= l; dz /= l;
-    const tx = Math.round(p.x / 24) * 24, tz = Math.round(p.z / 24) * 24, L = SF.light;
-    L.target.position.set(tx, 0, tz); L.position.set(tx + dx * SF.D, dy * SF.D, tz + dz * SF.D); L.target.updateMatrixWorld();
-    SF.mesh.visible = sunLight.castShadow;
-    if (SF.job) stepJob(); else if (Math.hypot(p.x - SF.cx, p.z - SF.cz) > 140) startJob(p.x, p.z);
-  }
-  (function hook() {
-    if (typeof renderer === 'undefined' || !renderer) return requestAnimationFrame(hook);
-    const o = renderer.render.bind(renderer);
-    renderer.render = function (sc, cam) { if (sc === scene) { try { update(); } catch (e) { SF.ok = false; SF.err = e; } } return o(sc, cam); };
-    window.SUNFIX = SF;
-  })();
-})();
-</script>
-
-<script>
-/* ===== SUNFIX 3 (v4): 보조광 제거 + 진짜 창문 반사(실시간 큐브 캡처, 거리=디테일 슬라이더) ===== */
-(function () {
-  const R = { rt: null, cam: null, face: 0, first: true, busy: false, tick: 0, last: -1, ok: false };
-  (function t() { R.tick++; requestAnimationFrame(t); })();
-  // 간접광(하늘 환경광) 제거: 건물/지형의 IBL 확산광을 거의 0으로. (RCE 전용 재질/유리는 제외)
-  let amb = 0;
-  function killAmbient() {
-    if (amb++ % 90) return;
-    const seen = new Set();
-    scene.traverse(o => { const m = o.material; if (!m) return; (Array.isArray(m) ? m : [m]).forEach(x => { if (seen.has(x) || !x.isMeshStandardMaterial || x.isMeshPhysicalMaterial || (x.userData && x.userData.rceEnv)) return; seen.add(x); if (x.envMapIntensity > 0.05) x.envMapIntensity = 0.04; }); });
-  }
-  function init() {
-    const hdr = !!(window.RCE && RCE.hdr), size = GFX_MOBILE ? 128 : 256;
-    R.rt = new THREE.WebGLCubeRenderTarget(size, { generateMipmaps: true, minFilter: THREE.LinearMipmapLinearFilter, magFilter: THREE.LinearFilter, type: hdr ? THREE.HalfFloatType : THREE.UnsignedByteType });
-    R.cam = new THREE.CubeCamera(1, 1000, R.rt); R.ok = true;
-  }
-  function capture() {
-    const far = Math.max(400, gfxEffDetail());          // 반사 거리 = 디테일 거리 슬라이더
-    R.cam.children.forEach(c => { c.far = far; c.updateProjectionMatrix(); });
-    R.cam.position.copy(camera.position); R.cam.updateMatrixWorld(true);
-    const hide = [window.SUNFIX && SUNFIX.mesh, typeof GFXS !== 'undefined' && GFXS.mesh, typeof GFX2 !== 'undefined' && GFX2.proxy2].filter(Boolean), vis = hide.map(o => o.visible);
-    hide.forEach(o => { o.visible = false; });
-    const auto = renderer.shadowMap.autoUpdate, prev = renderer.getRenderTarget();
-    renderer.shadowMap.autoUpdate = false; R.busy = true;
-    try {
-      const n = R.first ? 6 : (GFX_MOBILE ? 1 : 2);
-      for (let k = 0; k < n; k++) { const i = R.face; R.rt.texture.generateMipmaps = (i === 5); renderer.setRenderTarget(R.rt, i); renderer.render(scene, R.cam.children[i]); R.face = (i + 1) % 6; }
-      R.first = false;
-    } finally { R.busy = false; renderer.shadowMap.autoUpdate = auto; renderer.setRenderTarget(prev); hide.forEach((o, i) => { o.visible = vis[i]; }); }
-  }
-  (function hook() {
-    if (typeof renderer === 'undefined' || !renderer) return requestAnimationFrame(hook);
-    const o = renderer.render;
-    renderer.render = function (sc, cam) {
-      if (sc === scene && !R.busy) {
-        try {
-          killAmbient();
-          const U = window.RCE && RCE.U;
-          if (U && U.tRceEnv && U.uRceOn && U.uRceOn.value > 0.5 && typeof camera !== 'undefined') {
-            if (!R.ok) init();
-            if (R.last !== R.tick) { R.last = R.tick; capture(); }
-            U.tRceEnv.value = R.rt.texture;
-          }
-        } catch (e) { R.err = e; R.ok = false; }
-      }
-      return o.apply(this, arguments);
-    };
-    window.WINREFL = R;
-  })();
-})();
 </script>
 </body>
 </html>
