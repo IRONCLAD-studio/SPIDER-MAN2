@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Spider-Man NYC · Manhattan 1:1 Real-Scale Map</title>
+<title>Spider-Man NYC · BND Character Build v2.0 · Manhattan 1:1 Real-Scale Map</title>
 <style>
 * {
   box-sizing: border-box;
@@ -2613,6 +2613,7 @@ canvas { display: block; width: 100%; height: 100%; }
 }catch(e){}})();
 </script>
 <script>window.addEventListener("error",function(e){var t=document.getElementById("load-status");if(t&&!window.__worldReady)t.textContent="오류: "+(e.message||"알 수 없음")+" (줄 "+e.lineno+")";});</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/examples/js/loaders/GLTFLoader.js"></script>
 <script>
 // =============================================================================
 // 1. WGS84 타원체(GRS80) -> Three.js 로컬 접평면 좌표 변환기
@@ -3112,7 +3113,7 @@ function nmWallInit() {
   if (NM_WALL.U) return;
   NM_WALL.U = {
     uWinQ: window.__winQ = { value: 1.0 }, uWinGlow: window.__winGlow = { value: vfxGlowValue() },
-    uWinFar: window.__winFar = { value: 455.0 }, uGlassR: { value: 0.80 }
+    uWinFar: window.__winFar = { value: 455.0 }, uGlassR: { value: 1.25 }
   };
   NM_WALL.FC = `varying vec3 vWP; varying vec3 vLP; varying vec3 vCP; varying vec2 vAnc; flat varying vec2 vWn; varying vec4 vSty; varying vec4 vTop; varying vec2 vTr;
 uniform float uWinQ; uniform float uWinGlow; uniform float uWinFar; uniform float uTime;
@@ -3500,7 +3501,7 @@ void shopCell(float u, float y, float w, float gH, float SW, out float h, out ve
     // 하이라이트 번쩍임 대신 넓은 면 반사: 창 한 장마다 위쪽이 살짝 더 밝은 그라데이션
     glassC += skyG * 0.06 * uvW.y * gAA;
     col = mix(col, glassC, gls * 0.94 * uWinQ);
-    rough = mix(rough, mix(0.05, 0.22, smoothstep(0.03, 0.30, w)), gls * uWinQ); metal = mix(metal, 0.35, gls * uWinQ);
+    rough = mix(rough, mix(0.10, 0.24, smoothstep(0.03, 0.30, w)), gls * uWinQ); metal = mix(metal, 0.35, gls * uWinQ);
     gDN *= 1.0 - gls * uWinQ;
     float lightK = ground ? shopG : uWinGlow;
     emi += lc * lit * gls * uWinQ * lightK * (0.6 + 0.9 * h21(cellId + 7.3)) * (ground ? 1.2 : 1.0);
@@ -3581,7 +3582,8 @@ function nmWallOBC(sh) {
     .replace('#include <color_fragment>', '#include <color_fragment>\n' + NM_WALL.FCOL)
     .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\n if (gRough >= 0.0) roughnessFactor = gRough;')
     .replace('#include <metalnessmap_fragment>', '#include <metalnessmap_fragment>\n if (gMetal >= 0.0) metalnessFactor = gMetal;')
-    .replace('#include <normal_fragment_maps>', '#include <normal_fragment_maps>\n if (gUse > 0.5) normal = normalize((viewMatrix * vec4(normalize(gWN + gDN), 0.0)).xyz);');
+    .replace('#include <normal_fragment_maps>', '#include <normal_fragment_maps>\n if (gUse > 0.5) normal = normalize((viewMatrix * vec4(normalize(gWN + gDN), 0.0)).xyz);')
+    .replace('#include <aomap_fragment>', '#include <aomap_fragment>\n reflectedLight.directSpecular = reflectedLight.directSpecular / (1.0 + reflectedLight.directSpecular * 1.6);   // 창문에 비친 태양 하이라이트 과노출 억제');
 }
 function nmMakeMaterial() {
   const m = new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 0.78, metalness: 0.08, side: THREE.DoubleSide });
@@ -5712,64 +5714,54 @@ function resolvePolygonBuildingCollisions(prev) {
 // =============================================================================
 // 월드 단위는 미터(m). 이 리그는 발끝~머리끝 약 1.8m로 구성해 실제 성인 인체 비율을 유지한다.
 function createRealScaleSpiderMan() {
+  // BND GLB 로드: 기존 플레이어 물리/카메라/웹 스윙 좌표계는 그대로 유지
   spideyGroup = new THREE.Group();
-  spideyPivot = new THREE.Group();
-  spideyPivot.position.y = 0.92;
+  spideyPivot = new THREE.Group(); // 기존 코드 호환용 루트 피벗
+  spideyPivot.position.y = 0;
   spideyGroup.add(spideyPivot);
-  const redMat = new THREE.MeshStandardMaterial({ color: 0xdc2626, roughness: 0.35 });
-  const blueMat = new THREE.MeshStandardMaterial({ color: 0x1d4ed8, roughness: 0.4 });
-  const whiteMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
-  const blackMat = new THREE.MeshBasicMaterial({ color: 0x0f172a });
-  const chest = new THREE.Mesh(new THREE.CylinderGeometry(0.21, 0.16, 0.52, 12), redMat);
-  chest.position.y = 0.28;
-  spideyPivot.add(chest);
-  const emblem = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.18, 0.04), blackMat);
-  emblem.position.set(0, 0.32, 0.19);
-  spideyPivot.add(emblem);
-  const pelvis = new THREE.Mesh(new THREE.SphereGeometry(0.165, 10, 10), blueMat);
-  spideyPivot.add(pelvis);
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.145, 14, 14), redMat);
-  head.scale.set(0.92, 1.08, 0.98);
-  head.position.y = 0.72;
-  spideyPivot.add(head);
-  const eyeGeo = new THREE.BoxGeometry(0.065, 0.035, 0.02);
-  const leftEye = new THREE.Mesh(eyeGeo, whiteMat);
-  leftEye.position.set(0.05, 0.73, 0.135);
-  leftEye.rotation.set(0, 0.25, -0.22);
-  spideyPivot.add(leftEye);
-  const rightEye = new THREE.Mesh(eyeGeo, whiteMat);
-  rightEye.position.set(-0.05, 0.73, 0.135);
-  rightEye.rotation.set(0, -0.25, 0.22);
-  spideyPivot.add(rightEye);
-
-  leftArmPivot = new THREE.Group();
-  leftArmPivot.position.set(0.25, 0.48, 0);
-  const leftArmMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.045, 0.56, 8), redMat);
-  leftArmMesh.position.y = -0.26;
-  leftArmPivot.add(leftArmMesh);
-  spideyPivot.add(leftArmPivot);
-
-  rightArmPivot = new THREE.Group();
-  rightArmPivot.position.set(-0.25, 0.48, 0);
-  const rightArmMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.045, 0.56, 8), redMat);
-  rightArmMesh.position.y = -0.26;
-  rightArmPivot.add(rightArmMesh);
-  spideyPivot.add(rightArmPivot);
-
-  leftLegPivot = new THREE.Group();
-  leftLegPivot.position.set(0.10, -0.04, 0);
-  const leftLegMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.05, 0.86, 8), blueMat);
-  leftLegMesh.position.y = -0.43;
-  leftLegPivot.add(leftLegMesh);
-  spideyPivot.add(leftLegPivot);
-
-  rightLegPivot = new THREE.Group();
-  rightLegPivot.position.set(-0.10, -0.04, 0);
-  const rightLegMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.05, 0.86, 8), blueMat);
-  rightLegMesh.position.y = -0.43;
-  rightLegPivot.add(rightLegMesh);
-  spideyPivot.add(rightLegPivot);
   scene.add(spideyGroup);
+
+  window.__bndRig = { ready:false, bones:{}, base:{}, mixer:null, model:null };
+  const loader = new THREE.GLTFLoader();
+  loader.load('spiderman_bnd.glb', (gltf) => {
+    const model = gltf.scene;
+    model.updateMatrixWorld(true);
+    // 실제 GLB 바운딩 박스를 기준으로 약 1.78m 높이에 맞추고 발바닥을 원점에 배치
+    const box = new THREE.Box3().setFromObject(model);
+    const size = new THREE.Vector3(); box.getSize(size);
+    const center = new THREE.Vector3(); box.getCenter(center);
+    const targetHeight = 1.78;
+    const scale = targetHeight / Math.max(size.y, 0.001);
+    model.scale.setScalar(scale);
+    model.position.set(-center.x*scale, -box.min.y*scale, -center.z*scale);
+    spideyPivot.add(model);
+    model.updateMatrixWorld(true);
+
+    const rig = window.__bndRig;
+    rig.model = model;
+    model.traverse((o) => {
+      if (o.isBone) {
+        rig.bones[o.name] = o;
+        rig.base[o.name] = o.quaternion.clone();
+      }
+      // 보존된 재질/텍스처를 덮어쓰지 않는다.
+      if (o.isMesh) { o.frustumCulled = true; }
+    });
+    if (gltf.animations && gltf.animations.length) {
+      rig.mixer = new THREE.AnimationMixer(model);
+      // 모델에 실제 포함된 클립만 로딩. 본 파일은 클립이 없을 경우 procedural pose로 구동
+      rig.clips = gltf.animations;
+    } else rig.clips = [];
+    rig.ready = true;
+    console.info('[BND] GLB loaded', Object.keys(rig.bones).length, 'bones; clips:', rig.clips.length);
+  }, (xhr) => {
+    const status = document.getElementById('load-status');
+    if (status && xhr.total) status.textContent = 'BND 캐릭터 로딩 ' + Math.round(xhr.loaded/xhr.total*100) + '%';
+  }, (err) => {
+    console.error('[BND] GLB loading failed:', err);
+    const status = document.getElementById('load-status');
+    if (status) status.textContent = '캐릭터 로딩 실패: spiderman_bnd.glb 파일 확인';
+  });
 }
 
 function createTargetAndWebMarkers() {
@@ -7086,7 +7078,7 @@ const GFX_CLOUD = {
 };
 const GFX_SKY = {
   day:    { top: 0x1f6fc9, exp: 0.85, star: 0.0, sun: 0xfff1c9, sunI: 1.0, expo: 1.10, bloom: 0.35 },
-  sunset: { top: 0xff982b, exp: 0.62, star: 0.0, sun: 0xffedc2, sunI: 2.35, expo: 1.18, bloom: 0.78 },
+  sunset: { top: 0xff982b, exp: 0.62, star: 0.0, sun: 0xffedc2, sunI: 1.7, expo: 1.08, bloom: 0.40 },
   cloudy: { top: 0x6b7c8e, exp: 0.60, star: 0.0, sun: 0xdde6ee, sunI: 0.0, expo: 1.10, bloom: 0.30 },
   night:  { top: 0x01040c, exp: 0.65, star: 1.0, sun: 0x8aa6ee, sunI: 0.30, expo: 1.08, bloom: 1.6 }
 };
@@ -7154,11 +7146,11 @@ function gfxCreateSky() {
         col = mix(col, cloudColor, cloudMask * cAlpha);
 
         float s = max(dot(d, normalize(sunDir)), 0.0);
-        float glow = pow(s, 2500.0) * 2.0 + pow(s, 42.0) * 0.42 + pow(s, 8.0) * 0.16 + pow(s, 2.0) * 0.055;
+        float glow = pow(s, 2500.0) * 0.9 + pow(s, 42.0) * 0.17 + pow(s, 8.0) * 0.07 + pow(s, 2.0) * 0.03;
         col += sunColor * glow * sunI * smoothstep(-0.05, 0.08, h) * (1.0 - cloudMask * cAlpha * 0.6);
         // 실제 크기의 태양(달) 원반 — 시지름 0.53°, 가장자리가 어두운 주연감광
         float _sa = length(cross(d, normalize(sunDir))); float _sd = (1.0 - smoothstep(0.0036, 0.0046, _sa)) * step(0.0, dot(d, normalize(sunDir))) * (1.0 - 0.55 * (1.0 - sqrt(max(1.0 - (_sa / 0.0046) * (_sa / 0.0046), 0.0))));
-        col += sunColor * _sd * 14.0 * sunI * smoothstep(-0.002, 0.003, h) * (1.0 - cloudMask * cAlpha * 0.92);
+        col += sunColor * _sd * 5.0 * min(sunI, 1.6) * smoothstep(-0.002, 0.003, h) * (1.0 - cloudMask * cAlpha * 0.92);
         if (starAmt > 0.0 && h > 0.0) col += vec3(step(0.9965, hash(floor((starM * d) * 360.0)))) * starAmt * smoothstep(0.03, 0.30, h) * (1.0 - cloudMask * cAlpha);
         gl_FragColor = vec4(col, 1.0);
         #include <tonemapping_fragment>
@@ -7416,8 +7408,8 @@ function gfxBloomInit() {
                     float edge = smoothstep(0.0, 0.14, min(min(hs.x, 1.0 - hs.x), min(hs.y, 1.0 - hs.y)));
                     float br = ground > 0.5 ? (1.0 - pud) * 0.006 : 0.0015;
                     hitCol = (texture2D(tScene, hs).rgb * 2.0 + texture2D(tScene, hs + vec2(br, 0.0)).rgb + texture2D(tScene, hs - vec2(br, 0.0)).rgb) * 0.25;
-                    hitCol = min(hitCol, vec3(3.0));
-                    hit = edge * (1.0 - smoothstep(0.55, 1.0, float(i) / 40.0)) * (1.0 - smoothstep(0.2, 0.5, Rv.z));
+                    hitCol = min(hitCol, vec3(1.6));
+                    hit = edge * (1.0 - smoothstep(0.8, 1.0, float(i) / 40.0)) * (1.0 - smoothstep(0.2, 0.5, Rv.z));
                     break;
                   }
                 }
@@ -7427,15 +7419,16 @@ function gfxBloomInit() {
             vec3 RW = normalize(rotv(Rv));
             float sh = clamp(RW.y, 0.0, 1.0);
             vec3 skyC = mix(skyHor, skyTop, pow(sh, 0.55)) * 0.85;
-            skyC += sunCol * pow(max(dot(RW, sunDirW), 0.0), 2500.0) * sunI * 2.0;
+            skyC += sunCol * pow(max(dot(RW, sunDirW), 0.0), 2500.0) * min(sunI, 1.6) * 0.6;
             float _sa = length(cross(RW, normalize(sunDirW))); float _sd = (1.0 - smoothstep(0.0036, 0.0046, _sa)) * step(0.0, dot(RW, normalize(sunDirW))) * (1.0 - 0.55 * (1.0 - sqrt(max(1.0 - (_sa / 0.0046) * (_sa / 0.0046), 0.0))));
-            skyC += sunCol * _sd * 14.0 * sunI;
+            skyC += sunCol * _sd * 3.0 * min(sunI, 1.6);
             if (RW.y < 0.0) skyC = skyHor * 0.35;
             if (hasEnv > 0.5) { skyC = textureCube(tEnv, RW).rgb; if (RW.y < 0.0) skyC *= 0.5; }
+      skyC *= 1.0 - 0.6 * pow(max(dot(RW, normalize(sunDirW)), 0.0), 10.0); skyC = min(skyC, vec3(0.9));   // 반사 속 태양/하늘 과노출 억제
             vec3 rc = mix(skyC, hitCol, hit);
             float disc = max(max(abs(Dl - D), abs(Dr - D)), max(abs(Du - D), abs(Dd - D))) / max(D, 1.0);
-            float w = clamp(refl * mix(0.5, 1.0, fres) * 1.15, 0.0, 0.92);
-            w *= (1.0 - smoothstep(0.015, 0.05, disc)) * (1.0 - smoothstep(260.0, 650.0, D));   // 깊이 불연속(건물 모서리)·원거리 글리치 억제
+            float w = clamp(refl * mix(0.7, 1.0, fres) * 1.3, 0.0, 0.95);
+            w *= (1.0 - smoothstep(0.015, 0.05, disc)) * (1.0 - smoothstep(380.0, 900.0, D));   // 깊이 불연속(건물 모서리)·원거리 글리치 억제
             c = mix(c, rc, w);
           }
         }
@@ -7469,13 +7462,13 @@ function gfxBloomInit() {
             sp += dl * hh(uv * 311.0 + time);
             for (int i = 0; i < 28; i++) { sp += dl; vec3 t = texture2D(tScene, sp).rgb; float l = max(t.r, max(t.g, t.b)); acc += t * smoothstep(0.72, 1.0, l) * w; w *= 0.955; }
             float fall = pow(clamp(1.0 - length((uv - sunUv) * vec2(aspect, 1.0)) * 0.9, 0.0, 1.0), 1.6);
-            c += acc / 28.0 * 1.6 * sunVis * (0.35 + fall);
+            c += acc / 28.0 * 0.8 * sunVis * (0.35 + fall);
             // 아나모픽 렌즈 플레어: 수평 스트릭 + 고스트
             vec2 fd = (uv - sunUv) * vec2(aspect, 1.0);
-            c += vec3(0.35, 0.55, 1.0) * exp(-abs(fd.y) * 90.0) * exp(-abs(fd.x) * 1.6) * sunVis * 0.55;
+            c += vec3(0.35, 0.55, 1.0) * exp(-abs(fd.y) * 90.0) * exp(-abs(fd.x) * 1.6) * sunVis * 0.25;
             vec2 gv = vec2(0.5) - sunUv;
-            c += vec3(1.0, 0.72, 0.42) * smoothstep(0.07, 0.0, length((uv - (sunUv + gv * 1.5)) * vec2(aspect, 1.0))) * 0.10 * sunVis;
-            c += vec3(0.5, 0.8, 1.0) * smoothstep(0.045, 0.0, length((uv - (sunUv + gv * 2.2)) * vec2(aspect, 1.0))) * 0.08 * sunVis;
+            c += vec3(1.0, 0.72, 0.42) * smoothstep(0.07, 0.0, length((uv - (sunUv + gv * 1.5)) * vec2(aspect, 1.0))) * 0.05 * sunVis;
+            c += vec3(0.5, 0.8, 1.0) * smoothstep(0.045, 0.0, length((uv - (sunUv + gv * 2.2)) * vec2(aspect, 1.0))) * 0.04 * sunVis;
           }
           // 컬러 그레이딩: 대비 + 채도 + 따뜻한 하이라이트/차가운 그림자
           float l = dot(c, vec3(0.299, 0.587, 0.114));
@@ -8049,6 +8042,10 @@ function updateSpiderManRig(dt) {
   if (!spideyGroup) return;
   spideyGroup.visible = !isPOVMode;
   spideyGroup.position.copy(player.pos);
+  const rig = window.__bndRig;
+  if (!rig || !rig.ready) return;
+  if (rig.mixer) rig.mixer.update(dt);
+
   const L = THREE.MathUtils.lerp;
   const hSpeed = Math.hypot(player.vel.x, player.vel.z);
   if (hSpeed > 0.35) {
@@ -8058,67 +8055,78 @@ function updateSpiderManRig(dt) {
     while (diff < -Math.PI) diff += Math.PI * 2;
     spideyGroup.rotation.y += diff * Math.min(1, 14 * dt);
   }
-  // 플립 회전(+2π) 누적분이 끝난 뒤 되감기(역회전)지 않도록 각도를 [-π, π]로 정규화
-  if (isSwinging || player.onGround || msm2TrickSpin <= 0.05) {
-    const rx = spideyPivot.rotation.x;
-    spideyPivot.rotation.x = Math.atan2(Math.sin(rx), Math.cos(rx));
-  }
+
+  // Rig DEF deform bones: reset to bind/rest pose, then apply smooth procedural locomotion.
+  const pose = {};
+  const put = (name, x=0, y=0, z=0) => { pose[name] = [x,y,z]; };
+  const smooth = Math.min(1, 12*dt);
+  const phase = walkCycle;
   if (isSwinging) {
     const handPos = new THREE.Vector3(player.pos.x, player.pos.y + 1.45, player.pos.z);
     const toAnchor = new THREE.Vector3().subVectors(webAnchor, handPos).normalize();
-    const charRight = new THREE.Vector3(Math.cos(spideyGroup.rotation.y), 0, -Math.sin(spideyGroup.rotation.y));
-    msm2BodyBank = L(msm2BodyBank, -toAnchor.dot(charRight) * 0.78, 10 * dt);
-    spideyPivot.rotation.z = msm2BodyBank;
-    const pitchTilt = THREE.MathUtils.clamp(-player.vel.y * 0.025 + 0.35, -0.35, 0.75);
-    spideyPivot.rotation.x = L(spideyPivot.rotation.x, pitchTilt, 10 * dt);
-    rightArmPivot.rotation.x = L(rightArmPivot.rotation.x, -2.85, 16 * dt);
-    leftArmPivot.rotation.x = L(leftArmPivot.rotation.x, 0.65, 10 * dt);
-    leftLegPivot.rotation.x = L(leftLegPivot.rotation.x, 0.85, 10 * dt);
-    rightLegPivot.rotation.x = L(rightLegPivot.rotation.x, -0.45, 10 * dt);
-    spideyGroup.updateMatrixWorld(true);
-    handRightWorldPos.set(0, -0.52, 0);
-    rightArmPivot.localToWorld(handRightWorldPos);
-    const webDist = handRightWorldPos.distanceTo(webAnchor);
-    webMesh.position.copy(handRightWorldPos).lerp(webAnchor, 0.5);
-    webMesh.scale.set(1, 1, webDist);
-    webMesh.lookAt(webAnchor);
-    webMesh.updateMatrixWorld(true);
-  } else {
-    msm2BodyBank = L(msm2BodyBank, 0, 10 * dt);
-    spideyPivot.rotation.z = msm2BodyBank;
-    if (player.onGround && hSpeed > 0.25) {
-      walkCycle += hSpeed * dt * 1.48;
-      const s = Math.sin(walkCycle) * (isRunning ? 1.02 : 0.5);
-      spideyPivot.rotation.x = L(spideyPivot.rotation.x, isRunning ? 0.32 : 0.08, 10 * dt);
-      leftArmPivot.rotation.x = s;
-      rightArmPivot.rotation.x = -s;
-      leftLegPivot.rotation.x = -s;
-      rightLegPivot.rotation.x = s;
-    } else if (!player.onGround) {
-      if (msm2TrickSpin > 0.05) {
-        const spinStep = Math.min(msm2TrickSpin, 14.0 * dt);
-        msm2TrickSpin -= spinStep;
-        spideyPivot.rotation.x += spinStep;
-      } else if (msm2IsDiving) {
-        spideyPivot.rotation.x = L(spideyPivot.rotation.x, 1.35, 10 * dt);
-        leftArmPivot.rotation.x = L(leftArmPivot.rotation.x, 0.4, 10 * dt);
-        rightArmPivot.rotation.x = L(rightArmPivot.rotation.x, 0.4, 10 * dt);
-        leftLegPivot.rotation.x = L(leftLegPivot.rotation.x, -0.15, 10 * dt);
-        rightLegPivot.rotation.x = L(rightLegPivot.rotation.x, -0.15, 10 * dt);
-      } else {
-        const airTilt = THREE.MathUtils.clamp(-player.vel.y * 0.032, -0.45, 0.55);
-        spideyPivot.rotation.x = L(spideyPivot.rotation.x, airTilt, 8 * dt);
-        leftArmPivot.rotation.x = L(leftArmPivot.rotation.x, -0.85, 8 * dt);
-        rightArmPivot.rotation.x = L(rightArmPivot.rotation.x, -0.85, 8 * dt);
-        leftLegPivot.rotation.x = L(leftLegPivot.rotation.x, 0.65, 8 * dt);
-        rightLegPivot.rotation.x = L(rightLegPivot.rotation.x, -0.35, 8 * dt);
-      }
+    const charRight = new THREE.Vector3(Math.cos(spideyGroup.rotation.y),0,-Math.sin(spideyGroup.rotation.y));
+    msm2BodyBank = L(msm2BodyBank, -toAnchor.dot(charRight)*0.58, 9*dt);
+    put('DEF_SPINE_01', 0.20, 0, msm2BodyBank*0.25);
+    put('DEF_SPINE_02', 0.34, 0, msm2BodyBank*0.45);
+    put('DEF_CHEST_01', 0.28, 0, msm2BodyBank*0.30);
+    put('DEF_CHEST_02', 0.18, 0, msm2BodyBank*0.20);
+    put('DEF_ARM_01.R', -1.65, 0.0, -0.22); put('DEF_FOREARM_01.R', -1.15, 0.0, 0.08);
+    put('DEF_ARM_01.L', -0.95, 0.0, 0.18); put('DEF_FOREARM_01.L', -0.55, 0.0, -0.10);
+    put('DEF_THIGH.L', 0.75, 0.0, 0.08); put('DEF_SHIN.L', -0.55, 0.0, 0.0);
+    put('DEF_THIGH.R', -0.45, 0.0, -0.08); put('DEF_SHIN.R', 0.35, 0.0, 0.0);
+    put('DEF_HEAD', -0.12, 0, 0);
+  } else if (player.onGround && hSpeed > 0.25) {
+    walkCycle += hSpeed * dt * (isRunning ? 2.35 : 1.55);
+    const amp = isRunning ? 0.92 : 0.48;
+    const s = Math.sin(walkCycle)*amp;
+    const opposite = Math.sin(walkCycle+Math.PI)*amp;
+    put('DEF_SPINE_01', isRunning ? 0.12 : 0.04, 0, 0);
+    put('DEF_SPINE_02', isRunning ? 0.10 : 0.02, 0, 0);
+    put('DEF_ARM_01.L', s*0.72, 0, 0.06); put('DEF_FOREARM_01.L', -0.25-Math.max(0,s)*0.35,0,0);
+    put('DEF_ARM_01.R', opposite*0.72, 0, -0.06); put('DEF_FOREARM_01.R', -0.25-Math.max(0,opposite)*0.35,0,0);
+    put('DEF_THIGH.L', opposite, 0, 0); put('DEF_SHIN.L', Math.max(0,s)*0.85,0,0);
+    put('DEF_THIGH.R', s, 0, 0); put('DEF_SHIN.R', Math.max(0,opposite)*0.85,0,0);
+    put('DEF_FOOT.L', -Math.max(0,s)*0.25,0,0); put('DEF_FOOT.R', -Math.max(0,opposite)*0.25,0,0);
+    put('DEF_HEAD', -0.04,0,0);
+  } else if (!player.onGround) {
+    const airTilt = THREE.MathUtils.clamp(-player.vel.y*0.025,-0.35,0.55);
+    if (msm2IsDiving) {
+      put('DEF_SPINE_01', 0.42,0,0); put('DEF_SPINE_02',0.58,0,0);
+      put('DEF_ARM_01.L',-0.85,0,0.2); put('DEF_ARM_01.R',-0.85,0,-0.2);
+      put('DEF_THIGH.L',-0.15,0,0); put('DEF_THIGH.R',-0.15,0,0);
     } else {
-      spideyPivot.rotation.x = L(spideyPivot.rotation.x, 0, 10 * dt);
-      leftArmPivot.rotation.x = L(leftArmPivot.rotation.x, 0, 10 * dt);
-      rightArmPivot.rotation.x = L(rightArmPivot.rotation.x, 0, 10 * dt);
-      leftLegPivot.rotation.x = L(leftLegPivot.rotation.x, 0, 10 * dt);
-      rightLegPivot.rotation.x = L(rightLegPivot.rotation.x, 0, 10 * dt);
+      put('DEF_SPINE_01',airTilt*0.45,0,0); put('DEF_SPINE_02',airTilt,0,0);
+      put('DEF_ARM_01.L',-0.85,0,0.12); put('DEF_ARM_01.R',-0.85,0,-0.12);
+      put('DEF_FOREARM_01.L',-0.35,0,0); put('DEF_FOREARM_01.R',-0.35,0,0);
+      put('DEF_THIGH.L',0.65,0,0); put('DEF_THIGH.R',-0.35,0,0);
+      put('DEF_SHIN.L',-0.25,0,0); put('DEF_SHIN.R',0.20,0,0);
+    }
+  } else {
+    // relaxed idle with subtle breathing and head stabilization
+    const breathe = Math.sin(performance.now()*0.0017)*0.018;
+    put('DEF_SPINE_01',breathe,0,0); put('DEF_CHEST_01',breathe*0.7,0,0);
+    put('DEF_HEAD',0.015*Math.sin(performance.now()*0.001),0,0);
+  }
+
+  for (const [name,bone] of Object.entries(rig.bones)) {
+    const base = rig.base[name];
+    if (!base) continue;
+    bone.quaternion.copy(base);
+    const p = pose[name];
+    if (p) bone.quaternion.multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(p[0],p[1],p[2],'XYZ')));
+  }
+
+  // Web line endpoint follows the actual right-hand deform bone if present.
+  if (isSwinging && webMesh) {
+    spideyGroup.updateMatrixWorld(true);
+    const hand = rig.bones['DEF_HAND.R'] || rig.bones['HAND_IK.R'] || rig.bones['ORG_HAND.R'];
+    if (hand) {
+      hand.getWorldPosition(handRightWorldPos);
+      const webDist = handRightWorldPos.distanceTo(webAnchor);
+      webMesh.position.copy(handRightWorldPos).lerp(webAnchor,0.5);
+      webMesh.scale.set(1,1,Math.max(0.001,webDist));
+      webMesh.lookAt(webAnchor);
+      webMesh.updateMatrixWorld(true);
     }
   }
 }
@@ -8809,8 +8817,8 @@ function hrtBuildMaterials(u) {
               float edge = smoothstep(0.0, 0.14, min(min(hs.x, 1.0 - hs.x), min(hs.y, 1.0 - hs.y)));
               float br = ground > 0.5 ? (1.0 - pud) * 0.006 : 0.0015;
               hitCol = (texture2D(tScene, hs).rgb * 2.0 + texture2D(tScene, hs + vec2(br, 0.0)).rgb + texture2D(tScene, hs - vec2(br, 0.0)).rgb) * 0.25;
-              hitCol = min(hitCol, vec3(3.0));
-              hit = edge * (1.0 - smoothstep(0.55, 1.0, float(i) / 40.0)) * (1.0 - smoothstep(0.2, 0.5, Rj.z));
+              hitCol = min(hitCol, vec3(1.6));
+              hit = edge * (1.0 - smoothstep(0.8, 1.0, float(i) / 40.0)) * (1.0 - smoothstep(0.2, 0.5, Rj.z));
               break;
             }
           }
@@ -8821,14 +8829,15 @@ function hrtBuildMaterials(u) {
       vec3 RW = normalize(rotv(Rj));
       float shy = clamp(RW.y, 0.0, 1.0);
       vec3 skyC = mix(skyHor, skyTop, pow(shy, 0.55)) * 0.85;
-      skyC += sunCol * pow(max(dot(RW, sunDirW), 0.0), 2500.0) * sunI * 2.0;
+      skyC += sunCol * pow(max(dot(RW, sunDirW), 0.0), 2500.0) * min(sunI, 1.6) * 0.6;
             float _sa = length(cross(RW, normalize(sunDirW))); float _sd = (1.0 - smoothstep(0.0036, 0.0046, _sa)) * step(0.0, dot(RW, normalize(sunDirW))) * (1.0 - 0.55 * (1.0 - sqrt(max(1.0 - (_sa / 0.0046) * (_sa / 0.0046), 0.0))));
-            skyC += sunCol * _sd * 14.0 * sunI;
+            skyC += sunCol * _sd * 3.0 * min(sunI, 1.6);
       if (RW.y < 0.0) skyC = skyHor * 0.35;
       if (hasEnv > 0.5) { skyC = textureCube(tEnv, RW).rgb; if (RW.y < 0.0) skyC *= 0.5; }
+      skyC *= 1.0 - 0.6 * pow(max(dot(RW, normalize(sunDirW)), 0.0), 10.0); skyC = min(skyC, vec3(0.9));   // 반사 속 태양/하늘 과노출 억제
       // --- 2단계: SSR이 놓친 부분(hit<1)은 환경 큐브맵(하늘+도시 스카이라인)으로 부드럽게 폴백
       vec3 rc = mix(skyC, hitCol, hit);
-      float w = clamp(refl * mix(0.5, 1.0, fres) * 1.15, 0.0, 0.92);
+      float w = clamp(refl * mix(0.7, 1.0, fres) * 1.3, 0.0, 0.95);
       if (gfl < 0.5) { float disc = max(max(abs(Dl - D), abs(Dr - D)), max(abs(Du - D), abs(Dd - D))) / max(D, 1.0); w *= 1.0 - smoothstep(0.015, 0.05, disc); }
       w *= 1.0 - smoothstep(600.0, 1300.0, D);
       // 사전곱(premultiplied) 저장: 반사 없는 이웃과 섞여도 색이 번지지 않는다. hrtEnc는 8비트 폴백용 스케일.
@@ -8969,9 +8978,9 @@ const LUX_KF = [
   { el: -18, fog: 0x060b18, top: 0x01040c, hs: 0x3a4f82, hg: 0x04060c, hi: 0.30, sc: 0x9bb8ff, si: 0.40, ex: 1.08, fd: 0.00045, bl: 1.6 },
   { el: -9,  fog: 0x141b38, top: 0x070e2c, hs: 0x44559a, hg: 0x080a16, hi: 0.36, sc: 0x9bb8ff, si: 0.40, ex: 1.10, fd: 0.00046, bl: 1.4 },
   { el: -4,  fog: 0x6a4a66, top: 0x1e2c66, hs: 0x7f7cc4, hg: 0x2c2028, hi: 0.52, sc: 0xff6a3a, si: 0.35, ex: 1.16, fd: 0.00044, bl: 1.1 },
-  { el: -1,  fog: 0xd9803f, top: 0x4a5aa8, hs: 0xa59ad8, hg: 0x5a3322, hi: 0.72, sc: 0xff7a2e, si: 1.30, ex: 1.18, fd: 0.00040, bl: 0.85 },
-  { el: 4,   fog: 0xf2994a, top: 0x6d78bd, hs: 0xb5a6e0, hg: 0x6a3d28, hi: 0.82, sc: 0xff9a3a, si: 2.10, ex: 1.18, fd: 0.00038, bl: 0.78 },
-  { el: 12,  fog: 0xe0c7a2, top: 0x3f80d4, hs: 0xcfdcff, hg: 0x5a4a3a, hi: 0.86, sc: 0xffd29a, si: 1.90, ex: 1.12, fd: 0.00034, bl: 0.5 },
+  { el: -1,  fog: 0xd9803f, top: 0x4a5aa8, hs: 0xa59ad8, hg: 0x5a3322, hi: 0.72, sc: 0xff7a2e, si: 1.30, ex: 1.10, fd: 0.00040, bl: 0.55 },
+  { el: 4,   fog: 0xf2994a, top: 0x6d78bd, hs: 0xb5a6e0, hg: 0x6a3d28, hi: 0.82, sc: 0xff9a3a, si: 1.95, ex: 1.08, fd: 0.00038, bl: 0.38 },
+  { el: 12,  fog: 0xe0c7a2, top: 0x3f80d4, hs: 0xcfdcff, hg: 0x5a4a3a, hi: 0.86, sc: 0xffd29a, si: 1.90, ex: 1.08, fd: 0.00034, bl: 0.34 },
   { el: 30,  fog: 0x93d3f6, top: 0x1f6fc9, hs: 0xcfe4ff, hg: 0x4d4438, hi: 0.86, sc: 0xfff0d2, si: 1.70, ex: 1.10, fd: 0.00032, bl: 0.35 },
   { el: 70,  fog: 0x9ad6f8, top: 0x1b66bd, hs: 0xd2e6ff, hg: 0x4d4438, hi: 0.86, sc: 0xfff4de, si: 1.75, ex: 1.10, fd: 0.00031, bl: 0.35 }
 ];
@@ -9075,7 +9084,7 @@ function luxApply(force) {
   const u = GFX.sky.material.uniforms;
   u.topColor.value.copy(P.top); u.horizonColor.value.copy(P.fog); u.bottomColor.value.copy(P.fog).multiplyScalar(0.55);
   u.sunColor.value.copy(moon ? _lc.a.set(0x8aa6ee) : sc); u.sunDir.value.copy(dir);
-  const skyI = (moon ? 0.30 : Math.max(0.3, (1.0 + 1.35 * luxSS(25, 3, el)) * luxSS(-4.5, -1, el))) * (1 - 0.92 * oc);
+  const skyI = (moon ? 0.30 : Math.max(0.3, (1.0 + 0.7 * luxSS(25, 3, el)) * luxSS(-4.5, -1, el))) * (1 - 0.92 * oc);
   u.sunI.value = skyI; GFX.sunI = skyI; u.exponent.value = 0.85 - 0.25 * oc;
   u.starAmt.value = luxSS(-4, -12, el) * (1 - oc);
   { const a = ((LUX.time / 24 + LUX.doy / 365.25) % 1) * Math.PI * 2;      // 항성시: 별은 천구 북극(북쪽, 고도=위도) 주위를 하루 한 바퀴
@@ -9090,7 +9099,7 @@ function luxApply(force) {
   const hl = Math.hypot(dir.x, dir.z) || 1; u.cSunUV.value.set(dir.x / hl, dir.z / hl);
   // --- 노출 / 블룸 / 창문 불빛
   if (renderer) renderer.toneMappingExposure = P.ex * (1 + LUX.flash * 0.6);
-  GFXB.strength = P.bl * (1 - 0.3 * oc) + LUX.flash * 0.8; GFXB.thr = 0.34 + 0.48 * luxSS(-8, 2, el); GFXB.sp1 = 1 + 0.9 * (1 - luxSS(-8, 2, el)); GFXB.sp2 = 1 + 2.0 * (1 - luxSS(-8, 2, el));
+  GFXB.strength = P.bl * (1 - 0.3 * oc) + LUX.flash * 0.8; GFXB.thr = 0.34 + 0.56 * luxSS(-8, 4, el); GFXB.sp1 = 1 + 0.9 * (1 - luxSS(-8, 2, el)); GFXB.sp2 = 1 + 2.0 * (1 - luxSS(-8, 2, el));
   const glow = 1.15 * (1 - luxSS(-6, 14, el)) + 0.12 * oc * day;
   if (window.__winGlow) window.__winGlow.value = glow; NYC_LIGHT.win.value = glow;
   // --- 그림자 부드러움: 구름이 많을수록·태양이 낮을수록 반그림자 확대 / 달빛도 넓게
@@ -9277,7 +9286,7 @@ const RGS_GLARE_FS = `uniform sampler2D tDiffuse;uniform vec2 uSun;uniform float
   vec2 d=(vUv-uSun)*vec2(uAsp,1.);float r=length(d);
   float vis=0.;for(int i=0;i<8;i++){float a=float(i)*.7854;vis+=dot(texture2D(tDiffuse,uSun+vec2(cos(a)/uAsp,sin(a))*.005).rgb,vec3(.333));}
   vis=smoothstep(.5,.9,max(vis/8.,dot(texture2D(tDiffuse,uSun).rgb,vec3(.333))))*uAmt;
-  float g=exp(-r*12.)*.32+exp(-r*3.6)*.16+.02/(r*16.+1.);
+  float g=exp(-r*12.)*.20+exp(-r*3.6)*.10+.012/(r*16.+1.);
   float st=exp(-abs(d.y)*55.)*exp(-abs(d.x)*2.2)*.07;
   float gh=0.;vec2 cd=vec2(.5)-uSun;
   for(int i=1;i<4;i++){vec2 q=(vUv-(uSun+cd*float(i)*.62))*vec2(uAsp,1.);float fi=float(i);gh+=.025/fi*smoothstep(.012,0.,abs(length(q)-.04*fi));gh+=.015/fi*smoothstep(.05*fi,0.,length(q));}
