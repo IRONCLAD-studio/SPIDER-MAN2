@@ -2419,7 +2419,7 @@ canvas { display: block; width: 100%; height: 100%; }
 <div id="start-overlay">
   <div class="start-card">
     <div class="start-badge">MANHATTAN 1:1 · REAL-SCALE MAP</div>
-    <div id="game-version" class="game-version">v5</div>
+    <div id="game-version" class="game-version">v6</div>
     <h1 class="start-title">MANHATTAN 1:1 WEB-SWING</h1>
     <div class="start-subtitle">실제 뉴욕 맨해튼 크기(1유닛 = 1m) 그대로의 건물 약 4.6만 동 · 삼각형 366만 개 · 지형 고저차까지 반영한 병합 맵 (001~006)</div>
     <div class="start-controls-guide">
@@ -5980,9 +5980,9 @@ function applyWeatherTheme(mode) {
     scene.fog.density = 0.00032;
     hemiLightRef.color.setHex(0xcfe4ff);
     hemiLightRef.groundColor.setHex(0x4d4438);
-    hemiLightRef.intensity = 0.86;
+    hemiLightRef.intensity = 0.60;   // v6: 그림자 암부를 더 진하게(환경광↓·직사광↑)
     sunLight.color.setHex(0xfff0d2);
-    sunLight.intensity = 1.7;
+    sunLight.intensity = 2.0;
     sunLight.position.set(300, 430, 230);      // 고도 약 49° — 건물 높이의 0.9배 길이 그림자
   } else if (mode === 'sunset') {
     scene.background.setHex(0xffa13b);
@@ -5990,9 +5990,9 @@ function applyWeatherTheme(mode) {
     scene.fog.density = 0.00038;
     hemiLightRef.color.setHex(0xb5a6e0);       // 그늘은 차가운 보랏빛(반대편 하늘광)
     hemiLightRef.groundColor.setHex(0x6a3d28); // 지면에서 튕겨 오르는 따뜻한 반사광
-    hemiLightRef.intensity = 0.86;
+    hemiLightRef.intensity = 0.62;
     sunLight.color.setHex(0xff9a3a);
-    sunLight.intensity = 2.1;
+    sunLight.intensity = 2.3;
     sunLight.position.set(-440, 170, 290);     // 고도 약 18° — 길게 늘어지는 그림자
   } else if (mode === 'cloudy') {
     scene.background.setHex(0x64748b);
@@ -6000,9 +6000,9 @@ function applyWeatherTheme(mode) {
     scene.fog.density = 0.00075;
     hemiLightRef.color.setHex(0xdde6f0);
     hemiLightRef.groundColor.setHex(0x39434f);
-    hemiLightRef.intensity = 1.12;             // 구름이 빛을 고르게 퍼뜨림 → 환경광 비중↑
+    hemiLightRef.intensity = 0.95;             // 구름이 빛을 고르게 퍼뜨림 → 환경광 비중↑
     sunLight.color.setHex(0xd5dfea);
-    sunLight.intensity = 0.5;
+    sunLight.intensity = 0.85;
     sunLight.position.set(120, 420, 100);
   } else {
     // night (기본)
@@ -9060,14 +9060,14 @@ function luxApply(force) {
   let si = P.si * (1 - 0.9 * oc), sc = P.sc.clone();
   if (moon) { si = P.si * (0.55 + 0.45 * luxSS(-4.5, -16, el)) * (1 - 0.7 * oc); }
   luxGray(sc, oc * 0.5, 1.0);
-  sunLight.color.copy(sc); sunLight.intensity = si;
+  sunLight.color.copy(sc); sunLight.intensity = si * 1.12;   // v6: 직사광↑
   sunLight.position.copy(dir).multiplyScalar(600);
   GFX.sunDir.copy(dir);
   if (dir.angleTo(LUX.lastDir) > 0.006) { LUX.lastDir.copy(dir); GFXS.dirty = true; }
   // --- 환경광(하늘 + 지면 반사). 흐리면 확산광↑
   luxGray(P.hs, oc * 0.7, 0.92); luxGray(P.hg, oc * 0.4, 1.0);
   hemiLightRef.color.copy(P.hs); hemiLightRef.groundColor.copy(P.hg);
-  hemiLightRef.intensity = (P.hi + 0.28 * oc * day) * (1 + LUX.flash * 3.0);
+  hemiLightRef.intensity = (P.hi + 0.28 * oc * day) * (1 + LUX.flash * 3.0) * 0.72;   // v6: 환경광↓ → 그림자 암부 더 진하게
   // --- 안개 / 배경 / 하늘 돔
   luxGray(P.fog, oc * 0.75, 0.9 - 0.25 * LUX.precip); luxGray(P.top, oc * 0.8, 0.9 - 0.3 * LUX.precip);
   scene.fog.color.copy(P.fog); scene.fog.density = P.fd * LUX.fogMul; scene.background.copy(P.top);
