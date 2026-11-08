@@ -8121,6 +8121,7 @@ function bndSetupRig(rig, model) {
     R['L1' + s] = BM.len(BM.sub(knee, R.hip[s])); R['L2' + s] = BM.len(BM.sub(R.ankle[s], knee));
     R.footDir[s] = BM.norm(BM.sub(toe, R.ankle[s]));
   }
+  R.shoulderSep = BM.len(BM.sub(P('DEF_ARM_01.L'), P('DEF_ARM_01.R')));
   R.L1 = (R.L1L + R.L1R) / 2; R.L2 = (R.L2L + R.L2R) / 2;
   rig.rest = R; rig.ready2 = true;
 }
@@ -8218,7 +8219,7 @@ function bndCompute(S, R) {
     P.arm.R = arm(S.ropeWR, S.ropeWR, true);
     if (S.twoHand) {
       // 양손 웹스윙: 두 팔 모두 앵커를 향해 쭉 뻗고, 몸은 줄 아래에 대칭으로 매달린다
-      P.arm.L = arm(S.ropeWL, S.ropeWL, true);
+      P.arm.R = { grip: true, u: [0, 1, 0], f: [0, 1, 0], world: true }; P.arm.L = { grip: true, u: [0, 1, 0], f: [0, 1, 0], world: true };
       P.leg.L = legA('L', BM.lerp(-0.25, 1.1, tuck) + fl, BM.lerp(0.5, 1.7, tuck));
       P.leg.R = legA('R', BM.lerp(-0.10, 0.95, tuck) - fl, BM.lerp(0.8, 1.6, tuck));
       for (const s of BND_SIDES) P.foot[s] = { p: BM.lerp(0.7, 0.3, tuck), y: -BND_SX[s] * 0.07 };
@@ -8309,6 +8310,16 @@ function bndStep(rig, ctx) {
     S.ropeG = [_tv.x, _tv.y, _tv.z];
     sh.getWorldPosition(_p1); S.ropeWR = BM.norm([ctx.anchorW[0] - _p1.x, ctx.anchorW[1] - _p1.y, ctx.anchorW[2] - _p1.z]);
     const shL = bndNode(rig, 'DEF_ARM_01.L') || model; shL.getWorldPosition(_p1); S.ropeWL = BM.norm([ctx.anchorW[0] - _p1.x, ctx.anchorW[1] - _p1.y, ctx.anchorW[2] - _p1.z]);
+    if (ctx.twoHand) {
+      const aL = bndNode(rig, 'DEF_ARM_01.L'), aR = bndNode(rig, 'DEF_ARM_01.R');
+      if (aL && aR) {
+        const pl = new THREE.Vector3(), pr = new THREE.Vector3(); aL.getWorldPosition(pl); aR.getWorldPosition(pr);
+        const sep = pl.distanceTo(pr), sc = sep / (rig.rest.shoulderSep || sep);
+        const mid = pl.clone().add(pr).multiplyScalar(0.5);
+        const dm = BM.norm([ctx.anchorW[0] - mid.x, ctx.anchorW[1] - mid.y, ctx.anchorW[2] - mid.z]);
+        S.gripW = [mid.x + dm[0] * 0.40 * sc, mid.y + dm[1] * 0.40 * sc, mid.z + dm[2] * 0.40 * sc];
+      }
+    }
   }
   const P = bndCompute(S, rig.rest);
   const k = 1 - Math.exp(-(BND.blendT > 0 ? 14 : 50) * dt); BND.blendT = Math.max(0, BND.blendT - dt);
@@ -8334,6 +8345,22 @@ function bndStep(rig, ctx) {
   for (const s of BND_SIDES) {
     const a = P.arm[s], ub = bndNode(rig, 'DEF_ARM_01.' + s), fb = bndNode(rig, 'DEF_FOREARM_01.' + s), hb = bndNode(rig, 'DEF_HAND.' + s);
     if (!a || !ub || !fb || !hb) continue;
+    if (a.grip && S.gripW) {
+      // 한 줄을 두 손으로 잡기: 위팔은 잡는 지점 쪽(팔꿈치는 살짝 바깥), 팔뚝은 잡는 지점으로 곧장
+      const G = _tv.set(S.gripW[0], S.gripW[1], S.gripW[2]).clone();
+      const aL = bndNode(rig, 'DEF_ARM_01.L'), aR = bndNode(rig, 'DEF_ARM_01.R');
+      const pl = new THREE.Vector3(), pr = new THREE.Vector3(); aL.getWorldPosition(pl); aR.getWorldPosition(pr);
+      const lat = pl.clone().sub(pr).normalize().multiplyScalar(BND_SX[s]);
+      ub.getWorldPosition(_p0);
+      const to = G.clone().sub(_p0).normalize().addScaledVector(lat, 0.16).normalize();
+      const u = bndSmV('au' + s, [to.x, to.y, to.z], k);
+      bndAim(ub, fb, _tw.set(u[0], u[1], u[2]).clone());
+      fb.getWorldPosition(_p0);
+      const fd = G.clone().sub(_p0).normalize();
+      const f = bndSmV('af' + s, [fd.x, fd.y, fd.z], k);
+      bndAim(fb, hb, _tw.set(f[0], f[1], f[2]).clone());
+      continue;
+    }
     const u = bndSmV('au' + s, a.u, k), f = bndSmV('af' + s, a.f, k);
     bndAim(ub, fb, bndWorldDir(u, a.world, Qm)); bndAim(fb, hb, bndWorldDir(f, a.world, Qm));
   }
@@ -8389,23 +8416,23 @@ function updateSpiderManRig(dt) {
     });
   } catch (e) { if (!window.__bndErrShown) { window.__bndErrShown = 1; console.error('[BND] 모션 오류', e); } }
 
-  // 거미줄: 일반 스윙은 양손, 짧게 끊는 퀵 휩은 오른손 한 줄
+  // 거미줄: 한 줄. 일반 스윙은 두 손으로 같은 줄을 잡고(손 사이 중점에서 출발), 퀵 휩은 오른손 하나로 잡는다.
+  if (webMeshL) webMeshL.visible = false;
   if (isSwinging && webMesh) {
     spideyGroup.updateMatrixWorld(true);
     const bnd = (n) => (typeof bndNode === 'function' ? bndNode(rig, n) : null) || rig.bones[n];
-    const setLine = (mesh, hand) => {
-      if (!hand) { mesh.visible = false; return; }
-      hand.getWorldPosition(handRightWorldPos);
+    const hR = bnd('DEF_HAND.R') || rig.bones['HAND_IK.R'] || rig.bones['ORG_HAND.R'];
+    const hL = bnd('DEF_HAND.L') || rig.bones['HAND_IK.L'];
+    if (hR) {
+      hR.getWorldPosition(handRightWorldPos);
+      if (!msm2QuickWhip && hL) { const t = new THREE.Vector3(); hL.getWorldPosition(t); handRightWorldPos.add(t).multiplyScalar(0.5); }
       const webDist = handRightWorldPos.distanceTo(webAnchor);
-      mesh.visible = true;
-      mesh.position.copy(handRightWorldPos).lerp(webAnchor, 0.5);
-      mesh.scale.set(1, 1, Math.max(0.001, webDist));
-      mesh.lookAt(webAnchor);
-      mesh.updateMatrixWorld(true);
-    };
-    setLine(webMesh, bnd('DEF_HAND.R') || rig.bones['HAND_IK.R'] || rig.bones['ORG_HAND.R']);
-    if (webMeshL) { if (!msm2QuickWhip) setLine(webMeshL, bnd('DEF_HAND.L') || rig.bones['HAND_IK.L']); else webMeshL.visible = false; }
-  } else if (webMeshL) webMeshL.visible = false;
+      webMesh.position.copy(handRightWorldPos).lerp(webAnchor, 0.5);
+      webMesh.scale.set(1, 1, Math.max(0.001, webDist));
+      webMesh.lookAt(webAnchor);
+      webMesh.updateMatrixWorld(true);
+    }
+  }
 }
 
 function updateCameraAndHUD(dt) {
