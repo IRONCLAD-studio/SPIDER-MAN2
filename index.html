@@ -2418,7 +2418,7 @@ canvas { display: block; width: 100%; height: 100%; }
 <div id="start-overlay">
   <div class="start-card">
     <div class="start-badge">MANHATTAN 1:1 · REAL-SCALE MAP</div>
-    <div id="game-version" style="text-align:center;margin:-4px 0 8px;font:700 13px system-ui,sans-serif;color:#fbbf24;letter-spacing:.08em">VERSION v3</div>
+    <div id="game-version" style="text-align:center;margin:-4px 0 8px;font:700 13px system-ui,sans-serif;color:#fbbf24;letter-spacing:.08em">VERSION v4</div>
     <h1 class="start-title">MANHATTAN 1:1 WEB-SWING</h1>
     <div class="start-subtitle">실제 뉴욕 맨해튼 크기(1유닛 = 1m) 그대로의 건물 약 4.6만 동 · 삼각형 366만 개 · 지형 고저차까지 반영한 병합 맵 (001~006)</div>
     <div class="start-controls-guide">
@@ -4258,7 +4258,7 @@ function nmFrame(dt) {
   if (!NM.ready) return; NM.camT += dt; if (NM.camT < 0.3) return; NM.camT = 0;
   const cx = camera.position.x, cz = camera.position.z, R = (GFXU.chunk || 2300) + 250;
   for (const c of NM.cellMeshes) c.mesh.visible = Math.hypot(c.x - cx, c.z - cz) < (c.r || R) + 300;
-  if (window.__winFar) window.__winFar.value = Math.max(250, gfxEffDetail() * 0.72);
+  if (window.__winFar) window.__winFar.value = Math.max(50, gfxEffDetail());
   const gx = Math.floor(player.pos.x / SPATIAL_CELL), gz = Math.floor(player.pos.z / SPATIAL_CELL);
   for (let a = -3; a <= 3; a++) for (let b = -3; b <= 3; b++) nmEnsureCell((gx + a) + ',' + (gz + b));
 }
@@ -7567,7 +7567,7 @@ function gfxApplyEnv() {
     if (seen.has(m) || !m.isMeshStandardMaterial) return; seen.add(m);
     const want = GFX.quality !== 'low' ? GFX.envTex : null;
     if (m.envMap !== want) { m.envMap = want; m.needsUpdate = true; }
-    m.envMapIntensity = m.roughnessMap ? 0.9 : 0.4;
+    m.envMapIntensity = 0.04;
   }); });
 }
 function gfxApplyShadows() {
@@ -11127,7 +11127,7 @@ void rceFar(float u, float yy, vec3 wn, vec3 vv, out vec3 alb, out vec3 emc){
 GLSL_BLD.near = `float rceUse_ = 0.0;
 #ifndef GBUF
 if (uRceOn > 0.5) {
-  float dK = 1.0 - smoothstep(55.0 * RCE_DS, 340.0 * RCE_DS, cdist);
+  float dK = 1.0 - smoothstep(0.12 * uWinFar, uWinFar, cdist);
   float sM = 1.0 - clamp(gls, 0.0, 1.0), glM = clamp(gls, 0.0, 1.0) * uWinQ;
   vec2 rp = vec2(u, y) * uRceTile + vec2(fract(seed * 91.7), fract(seed * 37.3));
   float bs = step(0.5, pFam);
@@ -11155,7 +11155,7 @@ if (uRceOn > 0.5) {
   gDN += -(gg.x * T3 + gg.y * vec3(0.0, 1.0, 0.0)) * dKg;
   vec3 Rw = reflect(vv, wn); float ndv_ = clamp(abs(dot(-vv, wn)), 0.0, 1.0);
   float Fg = mix(0.16, 1.0, pow(1.0 - ndv_, 4.0));
-  float lodB = mix(0.4, 4.5, clamp(rough, 0.0, 1.0)) + smoothstep(150.0, 600.0, cdist) * 2.0;
+  float lodB = mix(0.4, 4.5, clamp(rough, 0.0, 1.0)) + smoothstep(0.2 * uWinFar, uWinFar, cdist) * 2.0;
   emi += textureCube(tRceEnv, Rw, lodB).rgb * uRceEnvK * Fg * glM * uRceReflK * (1.0 - 0.5 * dirt);
   rceUse_ = step(0.001, k + dKg);
 }
@@ -11239,7 +11239,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = RealisticC
   // 울트라 품질이 추가하는 보조 방향광(림 라이트·2번째 태양)을 끄고, 반구광(평면 앰비언트)을 낮춰 태양 그림자가 또렷하게 보이게 한다.
   // 반구광/태양 세기는 "렌더 직전에만" 바꾸고 직후 원복 → 게임의 날씨/시간 로직은 영향 없음.
   let hidden = [], hemis = [], lightScan = 0;
-  const HEMI_K = 0.32, SUN_FLOOR = 0.85;
+  const HEMI_K = 0.0, SUN_FLOOR = 0.85;
   function singleSunSetup() {
     hidden.forEach(l => { l.visible = true; }); hidden = []; hemis = [];
     scene.traverse(o => {
@@ -11428,6 +11428,59 @@ if (typeof module !== 'undefined' && module.exports) module.exports = RealisticC
     const o = renderer.render.bind(renderer);
     renderer.render = function (sc, cam) { if (sc === scene) { try { update(); } catch (e) { SF.ok = false; SF.err = e; } } return o(sc, cam); };
     window.SUNFIX = SF;
+  })();
+})();
+</script>
+
+<script>
+/* ===== SUNFIX 3 (v4): 보조광 제거 + 진짜 창문 반사(실시간 큐브 캡처, 거리=디테일 슬라이더) ===== */
+(function () {
+  const R = { rt: null, cam: null, face: 0, first: true, busy: false, tick: 0, last: -1, ok: false };
+  (function t() { R.tick++; requestAnimationFrame(t); })();
+  // 간접광(하늘 환경광) 제거: 건물/지형의 IBL 확산광을 거의 0으로. (RCE 전용 재질/유리는 제외)
+  let amb = 0;
+  function killAmbient() {
+    if (amb++ % 90) return;
+    const seen = new Set();
+    scene.traverse(o => { const m = o.material; if (!m) return; (Array.isArray(m) ? m : [m]).forEach(x => { if (seen.has(x) || !x.isMeshStandardMaterial || x.isMeshPhysicalMaterial || (x.userData && x.userData.rceEnv)) return; seen.add(x); if (x.envMapIntensity > 0.05) x.envMapIntensity = 0.04; }); });
+  }
+  function init() {
+    const hdr = !!(window.RCE && RCE.hdr), size = GFX_MOBILE ? 128 : 256;
+    R.rt = new THREE.WebGLCubeRenderTarget(size, { generateMipmaps: true, minFilter: THREE.LinearMipmapLinearFilter, magFilter: THREE.LinearFilter, type: hdr ? THREE.HalfFloatType : THREE.UnsignedByteType });
+    R.cam = new THREE.CubeCamera(1, 1000, R.rt); R.ok = true;
+  }
+  function capture() {
+    const far = Math.max(400, gfxEffDetail());          // 반사 거리 = 디테일 거리 슬라이더
+    R.cam.children.forEach(c => { c.far = far; c.updateProjectionMatrix(); });
+    R.cam.position.copy(camera.position); R.cam.updateMatrixWorld(true);
+    const hide = [window.SUNFIX && SUNFIX.mesh, typeof GFXS !== 'undefined' && GFXS.mesh, typeof GFX2 !== 'undefined' && GFX2.proxy2].filter(Boolean), vis = hide.map(o => o.visible);
+    hide.forEach(o => { o.visible = false; });
+    const auto = renderer.shadowMap.autoUpdate, prev = renderer.getRenderTarget();
+    renderer.shadowMap.autoUpdate = false; R.busy = true;
+    try {
+      const n = R.first ? 6 : (GFX_MOBILE ? 1 : 2);
+      for (let k = 0; k < n; k++) { const i = R.face; R.rt.texture.generateMipmaps = (i === 5); renderer.setRenderTarget(R.rt, i); renderer.render(scene, R.cam.children[i]); R.face = (i + 1) % 6; }
+      R.first = false;
+    } finally { R.busy = false; renderer.shadowMap.autoUpdate = auto; renderer.setRenderTarget(prev); hide.forEach((o, i) => { o.visible = vis[i]; }); }
+  }
+  (function hook() {
+    if (typeof renderer === 'undefined' || !renderer) return requestAnimationFrame(hook);
+    const o = renderer.render;
+    renderer.render = function (sc, cam) {
+      if (sc === scene && !R.busy) {
+        try {
+          killAmbient();
+          const U = window.RCE && RCE.U;
+          if (U && U.tRceEnv && U.uRceOn && U.uRceOn.value > 0.5 && typeof camera !== 'undefined') {
+            if (!R.ok) init();
+            if (R.last !== R.tick) { R.last = R.tick; capture(); }
+            U.tRceEnv.value = R.rt.texture;
+          }
+        } catch (e) { R.err = e; R.ok = false; }
+      }
+      return o.apply(this, arguments);
+    };
+    window.WINREFL = R;
   })();
 })();
 </script>
