@@ -5391,6 +5391,8 @@ const keys = { w: false, s: false, a: false, d: false };
 const joyInput = { x: 0, y: 0 };
 let walkCycle = 0;
 let zipCooldown = 0;
+let pullHeld = false;   // [v9] 웹 부착 중 PULL 버튼/E키를 누르고 있는 동안 true → 줄 감기
+const AIR = { fallGravityMul: 1.3, steerAccel: 14.0, steerMaxSpeed: 14.0 };   // [v9] 낙하 가속 배율 / 공중 조향 가속도 / 조향으로 얻을 수 있는 수평속도 하한 상한
 
 // =============================================================================
 // 5. 플랫아이언 빌딩 (175 5th Ave, New York, NY 10010) 정밀 3D 모델 및 주변 광장 시공
@@ -6037,6 +6039,7 @@ function shootWeb() {
 function releaseWeb(giveBoost) {
   if (!isSwinging) return;
   isSwinging = false;
+  pullHeld = false;
   webMesh.visible = false;
   const phaseAtRelease = swingPhase;
   swingPhase = SWING_PHASE.NONE;
@@ -6300,7 +6303,7 @@ function setupControls() {
     if (e.code === 'KeyD' || e.code === 'ArrowRight') keys.d = true;
     if (e.code === 'Space') { e.preventDefault(); triggerJump(); }
     if ((e.code === 'ShiftLeft' || e.code === 'ShiftRight') && !e.repeat) toggleRun();
-    if (e.code === 'KeyE') triggerWebZip();
+    if (e.code === 'KeyE' && !e.repeat) onPullDown();
     if (e.code === 'KeyF') { if (!e.repeat) webHeld = true; shootWeb(); }
     if (e.code === 'KeyM' && !e.repeat) setMap(!mapOpen);
   });
@@ -6309,6 +6312,7 @@ function setupControls() {
     if (e.code === 'KeyS' || e.code === 'ArrowDown') keys.s = false;
     if (e.code === 'KeyA' || e.code === 'ArrowLeft') keys.a = false;
     if (e.code === 'KeyD' || e.code === 'ArrowRight') keys.d = false;
+    if (e.code === 'KeyE') onPullUp();
     if (e.code === 'KeyF') { webHeld = false; releaseWeb(true); }
   });
 
@@ -6348,7 +6352,9 @@ function setupControls() {
   }
   bindButton('btn-run', () => toggleRun());
   bindButton('btn-jump', () => triggerJump());
-  bindButton('btn-zip', () => triggerWebZip());
+  function onPullDown() { if (isSwinging) pullHeld = true; else triggerWebZip(); }
+  function onPullUp() { pullHeld = false; }
+  bindButton('btn-zip', onPullDown, onPullUp, true);
   bindButton('btn-web', () => { webHeld = true; shootWeb(); }, () => { webHeld = false; releaseWeb(true); }, true);
 
   const joyZone = document.getElementById('joystick-zone');
@@ -6508,7 +6514,8 @@ function updatePhysics(dt) {
     msm2SwingTime += dt;
     swingElapsedTime = msm2SwingTime;
     msm2IsDiving = false;
-    const reelIn = (keys.w || joyInput.y > 0.35);
+    const reelIn = (keys.w || joyInput.y > 0.35 || pullHeld);
+    const reelRate = pullHeld ? PHYS.reelSpeed * 1.5 : PHYS.reelSpeed;   // PULL은 W보다 빠르게 감김
 
     // ── [v8-2] 동적 피벗 블렌딩: 시간 경과 / 강한 조향 / 최저점 통과 → physicsPivot이 visualAnchor로 수렴 ──
     swingSteerSm += (rawSideInput - swingSteerSm) * (1 - Math.exp(-8 * dt));
@@ -6547,7 +6554,7 @@ function updatePhysics(dt) {
       player.vel.y -= PHYS.gravity * subDt;
       physApplyDrag(subDt, false);
       // 3) 순수 로프 길이 단축 (이미 minRope보다 짧은 줄은 늘리지 않음)
-      if (reelIn) ropeLength = Math.max(Math.min(ropeLength, PHYS.minRope), ropeLength - PHYS.reelSpeed * subDt);
+      if (reelIn) ropeLength = Math.max(Math.min(ropeLength, PHYS.minRope), ropeLength - reelRate * subDt);
       // 4) 비대칭 스프링-댐퍼 장력 — [v8] 기준점은 physicsPivotPoint (렌더링 줄은 visualAnchorPoint)
       const hx = player.pos.x - physicsPivotPoint.x, hy = player.pos.y + 1.45 - physicsPivotPoint.y, hz = player.pos.z - physicsPivotPoint.z;
       const dist = Math.max(0.001, Math.hypot(hx, hy, hz));
@@ -6616,7 +6623,17 @@ function updatePhysics(dt) {
     // v7: 다이빙 중력 배율·전방 부스터·공중 조향 제거 → 중력 + 자세별 v² 항력만 적용
     msm2IsDiving = (player.pos.y > 16.0 && player.vel.y < 2.0 && rawForwardInput < -0.35);
     applySwingKick(dt);   // [v8] 다리 킥 임펄스 후반부
-    player.vel.y -= PHYS.gravity * (slingState.glideT > 0 ? 0.28 : 1.0) * dt;
+    // [v9] 낙하 중에만 중력 ×1.3 (상승·글라이드는 그대로) → 더 빠르고 묵직한 낙하
+    player.vel.y -= PHYS.gravity * (slingState.glideT > 0 ? 0.28 : (player.vel.y < 0 ? AIR.fallGravityMul : 1.0)) * dt;
+    // [v9] 공중 조향: 조이스틱/WASD 방향으로 수평 가속. 이미 빠르면 속도를 늘리지 않고 방향만 틀어줌
+    if (inputMag > 0.05) {
+      const sx = msm2IsDiving ? right.x * rawSideInput : inputDir.x * inputMag;   // 다이빙 중엔 좌우만
+      const sz = msm2IsDiving ? right.z * rawSideInput : inputDir.z * inputMag;
+      const h0 = Math.hypot(player.vel.x, player.vel.z);
+      player.vel.x += sx * AIR.steerAccel * dt; player.vel.z += sz * AIR.steerAccel * dt;
+      const h1 = Math.hypot(player.vel.x, player.vel.z), cap = Math.max(h0, AIR.steerMaxSpeed);
+      if (h1 > cap) { const k = cap / h1; player.vel.x *= k; player.vel.z *= k; }
+    }
     physApplyDrag(dt, msm2IsDiving);
     player.pos.addScaledVector(player.vel, dt);
     PHYS_TEL.tension = 0; PHYS_TEL.centripetal = 0; PHYS_TEL.gForce = 1.0;
