@@ -2419,7 +2419,7 @@ canvas { display: block; width: 100%; height: 100%; }
 <div id="start-overlay">
   <div class="start-card">
     <div class="start-badge">MANHATTAN 1:1 · REAL-SCALE MAP</div>
-    <div id="game-version" class="game-version">v6</div>
+    <div id="game-version" class="game-version">v7</div>
     <h1 class="start-title">MANHATTAN 1:1 WEB-SWING</h1>
     <div class="start-subtitle">실제 뉴욕 맨해튼 크기(1유닛 = 1m) 그대로의 건물 약 4.6만 동 · 삼각형 366만 개 · 지형 고저차까지 반영한 병합 맵 (001~006)</div>
     <div class="start-controls-guide">
@@ -5813,11 +5813,32 @@ function createTargetAndWebMarkers() {
 
 // ===== [MSM2 통합] 마블 스파이더맨 2 스타일 웹스윙 물리 + 조작감/카메라 =====
 // ===== 물리 재설계 (실측 분석 데이터 기반, 1:1 스케일) =====
-const MSM2_GRAVITY = 9.81;                 // 실제 중력 (분석표 초기 가속도 ≈ 9 m/s²)
-const MSM2_TERMINAL_V = 48.0;              // 자유낙하 최고 속도 ≈ 48 m/s (172.8 km/h)
-const MSM2_DRAG_K = MSM2_GRAVITY / (MSM2_TERMINAL_V * MSM2_TERMINAL_V);   // 2차 공기저항 a = -k|v|v → 종단속도 48 m/s
-const MSM2_SWING_MAX = 45.0;               // 웹스윙 최고 속도 ≈ 45 m/s (162 km/h), 최저점 R≈45m → 구심가속도 ≈ 45 m/s² (4.6G)
-const MSM2_PUMP_ACCEL = 5.0;               // 어시스트 ON 시 최저점 패시브 가속 (입력 무관)
+// ===== [v7] Unity SpiderManPhysicsController 포팅: 100% 물리 (에너지 보존 + 스프링-댐퍼 로프 + v² 공기저항) =====
+const PHYS = {
+  mass: 66.0,              // kg (톰 홀랜드)
+  gravity: 9.81,           // m/s²  (Apex 중력 축소/다이빙 중력 배율 없음)
+  airDensity: 1.225,       // kg/m³
+  cdNormal: 0.70, areaNormal: 0.65,   // 일반 체공  F_d = ½ρv²·Cd·A
+  cdDiving: 0.35, areaDiving: 0.23,   // 유선형 다이빙
+  springK: 4500.0,         // N/m  고강성 로프
+  damperC: 420.0,          // N·s/m  (늘어나는 방향 100%, 수축 방향 25% 감쇠 = 비대칭)
+  reelSpeed: 14.0,         // m/s  순수 로프 길이 단축 (가짜 추진력 없음)
+  minRope: 10.0,           // m
+  subSteps: 8,             // 고강성 스프링 안정성을 위한 서브스텝
+  safetyMaxSpeed: 120.0,   // m/s  충돌 터널링 방지용 안전 상한 (물리 제한 아님)
+  fovBase: 75.0, fovMax: 105.0, fovV0: 18.0, fovV1: 68.5,
+  rollStartAcc: 25.0, rollGain: 0.25, rollMaxDeg: 14.0
+};
+const PHYS_TEL = { tension: 0, centripetal: 0, gForce: 1, entry: 0 };   // 실시간 텔레메트리
+function physDragAccel(speed, diving) {
+  const cd = diving ? PHYS.cdDiving : PHYS.cdNormal, area = diving ? PHYS.areaDiving : PHYS.areaNormal;
+  return (0.5 * PHYS.airDensity * speed * speed * cd * area) / PHYS.mass;   // 항력 가속도 (m/s²)
+}
+function physApplyDrag(dt, diving) {
+  const sp = player.vel.length(); if (sp < 0.01) return;
+  const a = physDragAccel(sp, diving);
+  player.vel.multiplyScalar(Math.max(0, 1 - (a / sp) * dt));
+}
 const MSM2_MAX_SPEED_MS = 48.0; // 최고속도 제한 = 종단속도
 const MSM2_ASSIST_RANGE = 98.0;
 const MSM2_RAW_RANGE = 68.0;
@@ -5922,32 +5943,18 @@ function shootWeb() {
   ropeLength = handPos.distanceTo(webAnchor);
   // 줄이 짧거나 앵커가 낮으면 쇼트 아크(퀵 휩) 모드
   msm2QuickWhip = ropeLength < QW_ROPE_MAX || (webAnchor.y - GROUND_Y) < QW_ANCHOR_MAX_H;
-  const forward = new THREE.Vector3(Math.sin(cameraYaw), 0, Math.cos(cameraYaw)).normalize();
   const speedBefore = player.vel.length();
+  // 물리 버전: 가짜 전방 발사/속도 보존 보정 없음. 지상에서는 점프 도약만 하고, 이후는 진입 속도(v_entry)와
+  // 낙하 고도(Δh)에 따른 에너지 보존 진자 운동 + 스프링-댐퍼 로프 장력만 작용한다.
   if (player.onGround) {
     player.onGround = false;
     player.pos.y += 0.25;
-    // 퀵 휩: 높이 솟구치지 않고 낮고 빠르게 앞으로 튕겨 나간다
-    player.vel.y = msm2QuickWhip ? (webSwingAssist ? 8.0 : 6.5) : (webSwingAssist ? 12.0 : 10.0);
-    const launchSpd = Math.max(Math.hypot(player.vel.x, player.vel.z),
-      msm2QuickWhip ? (webSwingAssist ? 27.0 : 21.0) : (webSwingAssist ? 22.0 : 17.0));
-    player.vel.x = forward.x * launchSpd;
-    player.vel.z = forward.z * launchSpd;
-  } else {
-    // 공중/다이빙 중 거미줄: 낙하 속도를 진자 접선 속도로 94~98% 보존
-    const toPlayer = new THREE.Vector3().subVectors(handPos, webAnchor).normalize();
-    const radialVel = player.vel.dot(toPlayer);
-    if (radialVel > 0) {
-      player.vel.addScaledVector(toPlayer, -radialVel);
-      if (player.vel.lengthSq() > 0.1) {
-        const conserved = Math.max(player.vel.length(), speedBefore * (msm2IsDiving ? 0.98 : 0.94));
-        player.vel.setLength(Math.min(msm2SpeedCap(), conserved));
-      }
-    }
+    player.vel.y = Math.max(player.vel.y, isRunning ? 7.0 : 5.5);
   }
   if (slingState.carryT > 0 && player.vel.length() > 0.1) { const keep = Math.min(msm2SpeedCap(), speedBefore * 0.97); if (player.vel.length() < keep) player.vel.setLength(keep); }
   msm2SwingTime = 0;
   msm2EntrySpeed = player.vel.length();
+  PHYS_TEL.entry = msm2EntrySpeed;
   msm2PeakSwingSpeed = msm2EntrySpeed;
   msm2PassedNadir = false;
   msm2IsDiving = false;
@@ -6325,8 +6332,7 @@ function triggerJump() {
   if (!isGameStarted) return;
   if (wallState.active) { wallJump(player.vel.y > 4); return; }
   if (isSwinging) {
-    releaseWeb(true);
-    player.vel.y = player.vel.y + 4.0;
+    releaseWeb(true);   // v7: 속도 그대로 포물선 전환 (추가 부스트 없음)
     msm2TrickSpin = Math.PI * 2;
     player.onGround = false;
   } else if (player.onGround) {
@@ -6398,86 +6404,45 @@ function updatePhysics(dt) {
   if (isSwinging) {
     msm2SwingTime += dt;
     msm2IsDiving = false;
-    const SUB_STEPS = 6;
-    const subDt = dt / SUB_STEPS;
+    const reelIn = (keys.w || joyInput.y > 0.35);
+    const SUB_STEPS = PHYS.subSteps, subDt = dt / SUB_STEPS;
+    let tension = 0, aC = 0;
     for (let step = 0; step < SUB_STEPS; step++) {
-      player.vel.y -= MSM2_GRAVITY * subDt;
-      { const sp_ = player.vel.length(); if (sp_ > 0.01) player.vel.multiplyScalar(Math.max(0, 1 - MSM2_DRAG_K * sp_ * subDt)); }   // 2차 공기저항
-      const handPos = new THREE.Vector3(player.pos.x, player.pos.y + 1.45, player.pos.z);
-      const toPlayer = new THREE.Vector3().subVectors(handPos, webAnchor);
-      const curDist = Math.max(0.1, toPlayer.length());
-      const ropeDir = toPlayer.clone().divideScalar(curDist);
-
+      // 1) 순수 중력 + 2) 자세별 v² 공기저항
+      player.vel.y -= PHYS.gravity * subDt;
+      physApplyDrag(subDt, false);
+      // 3) 순수 로프 길이 단축
+      if (reelIn) ropeLength = Math.max(PHYS.minRope, ropeLength - PHYS.reelSpeed * subDt);
+      // 4) 비대칭 스프링-댐퍼 장력 (늘어났을 때만 작용, 느슨하면 자유낙하)
+      const hx = player.pos.x - webAnchor.x, hy = player.pos.y + 1.45 - webAnchor.y, hz = player.pos.z - webAnchor.z;
+      const dist = Math.max(0.001, Math.hypot(hx, hy, hz));
+      const dx = -hx / dist, dy = -hy / dist, dz = -hz / dist;          // 손 → 앵커 단위벡터
+      const stretch = dist - ropeLength;
+      if (stretch > 0) {
+        const radialV = player.vel.x * dx + player.vel.y * dy + player.vel.z * dz;   // (+) 앵커로 접근
+        const spring = PHYS.springK * stretch;
+        const damper = radialV < 0 ? -PHYS.damperC * radialV : -PHYS.damperC * 0.25 * radialV;
+        tension = Math.max(0, spring + damper);
+        const acc = tension / PHYS.mass * subDt;
+        player.vel.x += dx * acc; player.vel.y += dy * acc; player.vel.z += dz * acc;
+        const tvx = player.vel.x - dx * radialV, tvy = player.vel.y - dy * radialV, tvz = player.vel.z - dz * radialV;
+        aC = (tvx * tvx + tvy * tvy + tvz * tvz) / Math.max(dist, 1.0);          // a_c = v_t² / r
+      } else { tension = 0; aC = 0; }
       const curTotalSpd = player.vel.length();
       if (curTotalSpd > msm2PeakSwingSpeed) msm2PeakSwingSpeed = curTotalSpd;
-      // 최저점 통과 = 수평 속도가 앵커 수직축에서 멀어지는 방향이 된 순간 (지상 발사 직후 오발동 방지)
+      // 최저점 통과 판정 (릴리즈 연출용)
       if (!msm2PassedNadir && msm2SwingTime > 0.12 &&
-          player.vel.x * toPlayer.x + player.vel.z * toPlayer.z > 0) msm2PassedNadir = true;
-
-      // 스윙 펌프: 최저점 부근에서 접선 가속 극대화
-      const swingTangentVel = player.vel.clone().addScaledVector(ropeDir, -player.vel.dot(ropeDir));
-      if (swingTangentVel.lengthSq() > 0.25 && handPos.y < webAnchor.y - 1.5) {
-        swingTangentVel.normalize();
-        const nadirFactor = THREE.MathUtils.clamp(-ropeDir.y, 0.2, 1.0);
-        const pumpAccel = (webSwingAssist ? MSM2_PUMP_ACCEL : 0) * nadirFactor;   // 조이스틱/키 입력과 무관
-        // 쇼트 아크: 반지름이 작을수록 진자 각가속이 커져 '짧고 빠른 휩' 궤적이 된다
-        const whipGain = msm2QuickWhip
-          ? 1.0 + (THREE.MathUtils.clamp(QW_REF_R / curDist, 1.0, 2.4) - 1.0) * (webSwingAssist ? 1.0 : 0.6)
-          : 1.0;
-        player.vel.addScaledVector(swingTangentVel, pumpAccel * whipGain * subDt);
-      }
-      // [제거됨] 스윙 중 조이스틱/키 입력 조향 — 방향은 발사 시 카메라 방향과 앵커 위치, 진자 물리로만 결정된다.
-      // 지면 스키밍 (Ground Skimming): 최저점 부근에서 줄을 자동으로 감고 수직 부양력을 넣어
-      // 아스팔트 위 1~2m를 스치듯 지나가게 한다.
-      if (webSwingAssist) {
-        const handMinY = GROUND_Y + SKIM_HAND_OFFSET + SKIM_TARGET_FEET;
-        const hx = player.pos.x - webAnchor.x, hz = player.pos.z - webAnchor.z;
-        const drop = Math.max(1.0, webAnchor.y - handMinY);
-        // 현재 수평 거리에서 손이 handMinY 아래로 내려가지 않는 최대 줄 길이
-        const maxRope = Math.max(6.0, Math.sqrt(hx * hx + hz * hz + drop * drop));
-        if (ropeLength > maxRope) {
-          const prevRope = ropeLength;
-          ropeLength = Math.max(maxRope, ropeLength - 34.0 * subDt); // 자동 줄 감기
-          player.vel.multiplyScalar(Math.min(1.02, prevRope / ropeLength)); // 각운동량 보존
-        }
-        const feet = player.pos.y - GROUND_Y;
-        if (feet < SKIM_SOFT_FEET && player.vel.y < 3.0) {
-          const k = THREE.MathUtils.clamp((SKIM_SOFT_FEET - feet) / (SKIM_SOFT_FEET - SKIM_MIN_FEET), 0, 1);
-          player.vel.y += 14.0 * k * subDt; // 수직 부양력
-        }
-      }
+          player.vel.x * hx + player.vel.z * hz > 0) msm2PassedNadir = true;
       player.pos.addScaledVector(player.vel, subDt);
-
-      // 로프 텐션 구속
-      const newHandPos = new THREE.Vector3(player.pos.x, player.pos.y + 1.45, player.pos.z);
-      const offset = new THREE.Vector3().subVectors(newHandPos, webAnchor);
-      const distAfter = offset.length();
-      if (distAfter > ropeLength && distAfter > 0.001) {
-        const normal = offset.divideScalar(distAfter);
-        const constrainedHand = webAnchor.clone().addScaledVector(normal, ropeLength);
-        player.pos.set(constrainedHand.x, constrainedHand.y - 1.45, constrainedHand.z);
-        const radialSpeed = player.vel.dot(normal);
-        if (radialSpeed > 0) player.vel.addScaledVector(normal, -radialSpeed);
-      }
+      // 지면 충돌만 처리 (바닥 자동 회피/부양 없음)
+      if (player.pos.y < GROUND_Y) { player.pos.y = GROUND_Y; if (player.vel.y < 0) player.vel.y = 0; }
     }
-    if (player.vel.length() > MSM2_SWING_MAX) player.vel.setLength(MSM2_SWING_MAX);   // 스윙 최고 속도 45 m/s
-    // 쇼트 아크 자동 릴리즈: 최저점을 지난 뒤 ~42° 상승 구간에서 튕겨 나간다
-    if (msm2QuickWhip && msm2PassedNadir && msm2SwingTime > 0.28 && player.vel.y > 0) {
-      const qh = new THREE.Vector3(player.pos.x, player.pos.y + 1.45, player.pos.z).sub(webAnchor);
-      const ql = Math.max(1.0, qh.length());
-      const qAng = THREE.MathUtils.radToDeg(Math.acos(THREE.MathUtils.clamp(-qh.y / ql, -1, 1)));
-      if (qAng >= 42 && !webHeld) { releaseWeb(true); return; }
-    }
-    // 아크 꼭대기 자동 릴리즈 슬링샷
+    PHYS_TEL.tension = tension; PHYS_TEL.centripetal = aC;
+    PHYS_TEL.gForce = tension > 0 ? (tension / PHYS.mass) / PHYS.gravity : 1.0;
+    // 손을 뗀 상태(웹 홀드 아님)로 스윙 중이면 아크 정점에서 릴리즈 (순수 해제, 속도 보정 없음)
     if (!webHeld && msm2SwingTime > 0.35 && player.pos.y + 1.45 >= webAnchor.y - 2.0 && player.vel.y > 0) {
       releaseWeb(true);
       return;
-    }
-    // 스윙 중 최소 지면 간격: 어시스트 ON = 1m(스키밍), OFF = 1m(보정 없음)
-    if (player.pos.y < GROUND_Y + SWING_MIN_CLEARANCE) {
-      player.pos.y = GROUND_Y + SWING_MIN_CLEARANCE;
-      const minVy = webSwingAssist ? 1.2 : 0.0;
-      if (player.vel.y < minVy) player.vel.y = minVy;
     }
     player.onGround = false;
   } else if (player.onGround) {
@@ -6493,18 +6458,13 @@ function updatePhysics(dt) {
     }
     player.pos.addScaledVector(player.vel, dt);
   } else {
-    // 공중 + 급강하 다이빙 (S/조이스틱 아래, 고도 16m 이상)
+    // 공중 자유낙하 / 다이빙 (S/조이스틱 아래, 고도 16m 이상)
+    // v7: 다이빙 중력 배율·전방 부스터·공중 조향 제거 → 중력 + 자세별 v² 항력만 적용
     msm2IsDiving = (player.pos.y > 16.0 && player.vel.y < 2.0 && rawForwardInput < -0.35);
-    player.vel.y -= MSM2_GRAVITY * (msm2IsDiving ? 1.3 : 1.0) * (slingState.glideT > 0 ? 0.28 : 1.0) * dt;
-    if (msm2IsDiving) {
-      player.vel.addScaledVector(forward, 12.0 * dt);
-    } else if (inputMag > 0.01) {
-      const desiredSpd = Math.max(Math.hypot(player.vel.x, player.vel.z), targetGroundSpeed);
-      player.vel.x = THREE.MathUtils.lerp(player.vel.x, inputDir.x * desiredSpd, 2.6 * dt);
-      player.vel.z = THREE.MathUtils.lerp(player.vel.z, inputDir.z * desiredSpd, 2.6 * dt);
-    }
-    { const sp_ = player.vel.length(); player.vel.multiplyScalar(Math.max(0, 1 - MSM2_DRAG_K * sp_ * dt)); }   // 2차 공기저항 (종단속도 48 m/s)
+    player.vel.y -= PHYS.gravity * (slingState.glideT > 0 ? 0.28 : 1.0) * dt;
+    physApplyDrag(dt, msm2IsDiving);
     player.pos.addScaledVector(player.vel, dt);
+    PHYS_TEL.tension = 0; PHYS_TEL.centripetal = 0; PHYS_TEL.gForce = 1.0;
     if (player.pos.y <= GROUND_Y && player.vel.y <= 0) {
       player.pos.y = GROUND_Y;
       player.vel.y = 0;
@@ -6512,7 +6472,7 @@ function updatePhysics(dt) {
       msm2IsDiving = false;
     }
   }
-  { const maxSp = Math.max(msm2SpeedCap(), slingState.glideT > 0 ? 100 : 0); if (player.vel.length() > maxSp) player.vel.setLength(maxSp); }
+  if (player.vel.length() > PHYS.safetyMaxSpeed) player.vel.setLength(PHYS.safetyMaxSpeed);   // 터널링 방지 안전 상한만 유지
   nmTerrainPass();
   resolvePolygonBuildingCollisions(prevPos);
   hardCollisionPass(prevPos);
@@ -8756,15 +8716,20 @@ function updateCameraAndHUD(dt) {
 
     // 코너링 스윙 시 카메라 롤 틸트
     if (!isBirdEyeMode) {
-      const targetRoll = isSwinging ? THREE.MathUtils.clamp(msm2BodyBank * 0.28, -0.18, 0.18) : 0;
-      msm2CamRoll = THREE.MathUtils.lerp(msm2CamRoll, targetRoll, 8 * dt);
+      // v7: 구심가속도 25 m/s² 초과 시 회전 중심(앵커) 방향으로 롤 틸트 (최대 14°)
+      let targetRoll = 0;
+      if (isSwinging && PHYS_TEL.centripetal > PHYS.rollStartAcc) {
+        camera.updateMatrixWorld();
+        const sideSign = Math.sign(camera.worldToLocal(webAnchor.clone()).x) || 0;
+        targetRoll = -sideSign * THREE.MathUtils.degToRad(THREE.MathUtils.clamp((PHYS_TEL.centripetal - PHYS.rollStartAcc) * PHYS.rollGain, 0, PHYS.rollMaxDeg));
+      }
+      msm2CamRoll = THREE.MathUtils.lerp(msm2CamRoll, targetRoll, 5 * dt);
       camera.rotateZ(msm2CamRoll);
     }
   }
   camera.near = (isBirdEyeMode || camera.position.y > 45) ? 2.0 : camera.position.y > 18 ? 0.6 : isPOVMode ? 0.12 : 0.3;
-  const targetFov = isPOVMode
-    ? THREE.MathUtils.clamp(78 + Math.max(0, speed - 22) * 0.45, 78, 104)
-    : THREE.MathUtils.clamp(64 + Math.max(0, speed - 10) * 0.62, 64, 98);
+  const targetFov = THREE.MathUtils.lerp(PHYS.fovBase, PHYS.fovMax,
+    THREE.MathUtils.clamp((speed - PHYS.fovV0) / (PHYS.fovV1 - PHYS.fovV0), 0, 1));   // v7: 18~68.5 m/s → 75°~105°
   camera.fov = THREE.MathUtils.lerp(camera.fov, targetFov, 9 * dt);
   { const shk = THREE.MathUtils.clamp((speed - 28) / 40, 0, 1) * (isPOVMode ? 0.6 : 1);   // 고속 카메라 셰이크
     if (shk > 0 && !isBirdEyeMode && !isSpectator) { const tt = performance.now() * 0.001;
@@ -8787,6 +8752,10 @@ function updateCameraAndHUD(dt) {
   const altEl = document.getElementById('hud-alt');
   const coordsEl = document.getElementById('hud-coords');
   if (speedEl) speedEl.innerText = speedKmh;
+  if (isSwinging && msm2ApexTimer <= 0) {
+    const de_ = document.getElementById('hud-road-detail');
+    if (de_) de_.innerText = `🕸️ T ${Math.round(PHYS_TEL.tension)} N | ${PHYS_TEL.gForce.toFixed(1)} G | a_c ${PHYS_TEL.centripetal.toFixed(1)} m/s² | v_in ${Math.round(PHYS_TEL.entry * 3.6)} km/h`;
+  }
   if (altEl) altEl.innerText = Math.max(0, player.pos.y).toFixed(1);
   if (coordsEl) {
     const { lat, lon } = worldToLatLon(player.pos.x, player.pos.z);
