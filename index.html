@@ -8064,9 +8064,12 @@ function animate() {
   if (window.__rceFrame && window.__rceFrame(dt)) { /* RCE 컴포저가 렌더 */ } else if (GFXB.on) gfxRenderBloom(); else renderer.render(scene, camera);
 }
 
-// ===================== BND 모션 엔진 (절차적 보행·점프·웹스윙) =====================
+// ===================== BND 모션 엔진 v2 (절차적 보행·점프·웹스윙 + 스냅샷 크로스페이드 블렌딩) =====================
 // 포즈는 '모델 기준 축'(X=왼쪽, Y=위, Z=앞)의 방향 벡터와 2본 IK 로 만들고, 뼈에는 "이 뼈가 이 방향을 가리키게" 회전시켜 적용한다.
-// (Blender 뼈의 로컬 축이 제각각이어도 동작)
+// v2 변경: ① 모드 전환 = 직전 출력 포즈를 얼리고(스냅샷) 새 포즈와 가중치 크로스페이드 ② 웹스윙 단계(발사·진자·장력·정점 접기·릴리즈·공중 회전)
+//          ③ 양손 잡기를 2본 팔 IK 로(두 손이 같은 점에 정확히 닿음) ④ 보행 보폭/케이던스/골반 높이 자동 보정(발 미끄럼↓)
+//          ⑤ 방향 전환 기울임·급정거 스키드·고공 착지(히어로 랜딩) ⑥ 프레임당 THREE 객체 할당 제거(작은 배열만 남음)
+// 손가락(DEF_PALM/FINGER/THUMB)은 이 엔진이 건드리지 않는다(BNDM 레이어 소유).
 const BM = {
   clamp: (x, a, b) => Math.max(a, Math.min(b, x)),
   lerp: (a, b, t) => a + (b - a) * t,
@@ -8079,19 +8082,51 @@ const BM = {
   norm: (a) => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; },
   mix: (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t],
   rotX: (v, a) => { const c = Math.cos(a), s = Math.sin(a); return [v[0], v[1] * c - v[2] * s, v[1] * s + v[2] * c]; },
-  rotY: (v, a) => { const c = Math.cos(a), s = Math.sin(a); return [v[0] * c + v[2] * s, v[1], -v[0] * s + v[2] * c]; }
+  rotY: (v, a) => { const c = Math.cos(a), s = Math.sin(a); return [v[0] * c + v[2] * s, v[1], -v[0] * s + v[2] * c]; },
+  wrap: (a) => { while (a > Math.PI) a -= 2 * Math.PI; while (a < -Math.PI) a += 2 * Math.PI; return a; },
+  s5: (x) => { x = Math.max(0, Math.min(1, x)); return x * x * x * (x * (x * 6 - 15) + 10); }
 };
-const BND = { cyc: 0, landT: 0, landAmt: 0, wasGround: true, prevVy: 0, blendT: 0, mode: 'ground', sm: {} };
+
+// ---- 조정 파라미터 (여기만 만지면 된다) ----
+const BNDP = {
+  // 모드 전환 크로스페이드 시간(초). 'from>to' 키, 없으면 def
+  blendT: { def: 0.22, 'ground>air': 0.22, 'air>ground': 0.12, 'air>swing': 0.20, 'swing>air': 0.32, 'ground>swing': 0.22, 'swing>ground': 0.24, 'dive>air': 0.25, 'air>dive': 0.22 },
+  // 보행
+  strideMin: 0.60, strideMax: 0.85,   // 한 발 지지 구간에서 발이 뒤로 이동하는 거리(m). 속도 낮음→높음
+  cadenceMax: 3.6,                    // 최대 보행 주기(회/초, 1회=두 걸음). 올리면 미끄럼↓ 다리가 더 빨리 움직임
+  stanceWalk: 0.62, stanceRun: 0.30,  // 지지 비율(발이 땅에 닿아 있는 비율). 달리기는 낮을수록 체공 구간이 길다
+  reachSafe: 0.97,                    // 다리 최대 신장 비율(이 이상 뻗어야 하는 보폭이면 골반을 자동으로 낮춤)
+  // 방향 전환·정지
+  turnLeanK: 0.5, turnLeanMax: 0.35,  // 선회 기울임 계수/최대(rad)
+  skidDecel: 22, skidMinSpeed: 7,     // 급정거 판정: 감속도(m/s²)·직전 최고속도(m/s)
+  heroFall: 20, heroMaxSpeed: 12,     // 히어로 랜딩 판정: 낙하속도(m/s)·착지 시 수평속도 상한
+  // 웹스윙
+  shootTime: 0.24,                    // 줄 쏘는 동작 길이(초)
+  gripDist0: 0.46, gripDist1: 0.56,   // 양손 잡는 점이 어깨 중점에서 앵커 쪽으로 떨어진 거리(모델 단위). 장력이 클수록 팔이 곧게 펴짐
+  tensionLo: 4, tensionHi: 38,        // 장력 표현이 시작/최대가 되는 속도(m/s)
+  shrugMax: 0.16,                     // 장력 시 어깨 올림(rad)
+  swingLeanK: 0.62, swingRollK: 0.7,  // 진자 기울임 계수
+  // 자기 충돌 회피(모델 단위): 몸통/머리 캡슐 반지름, 팔다리 두께 여유, 두 다리 최소 간격
+  torsoR: 0.16, headR: 0.12, limbR: 0.045, legGap: 0.12,
+  // 릴리즈
+  relDur: 0.50, flipDur: 0.95,        // 릴리즈 후 자세 전환 시간(초) / 공중 회전 포함 시간
+  flipMinSpeed: 16, flipMinVy: 2, flipMinGround: 5   // 공중 회전 조건: 속도(m/s)·상승속도·지면과의 거리(m)
+};
 const BND_SIDES = ['L', 'R'];
 const BND_SX = { L: 1, R: -1 };
+const BNDS = { pivP: 0, pivR: 1, pivH: 2, drop: 3, shiftX: 4, hipY: 5, hipP: 6, hipR: 7, spY: 8, spP: 9, spR: 10, hdP: 11, hdY: 12, shL: 13, shR: 14, fpL: 15, fyL: 16, fpR: 17, fyR: 18, N: 19 };
+function bndNewPose() {
+  const m = () => ({ L: new Float64Array(3), R: new Float64Array(3) });
+  return { sc: new Float64Array(BNDS.N), au: m(), af: m(), lt: m(), ls: m(), ok: false };
+}
+const BND = { cyc: 0, landT: 0, landAmt: 0, landRate: 3.2, hero: 0, wasGround: true, prevVy: 0, mode: 'ground', bT: 1, bDur: 0.2, sm: {},
+  swT: 0, skidS: 0, lift: 0, relT: 0, relDur: 0.5, flipW: 0, flipAng: 0, skid: 0, prevHs: 0, hsPeak: 0, decS: 0, yaw: null, turn: 0,
+  out: bndNewPose(), snap: bndNewPose() };
+const BG = { r: 0, moveW: 0, ds: 0.62, fr: 1, Rr: 0, lift: 0 };   // 이번 프레임 보행 파라미터
 const bndSan = (n) => n.replace(/[\.\[\]:\/]/g, '');
 function bndNode(rig, n) { return rig.nodes[n] || rig.nodes[bndSan(n)] || null; }
 function bndSm(key, val, k) { const o = BND.sm; if (o[key] === undefined) o[key] = val; o[key] += (val - o[key]) * k; return o[key]; }
-function bndSmV(key, v, k) {
-  const o = BND.sm; if (!o[key]) o[key] = v.slice();
-  const c = o[key]; c[0] += (v[0] - c[0]) * k; c[1] += (v[1] - c[1]) * k; c[2] += (v[2] - c[2]) * k;
-  return BM.norm(c);
-}
+function bndBlendDur(a, b) { const T = BNDP.blendT, k = a + '>' + b; return T[k] !== undefined ? T[k] : T.def; }
 
 // ---- 리그 준비: 팔뚝 체인 재연결, 기준 회전/위치 저장 ----
 function bndSetupRig(rig, model) {
@@ -8120,10 +8155,17 @@ function bndSetupRig(rig, model) {
   for (const s of BND_SIDES) {
     R.hip[s] = P('DEF_THIGH.' + s); const knee = P('DEF_SHIN_01.' + s); R.ankle[s] = P('DEF_FOOT.' + s); const toe = P('DEF_TOE.' + s);
     R['L1' + s] = BM.len(BM.sub(knee, R.hip[s])); R['L2' + s] = BM.len(BM.sub(R.ankle[s], knee));
-    R.footDir[s] = BM.norm(BM.sub(toe, R.ankle[s]));
+    R.footDir[s] = BM.norm(BM.sub(toe, R.ankle[s])); R['FT' + s] = BM.len(BM.sub(toe, R.ankle[s]));
+    const sh = P('DEF_ARM_01.' + s), el = P('DEF_FOREARM_01.' + s), hd = P('DEF_HAND.' + s);
+    R['A1' + s] = BM.len(BM.sub(el, sh)); R['A2' + s] = BM.len(BM.sub(hd, el));
   }
   R.shoulderSep = BM.len(BM.sub(P('DEF_ARM_01.L'), P('DEF_ARM_01.R')));
-  R.L1 = (R.L1L + R.L1R) / 2; R.L2 = (R.L2L + R.L2R) / 2;
+  R.L1 = (R.L1L + R.L1R) / 2; R.L2 = (R.L2L + R.L2R) / 2; R.A1 = (R.A1L + R.A1R) / 2; R.A2 = (R.A2L + R.A2R) / 2;
+  R.legV = (R.hip.L[1] - R.ankle.L[1] + R.hip.R[1] - R.ankle.R[1]) / 2;   // 서 있을 때 골반-발목 높이
+  rig.ms = model.scale.x || 1;                                           // 모델 단위 → 월드(m) 배율
+  // 서 있을 때 발목·발끝의 그룹 기준 높이(지면 침투 방지 기준)
+  rig.restY = {}; const gy = rig.group ? rig.group.position.y : 0, tmp = new THREE.Vector3();
+  for (const s of BND_SIDES) for (const n of ['FOOT', 'TOE']) { const b = bndNode(rig, 'DEF_' + n + '.' + s); b.getWorldPosition(tmp); rig.restY[n + s] = tmp.y - gy; }
   rig.rest = R; rig.ready2 = true;
 }
 
@@ -8134,6 +8176,16 @@ function bndFoot(u, ds, Rr, lift) {
   const w2 = w * w, w3 = w2 * w;
   const z = (2 * w3 - 3 * w2 + 1) * (-Rr / 2) + (w3 - 2 * w2 + w) * m + (-2 * w3 + 3 * w2) * (Rr / 2) + (w3 - w2) * m;
   return [z, lift * Math.sin(Math.PI * Math.pow(w, 0.85))];
+}
+// 발이 지면 위에서 몸과 같은 속도로 뒤로 가려면 Rr = v·ds/fr. 케이던스가 한계(cadenceMax)면 보폭을 줄여 이동 거리가 모자라는 만큼만 미끄러진다.
+function bndGait(hs, ms) {
+  const r = BM.sst(3.5, 12, hs), moveW = BM.sst(0.3, 1.4, hs);
+  const ds = BM.lerp(BNDP.stanceWalk, BNDP.stanceRun, r), Rmax = BM.lerp(BNDP.strideMin, BNDP.strideMax, r);
+  const fr = BM.clamp(hs * ds / Rmax, 0.8, BNDP.cadenceMax);
+  BG.r = r; BG.moveW = moveW; BG.ds = ds; BG.fr = fr;
+  BG.Rr = BM.clamp(hs * ds / fr, 0.12, Rmax) / ms * moveW;     // 모델 단위
+  BG.lift = BM.lerp(0.09, 0.24, r) * moveW;
+  return BG;
 }
 // ---- 2본 IK: 엉덩이→발목 → [허벅지 방향, 정강이 방향] (무릎은 pole 쪽으로 꺾임) ----
 function bndIK(hip, ankle, L1, L2, pole) {
@@ -8147,50 +8199,55 @@ function bndIK(hip, ankle, L1, L2, pole) {
 }
 
 // ---- 모션 계산 (순수 수학) ----
-// S: {dt,t,mode,hSpeed,vy,wallPhase,wallMoving,sling:{g}, ropeG:[x,y,z]}
+// S: {dt,t,mode,hSpeed,speed,vy,cyc,skid,hero,preLand,turn,swT,relT,flipW,ms,wallPhase,wallMoving,sling:{g},ropeG,ropeWR,ropeWL,twoHand}
 function bndCompute(S, R) {
   const t = S.t, hs = S.hSpeed;
-  const P = { drop: 0, shiftX: 0, hip: { yaw: 0, pitch: 0, roll: 0 }, spine: { yaw: 0, pitch: 0, roll: 0 }, head: { pitch: 0, yaw: 0 },
-    pivot: { pitch: 0, roll: 0 }, arm: {}, leg: {}, foot: { L: { p: 0, y: 0 }, R: { p: 0, y: 0 } } };
+  const P = { drop: 0, shiftX: 0, flip: 0, hip: { yaw: 0, pitch: 0, roll: 0 }, spine: { yaw: 0, pitch: 0, roll: 0 }, head: { pitch: 0, yaw: 0 },
+    pivot: { pitch: 0, roll: 0, h: 0.95 }, shrug: { L: 0, R: 0 }, arm: {}, leg: {}, foot: { L: { p: 0, y: 0 }, R: { p: 0, y: 0 } } };
   const arm = (u, f, world) => ({ u: BM.norm(u), f: BM.norm(f), world: !!world });
   const legA = (s, th, k) => { const sx = BND_SX[s]; return { ik: false, t: BM.norm([sx * 0.08, -Math.cos(th), Math.sin(th)]), s: BM.norm([sx * 0.05, -Math.cos(th - k), Math.sin(th - k)]) }; };
   const mode = S.mode;
 
   if (mode === 'ground') {
-    const r = BM.sst(3.5, 12, hs), moveW = BM.sst(0.3, 1.4, hs);
-    const fr = BM.clamp(0.55 + 0.17 * hs, 0.8, 3.4);
-    if (moveW > 0.01) BND.cyc = (BND.cyc + fr * S.dt) % 1;
-    const ds = BM.lerp(0.62, 0.40, r);
-    const Rr = BM.clamp(hs * ds / fr, 0.12, BM.lerp(0.56, 0.86, r)) * moveW;
-    const lift = BM.lerp(0.09, 0.24, r) * moveW;
-    const cyc = BND.cyc, crouch = BND.landT * BND.landAmt;
+    const r = BG.r, moveW0 = BG.moveW, ds = BG.ds, skid = S.skid, hero = S.hero;
+    const moveW = moveW0 * (1 - skid);
+    const Rr = BG.Rr * (1 - skid), lift = BG.lift * (1 - skid);
+    const cyc = S.cyc, crouch = BND_landCrouch(S);
     const fz = {}, fy = {}, fp = {};
     for (const s of BND_SIDES) {
       const u = (cyc + (s === 'R' ? 0.5 : 0)) % 1, zy = bndFoot(u, ds, Rr, lift);
       let pitch, yAdd = 0;
-      if (u < ds) { const w = u / ds; pitch = w < 0.15 ? -0.22 * (1 - w / 0.15) : (w > 0.72 ? 0.65 * BM.sst(0.72, 1, w) : 0); yAdd = 0.07 * BM.sst(0.72, 1, w) * moveW; }
+      if (u < ds) { const w = u / ds; pitch = w < 0.15 ? -0.22 * (1 - w / 0.15) : (w > 0.72 ? 0.65 * BM.sst(0.72, 1, w) : 0); yAdd = R['FT' + s] * Math.sin(Math.max(0, pitch)) * moveW; }
       else { const w = (u - ds) / (1 - ds); pitch = BM.lerp(0.65, -0.2, BM.sst(0, 0.6, w)); }
       fz[s] = zy[0]; fy[s] = zy[1] + yAdd; fp[s] = pitch * moveW;
     }
-    const sw = BM.lerp(1, BM.lerp(0.95, 0.75, r), moveW);
+    const sw = BM.lerp(0.9, BM.lerp(0.95, 0.75, r), moveW) + 1.0 * skid;
+    // 지지 다리가 닿을 수 있게 골반 높이 자동 보정: 보폭 끝에서 발목까지 거리가 다리 길이 이내가 되도록
+    const Ltot = R.L1 + R.L2, half = Rr / 2, lat = Math.abs(R.ankle.L[0] - R.hip.L[0]) * sw + 0.02;
+    const dropNeed = Math.max(0, R.legV - Math.sqrt(Math.max(0.01, Math.pow(BNDP.reachSafe * Ltot, 2) - half * half - lat * lat)));
     for (const s of BND_SIDES) {
       const a = R.ankle[s], sx = BND_SX[s];
-      P.leg[s] = { ik: true, ankle: [a[0] * sw + sx * crouch * 0.05, a[1] + fy[s], a[2] + fz[s] - crouch * 0.04], pole: [sx * 0.12, 0, 1] };
-      P.foot[s] = { p: fp[s] * (1 - crouch) + crouch * 0.1, y: -sx * 0.07 };
+      let az = a[2] + fz[s] - crouch * 0.04 + skid * (s === 'L' ? 0.30 : 0.10), ay = a[1] + fy[s];
+      if (hero > 0.01) { az += hero * (s === 'L' ? 0.22 : -0.42); ay += hero * (s === 'R' ? 0.30 : 0); }
+      P.leg[s] = { ik: true, ankle: [a[0] * sw + sx * crouch * 0.05, ay, az], pole: [sx * 0.12, 0, 1] };
+      P.foot[s] = { p: fp[s] * (1 - crouch) + crouch * 0.1 - skid * 0.3 + (s === 'R' ? hero * 0.9 : 0), y: -sx * 0.07 };
     }
     const bobA = BM.lerp(0.012, 0.035, r) * moveW;
     const bob = bobA * Math.cos(4 * Math.PI * (cyc - ds / 2)) * (1 - 2 * r);
-    P.drop = BM.lerp(0.012, 0.035, moveW) + 0.05 * r * moveW + crouch * 0.22 - bob;
+    P.drop = Math.max(BM.lerp(0.012, 0.035, moveW) + 0.05 * r * moveW - bob, dropNeed * moveW0) + crouch * 0.22 + skid * 0.08 + hero * 0.38;
     P.shiftX = 0.016 * moveW * (1 - 0.5 * r) * Math.cos(2 * Math.PI * (cyc - ds / 2));
     const zd = BM.clamp((fz.L - fz.R) / Math.max(Rr, 0.05), -1, 1) * moveW;
     const ya = BM.lerp(0.10, 0.20, r) * zd, ta = BM.lerp(0.08, 0.22, r) * zd;
     P.hip.yaw = -ya; P.spine.yaw = ya + ta;
     P.hip.roll = -0.05 * BM.clamp((fy.L - fy.R) / Math.max(lift, 0.05), -1, 1) * moveW + (1 - moveW) * 0.015 * Math.sin(t * 0.45);
     P.spine.roll = -P.hip.roll * 0.7;
-    P.hip.pitch = 0.03 * r * moveW + crouch * 0.1;
-    P.spine.pitch = BM.lerp(0.02, 0.30, r) * moveW + crouch * 0.45 + (1 - moveW) * 0.012 * Math.sin(t * 1.7);
+    P.hip.pitch = 0.03 * r * moveW + crouch * 0.1 + hero * 0.15;
+    P.spine.pitch = BM.lerp(0.02, 0.30, r) * moveW + crouch * 0.45 + (1 - moveW) * 0.012 * Math.sin(t * 1.7) - skid * 0.30 + hero * 0.5;
     P.head.pitch = -P.spine.pitch * 0.7;
     P.head.yaw = (1 - moveW) * 0.05 * Math.sin(t * 0.4);
+    // 달리기 전경(발끝 기준) + 선회 기울임(안쪽으로)
+    const lean = BM.clamp(BNDP.turnLeanK * Math.atan(hs * S.turn / 9.8), -BNDP.turnLeanMax, BNDP.turnLeanMax) * moveW0;
+    P.spine.roll += -lean * 0.8; P.hip.roll += -lean * 0.2; P.spine.pitch += 0.08 * r * moveW;   // 피벗 대신 척추/골반으로 기울여 접지 발이 안 흔들리게
     for (const s of BND_SIDES) {
       const opp = s === 'L' ? 'R' : 'L', sx = BND_SX[s];
       const zA = BM.clamp(fz[opp] / Math.max(Rr / 2, 0.06), -1, 1) * moveW;
@@ -8199,38 +8256,69 @@ function bndCompute(S, R) {
       const ab = BM.lerp(0.16, 0.2, r);
       const e = BM.lerp(0.22, 0.35, moveW) + BM.lerp(0, 0.95, r) * moveW + 0.25 * Math.max(0, zA) * (0.5 + r);
       let u = [sx * ab, -Math.cos(a), Math.sin(a)], f = [sx * ab * 0.6, -Math.cos(a + e), Math.sin(a + e)];
+      if (skid > 0.01) { u = BM.mix(u, [sx * 0.75, -0.55, 0.35], skid); f = BM.mix(f, [sx * 0.6, -0.4, 0.7], skid); }   // 균형 잡는 팔
       if (crouch > 0.01) { u = BM.mix(u, [sx * 0.55, -0.35, 0.65], crouch); f = BM.mix(f, [sx * 0.4, -0.1, 0.9], crouch); }
+      if (hero > 0.01) {
+        if (s === 'R') { u = BM.mix(u, [-0.25, -0.95, 0.2], hero); f = BM.mix(f, [-0.2, -0.98, 0.1], hero); }      // 한 주먹 땅 짚기
+        else { u = BM.mix(u, [0.6, -0.3, -0.75], hero); f = BM.mix(f, [0.5, -0.1, -0.85], hero); }                  // 반대 팔은 뒤로
+      }
       P.arm[s] = arm(u, f);
     }
   } else if (mode === 'air') {
-    const rise = BM.sst(-3, 6, S.vy), fl = 0.05 * Math.sin(t * 5);
+    const rise = BM.sst(-3, 6, S.vy), fl = 0.05 * Math.sin(t * 5), pl = S.preLand;
     const au = { L: [BM.mix([0.9, 0.3, 0.2], [0.3, 0.85, 0.3], rise), BM.mix([0.95, 0.35, 0.15], [0.25, 0.9, 0.25], rise)],
                  R: [BM.mix([-0.9, 0.3, 0.2], [-0.45, 0.35, 0.8], rise), BM.mix([-0.95, 0.35, 0.15], [-0.35, 0.45, 0.85], rise)] };
+    let thL = BM.lerp(0.45, 1.0, rise) + fl, kL = BM.lerp(0.8, 1.45, rise), thR = BM.lerp(0.15, -0.05, rise) - fl, kR = BM.lerp(0.55, 0.9, rise);
+    // 착지 직전: 다리를 아래로 뻗고 팔을 벌려 균형
+    thL = BM.lerp(thL, 0.22, pl); kL = BM.lerp(kL, 0.3, pl); thR = BM.lerp(thR, 0.02, pl); kR = BM.lerp(kR, 0.25, pl);
+    for (const s of BND_SIDES) { const sx = BND_SX[s]; au[s][0] = BM.mix(au[s][0], [sx * 0.8, -0.15, 0.2], pl); au[s][1] = BM.mix(au[s][1], [sx * 0.8, -0.1, 0.4], pl); }
+    P.spine.pitch = 0.1 + 0.1 * pl; P.head.pitch = -0.08;
+    // 릴리즈 직후: 팔 쭉 뻗기 → (고속이면) 앞구르기 접기 → 펼치기
+    if (S.relT > 0) {
+      const rp = 1 - S.relT, ext = 1 - BM.sst(0, 0.28, rp), fw = S.flipW;
+      const tk = fw * BM.sst(0.12, 0.4, rp) * (1 - BM.sst(0.62, 0.92, rp));
+      for (const s of BND_SIDES) {
+        const sx = BND_SX[s];
+        au[s][0] = BM.mix(au[s][0], [sx * 0.15, 0.85, 0.5], ext); au[s][1] = BM.mix(au[s][1], [sx * 0.1, 0.9, 0.4], ext);
+        au[s][0] = BM.mix(au[s][0], [sx * 0.3, -0.2, 0.75], tk); au[s][1] = BM.mix(au[s][1], [sx * 0.15, 0.45, 0.85], tk);
+      }
+      thL = BM.lerp(thL, 1.5, tk); kL = BM.lerp(kL, 2.0, tk); thR = BM.lerp(thR, 1.4, tk); kR = BM.lerp(kR, 1.9, tk);
+      P.pivot.pitch += 0.4 * ext * (1 - fw);
+      P.spine.pitch += 0.5 * tk; P.head.pitch -= 0.3 * tk;
+      if (fw > 0) P.flip = 2 * Math.PI * BM.s5(BM.sst(0.08, 0.92, rp));
+    }
     for (const s of BND_SIDES) P.arm[s] = arm(au[s][0], au[s][1]);
-    P.leg.L = legA('L', BM.lerp(0.45, 1.0, rise) + fl, BM.lerp(0.8, 1.45, rise));
-    P.leg.R = legA('R', BM.lerp(0.15, -0.05, rise) - fl, BM.lerp(0.55, 0.9, rise));
+    P.leg.L = legA('L', thL, kL); P.leg.R = legA('R', thR, kR);
     for (const s of BND_SIDES) P.foot[s] = { p: BM.lerp(0.35, 0.5, rise), y: -BND_SX[s] * 0.07 };
-    P.spine.pitch = 0.1; P.head.pitch = -0.08;
   } else if (mode === 'swing') {
-    const rg = S.ropeG;
-    const lean = BM.clamp(0.62 * Math.atan2(rg[2], rg[1]), -0.45, 0.95);
-    const roll = BM.clamp(-0.7 * Math.atan2(rg[0], rg[1]), -0.55, 0.55);
-    const tuck = BM.clamp((0.15 - rg[2]) / 0.65, 0, 1), fl = 0.07 * Math.sin(t * 3.1);
-    P.pivot.pitch = lean; P.pivot.roll = roll;
-    P.arm.R = arm(S.ropeWR, S.ropeWR, true);
+    const rg = S.ropeG, ten = BM.sst(BNDP.tensionLo, BNDP.tensionHi, S.speed), swT = S.swT, shoot = 1 - BM.sst(0, BNDP.shootTime, swT);
+    const lean = BM.clamp(BNDP.swingLeanK * Math.atan2(rg[2], rg[1]), -0.45, 0.95);
+    const roll = BM.clamp(-BNDP.swingRollK * Math.atan2(rg[0], rg[1]), -0.55, 0.55);
+    const relReady = BM.sst(-0.25, -0.7, rg[2]) * BM.sst(0, 4, S.vy);          // 정점 근처(줄이 뒤로 눕고 올라가는 중) = 릴리즈 직전
+    const tuckA = BM.clamp((0.15 - rg[2]) / 0.65, 0, 1);
+    const tuck = BM.clamp(Math.max(tuckA, 0.5 * BM.sst(4, 12, S.vy)) + 0.3 * relReady, 0, 1), fl = 0.07 * Math.sin(t * 3.1) * (0.4 + 0.6 * ten);
+    const stretch = BM.sst(0.5, 0.05, rg[2]) * BM.sst(-0.1, 0.2, rg[2]);       // 진자 최저점 근처: 몸을 길게 뻗음(0이면 안 뻗음)
+    P.pivot.pitch = lean - 0.10 * shoot; P.pivot.roll = roll;   // 발사 반동으로 살짝 뒤로 젖힘
+    P.shrug.L = BNDP.shrugMax * ten * (1 - shoot); P.shrug.R = BNDP.shrugMax * ten;
     if (S.twoHand) {
-      // 양손 웹스윙: 두 팔 모두 앵커를 향해 쭉 뻗고, 몸은 줄 아래에 대칭으로 매달린다
-      P.arm.R = { grip: true, u: [0, 1, 0], f: [0, 1, 0], world: true }; P.arm.L = { grip: true, u: [0, 1, 0], f: [0, 1, 0], world: true };
+      const gR = BM.sst(0.0, 0.14, swT), gL = BM.sst(0.06, BNDP.shootTime + 0.04, swT);
+      P.arm.R = { grip: true, gw: gR, u: S.ropeWR, f: S.ropeWR, world: true };
+      P.arm.L = { grip: true, gw: gL, u: BM.norm([0.5, -0.25, 0.25]), f: BM.norm([0.45, 0.1, 0.7]), world: false };
       P.leg.L = legA('L', BM.lerp(-0.25, 1.1, tuck) + fl, BM.lerp(0.5, 1.7, tuck));
       P.leg.R = legA('R', BM.lerp(-0.10, 0.95, tuck) - fl, BM.lerp(0.8, 1.6, tuck));
       for (const s of BND_SIDES) P.foot[s] = { p: BM.lerp(0.7, 0.3, tuck), y: -BND_SX[s] * 0.07 };
-      P.spine.yaw = 0; P.spine.pitch = -0.05; P.spine.roll = -roll * 0.2; P.head.pitch = -lean * 0.6 + 0.12;
+      P.spine.yaw = 0; P.spine.pitch = -0.05 - 0.10 * ten * (1 - tuck) + 0.18 * relReady + 0.08 * stretch; P.spine.roll = -roll * 0.2;
+      P.head.pitch = -lean * 0.6 + 0.12 + 0.12 * ten - 0.15 * relReady;
+      // 양손으로 매달리면 골반이 줄 아래로 살짝 처짐(장력)
+      P.drop = 0.02 * ten;
     } else {
+      P.arm.R = { grip: false, u: S.ropeWR, f: S.ropeWR, world: true };
       P.arm.L = arm(BM.mix([0.45, -0.15, -0.88], [0.55, -0.75, 0.4], tuck), BM.mix([0.35, -0.2, -0.92], [0.25, -0.25, 0.95], tuck));
       P.leg.L = legA('L', BM.lerp(-0.30, 1.15, tuck) + fl, BM.lerp(0.35, 1.7, tuck));
       P.leg.R = legA('R', BM.lerp(0.05, 0.80, tuck) - fl, BM.lerp(0.9, 1.5, tuck));
       for (const s of BND_SIDES) P.foot[s] = { p: BM.lerp(0.65, 0.3, tuck), y: -BND_SX[s] * 0.07 };
-      P.spine.yaw = 0.18; P.spine.pitch = -0.08; P.spine.roll = -roll * 0.25; P.head.pitch = -lean * 0.6 + 0.1;
+      P.spine.yaw = 0.18; P.spine.pitch = -0.08 + 0.15 * relReady; P.spine.roll = -roll * 0.25; P.head.pitch = -lean * 0.6 + 0.1;
+      P.shrug.L = 0;
     }
   } else if (mode === 'dive') {
     P.pivot.pitch = 1.25;
@@ -8264,12 +8352,15 @@ function bndCompute(S, R) {
   }
   return P;
 }
+function BND_landCrouch(S) { return S.landT * S.landAmt; }
 
 // ---- 적용 (three.js) ----
 const _AX = new THREE.Vector3(1, 0, 0), _AY = new THREE.Vector3(0, 1, 0), _AZ = new THREE.Vector3(0, 0, 1);
 const _q1 = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _q3 = new THREE.Quaternion(), _qd = new THREE.Quaternion(), _qa = new THREE.Quaternion();
-const _p0 = new THREE.Vector3(), _p1 = new THREE.Vector3(), _cur = new THREE.Vector3(), _tw = new THREE.Vector3();
+const _p0 = new THREE.Vector3(), _p1 = new THREE.Vector3(), _cur = new THREE.Vector3(), _tw = new THREE.Vector3(), _tv = new THREE.Vector3();
 const _dq = new THREE.Quaternion(), _wq = new THREE.Quaternion(), _pq = new THREE.Quaternion();
+const _Qm = new THREE.Quaternion(), _Qmi = new THREE.Quaternion(), _gq = new THREE.Quaternion(), _invM = new THREE.Matrix4();
+const _shL = new Float64Array(3), _shR = new Float64Array(3), _G = new Float64Array(3), _tU = new Float64Array(3), _tF = new Float64Array(3), _sc = new Float64Array(BNDS.N);
 function bndDelta(rig, name, yaw, pitch, roll) {
   const b = bndNode(rig, name); if (!b || !b.userData.bndW || (!yaw && !pitch && !roll)) return;
   _q1.setFromAxisAngle(_AY, yaw); _q2.setFromAxisAngle(_AX, pitch); _q3.setFromAxisAngle(_AZ, roll);
@@ -8277,7 +8368,7 @@ function bndDelta(rig, name, yaw, pitch, roll) {
   _qa.copy(b.userData.bndW).invert().multiply(_qd).multiply(b.userData.bndW);
   b.quaternion.multiply(_qa);
 }
-// bone 이 child 방향을 향하되 목표 월드 방향 tw 를 가리키도록 회전
+// bone 이 child 방향을 향하되 목표 월드 방향 tw(정규화됨)를 가리키도록 회전
 function bndAim(bone, child, tw) {
   bone.getWorldPosition(_p0); child.getWorldPosition(_p1);
   _cur.copy(_p1).sub(_p0); if (_cur.lengthSq() < 1e-12) return; _cur.normalize();
@@ -8286,98 +8377,222 @@ function bndAim(bone, child, tw) {
   if (bone.parent) { bone.parent.getWorldQuaternion(_pq); _pq.invert(); _wq.premultiply(_pq); }
   bone.quaternion.copy(_wq); bone.updateMatrixWorld(true);
 }
-const _tv = new THREE.Vector3();
-function bndWorldDir(d, world, Qm) { _tw.set(d[0], d[1], d[2]); if (!world) _tw.applyQuaternion(Qm); return _tw.normalize().clone(); }
+function bndModelDirToWorld(a) { _tw.set(a[0], a[1], a[2]).applyQuaternion(_Qm); return _tw.normalize(); }
+function bndWorldToModel(x, y, z, out) { _tw.set(x, y, z).applyQuaternion(_Qmi).normalize(); out[0] = _tw.x; out[1] = _tw.y; out[2] = _tw.z; }
+function bndBlend3(out, a, b, w) {   // 단위 방향 벡터의 구면 보간(각속도 일정) — 큰 각도 전환에서 손/발이 튀지 않게
+  let d = a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; d = d > 1 ? 1 : (d < -1 ? -1 : d);
+  const th = Math.acos(d); let x, y, z;
+  if (th < 1e-3) { x = a[0] + (b[0] - a[0]) * w; y = a[1] + (b[1] - a[1]) * w; z = a[2] + (b[2] - a[2]) * w; }
+  else { const s = Math.sin(th), ka = Math.sin((1 - w) * th) / s, kb = Math.sin(w * th) / s; x = a[0] * ka + b[0] * kb; y = a[1] * ka + b[1] * kb; z = a[2] * ka + b[2] * kb; }
+  const l = Math.hypot(x, y, z) || 1; out[0] = x / l; out[1] = y / l; out[2] = z / l;
+}
+function bndCopyPose(d, s) { d.sc.set(s.sc); for (const k of BND_SIDES) { d.au[k].set(s.au[k]); d.af[k].set(s.af[k]); d.lt[k].set(s.lt[k]); d.ls[k].set(s.ls[k]); } d.ok = s.ok; }
+function bndScalars(P, o) {
+  o[BNDS.pivP] = P.pivot.pitch; o[BNDS.pivR] = P.pivot.roll; o[BNDS.pivH] = P.pivot.h; o[BNDS.drop] = P.drop; o[BNDS.shiftX] = P.shiftX;
+  o[BNDS.hipY] = P.hip.yaw; o[BNDS.hipP] = P.hip.pitch; o[BNDS.hipR] = P.hip.roll; o[BNDS.spY] = P.spine.yaw; o[BNDS.spP] = P.spine.pitch; o[BNDS.spR] = P.spine.roll;
+  o[BNDS.hdP] = P.head.pitch; o[BNDS.hdY] = P.head.yaw; o[BNDS.shL] = P.shrug.L; o[BNDS.shR] = P.shrug.R;
+  o[BNDS.fpL] = P.foot.L.p; o[BNDS.fyL] = P.foot.L.y; o[BNDS.fpR] = P.foot.R.p; o[BNDS.fyR] = P.foot.R.y;
+}
 
-// ctx: {dt,t,hSpeed,vy,onGround,swinging,diving,wall:{active,phase,moving},sling:{active,g,aimW:[..]},anchorW:[..]}
+
+// ---- 자기 충돌 회피: 팔다리 관절 점이 몸통(엉덩이→목 캡슐)·머리(구)·반대 다리 안으로 들어가면 바깥으로 밀고, 뼈 길이는 그대로 두고 방향만 고친다 ----
+const _hipP = new Float64Array(3), _spP = new Float64Array(3), _neckP = new Float64Array(3), _headC = new Float64Array(3), _pt = new Float64Array(3), _hrL = new Float64Array(3), _hrR = new Float64Array(3);
+function bndCapPush(p, a, b, r) {
+  const abx = b[0] - a[0], aby = b[1] - a[1], abz = b[2] - a[2], l2 = abx * abx + aby * aby + abz * abz || 1e-9;
+  let t = ((p[0] - a[0]) * abx + (p[1] - a[1]) * aby + (p[2] - a[2]) * abz) / l2; t = t < 0 ? 0 : (t > 1 ? 1 : t);
+  const cx = a[0] + abx * t, cy = a[1] + aby * t, cz = a[2] + abz * t;
+  let dx = p[0] - cx, dy = p[1] - cy, dz = p[2] - cz, d = Math.hypot(dx, dy, dz);
+  if (d >= r) return false;
+  if (d < 1e-5) { dx = 0; dy = 0; dz = 1; d = 1; }
+  const k = r / d; p[0] = cx + dx * k; p[1] = cy + dy * k; p[2] = cz + dz * k; return true;
+}
+function bndPushBody(p) { const a = bndCapPush(p, _hipP, _neckP, BNDP.torsoR + BNDP.limbR), b = bndCapPush(p, _headC, _headC, BNDP.headR + BNDP.limbR); return a || b; }
+function bndSetDir(d, p, o) { const x = p[0] - o[0], y = p[1] - o[1], z = p[2] - o[2], l = Math.hypot(x, y, z) || 1; d[0] = x / l; d[1] = y / l; d[2] = z / l; }
+const _el = new Float64Array(3);
+function bndAvoidArm(sh, u, f, A1, A2) {
+  const p = _pt;
+  p[0] = sh[0] + u[0] * A1 * 0.5; p[1] = sh[1] + u[1] * A1 * 0.5; p[2] = sh[2] + u[2] * A1 * 0.5; if (bndPushBody(p)) bndSetDir(u, p, sh);
+  p[0] = sh[0] + u[0] * A1; p[1] = sh[1] + u[1] * A1; p[2] = sh[2] + u[2] * A1; if (bndPushBody(p)) bndSetDir(u, p, sh);
+  _el[0] = sh[0] + u[0] * A1; _el[1] = sh[1] + u[1] * A1; _el[2] = sh[2] + u[2] * A1;
+  p[0] = _el[0] + f[0] * A2 * 0.5; p[1] = _el[1] + f[1] * A2 * 0.5; p[2] = _el[2] + f[2] * A2 * 0.5; if (bndPushBody(p)) bndSetDir(f, p, _el);
+  p[0] = _el[0] + f[0] * A2; p[1] = _el[1] + f[1] * A2; p[2] = _el[2] + f[2] * A2; if (bndPushBody(p)) bndSetDir(f, p, _el);
+}
+const _kL = new Float64Array(3), _kR = new Float64Array(3);
+function bndSepPair(a, b, gap) {   // 두 점이 gap 보다 가까우면 서로 반씩 밀어냄. 움직였으면 true
+  let dx = a[0] - b[0], dy = a[1] - b[1], dz = a[2] - b[2], d = Math.hypot(dx, dy, dz);
+  if (d >= gap) return false;
+  if (d < 1e-5) { dx = 1; dy = 0; dz = 0; d = 1; }
+  const k = (gap - d) / 2 / d; a[0] += dx * k; a[1] += dy * k; a[2] += dz * k; b[0] -= dx * k; b[1] -= dy * k; b[2] -= dz * k; return true;
+}
+function bndAvoidLegs(rig, O) {   // 공중·스윙 등 발이 땅에 고정되지 않은 모드에서만 호출
+  const h = { L: _hrL, R: _hrR }, K = { L: _kL, R: _kR }, P = _pt;
+  for (const s of BND_SIDES) {
+    const hh = h[s], lt = O.lt[s], ls = O.ls[s], L1 = rig.rest['L1' + s], L2 = rig.rest['L2' + s];
+    P[0] = hh[0] + lt[0] * L1 * 0.6; P[1] = hh[1] + lt[1] * L1 * 0.6; P[2] = hh[2] + lt[2] * L1 * 0.6; if (bndCapPush(P, _hipP, _spP, BNDP.torsoR + BNDP.limbR)) bndSetDir(lt, P, hh);
+    P[0] = hh[0] + lt[0] * L1; P[1] = hh[1] + lt[1] * L1; P[2] = hh[2] + lt[2] * L1; if (bndCapPush(P, _hipP, _spP, BNDP.torsoR + BNDP.limbR)) bndSetDir(lt, P, hh);
+  }
+  for (const s of BND_SIDES) { const hh = h[s], lt = O.lt[s], L1 = rig.rest['L1' + s]; K[s][0] = hh[0] + lt[0] * L1; K[s][1] = hh[1] + lt[1] * L1; K[s][2] = hh[2] + lt[2] * L1; }
+  if (bndSepPair(K.L, K.R, BNDP.legGap)) for (const s of BND_SIDES) bndSetDir(O.lt[s], K[s], h[s]);
+  for (const s of BND_SIDES) { const hh = h[s], lt = O.lt[s], L1 = rig.rest['L1' + s]; K[s][0] = hh[0] + lt[0] * L1; K[s][1] = hh[1] + lt[1] * L1; K[s][2] = hh[2] + lt[2] * L1; }
+  const fa = _fa, fb2 = _fb;
+  for (let i = 0; i < 3; i++) { fa[i] = K.L[i] + O.ls.L[i] * rig.rest.L2L; fb2[i] = K.R[i] + O.ls.R[i] * rig.rest.L2R; }
+  if (bndSepPair(fa, fb2, BNDP.legGap)) { bndSetDir(O.ls.L, fa, K.L); bndSetDir(O.ls.R, fb2, K.R); }
+}
+const _fa = new Float64Array(3), _fb = new Float64Array(3);
+function bndBodyCaps(rig, invM) {
+  const g = (n, out) => { const b = bndNode(rig, n); if (!b) return false; b.getWorldPosition(_p0).applyMatrix4(invM); out[0] = _p0.x; out[1] = _p0.y; out[2] = _p0.z; return true; };
+  g('DEF_HIPS', _hipP); g('DEF_SPINE_02', _spP); g('DEF_NECK_01', _neckP);
+  const hd = bndNode(rig, 'DEF_HEAD'); if (hd) { hd.getWorldPosition(_p0).applyMatrix4(invM); _headC[0] = _p0.x + (_p0.x - _neckP[0]); _headC[1] = _p0.y + (_p0.y - _neckP[1]); _headC[2] = _p0.z + (_p0.z - _neckP[2]); }
+  g('DEF_THIGH.L', _hrL); g('DEF_THIGH.R', _hrR);
+}
+
+// ctx: {dt,t,hSpeed,speed,vy,yaw,groundDist,onGround,swinging,twoHand,diving,wall:{active,phase,moving},sling:{active,g,aimW:[..]},anchorW:[..]}
 function bndStep(rig, ctx) {
   if (!rig.ready2) return null;
-  const dt = ctx.dt;
-  // 모드 결정 및 착지 감지
+  const dt = ctx.dt, hs = ctx.hSpeed, ms = rig.ms || 1, group = rig.group, pivot = rig.pivot, model = rig.model;
+  const gd = ctx.groundDist === undefined ? 99 : ctx.groundDist, spd = ctx.speed === undefined ? hs : ctx.speed;
+  // ── 모드 결정 ──
   let mode = 'ground';
   if (ctx.sling.active) mode = 'sling'; else if (ctx.wall.active) mode = 'wall'; else if (ctx.swinging) mode = 'swing'; else if (ctx.diving) mode = 'dive'; else if (!ctx.onGround) mode = 'air';
-  if (mode !== BND.mode) { BND.blendT = 0.2; BND.mode = mode; }
+  if (mode !== BND.mode) {
+    const prev = BND.mode;
+    if (BND.out.ok) bndCopyPose(BND.snap, BND.out);                 // 직전 출력 포즈를 얼려서 새 포즈와 크로스페이드
+    BND.bT = 0; BND.bDur = bndBlendDur(prev, mode);
+    if (mode === 'swing') BND.swT = 0;
+    if (prev === 'swing' && mode === 'air') {                      // 릴리즈
+      BND.flipW = (spd > BNDP.flipMinSpeed && ctx.vy > BNDP.flipMinVy && gd > BNDP.flipMinGround) ? 1 : 0;
+      BND.relT = 1; BND.relDur = BND.flipW ? BNDP.flipDur : BNDP.relDur;
+    } else BND.relT = 0;
+    BND.mode = mode;
+  }
+  BND.bT += dt; if (mode === 'swing') BND.swT += dt;
+  BND.relT = Math.max(0, BND.relT - dt / BND.relDur);
+  // ── 착지/급정거/선회 상태 ──
   if (!ctx.onGround) BND.prevVy = ctx.vy;
-  if (!BND.wasGround && ctx.onGround && mode === 'ground') { BND.landT = 1; BND.landAmt = BM.clamp(-BND.prevVy / 12, 0.25, 1); }
+  if (!BND.wasGround && ctx.onGround && mode === 'ground') {
+    BND.landT = 1; BND.landAmt = BM.clamp(-BND.prevVy / 12, 0.25, 1);
+    const big = -BND.prevVy > BNDP.heroFall && hs < BNDP.heroMaxSpeed;
+    BND.hero = big ? 1 : 0; BND.landRate = big ? 1.5 : 3.2;
+  }
   BND.wasGround = ctx.onGround;
-  BND.landT = Math.max(0, BND.landT - dt * 3.2);
-  const group = rig.group, pivot = rig.pivot, model = rig.model;
-  // 줄 방향 (그룹 기준·몸통 기준)
-  const S = { dt, t: ctx.t, mode, hSpeed: ctx.hSpeed, vy: ctx.vy, wallPhase: ctx.wall.phase, wallMoving: ctx.wall.moving, sling: ctx.sling, ropeG: [0, 1, 0], ropeWR: [0, 1, 0], ropeWL: [0, 1, 0], twoHand: !!ctx.twoHand };
-  const gq = new THREE.Quaternion(); group.getWorldQuaternion(gq); const gqi = gq.clone().invert();
+  BND.landT = Math.max(0, BND.landT - dt * BND.landRate); if (BND.landT === 0) BND.hero = 0;
+  BND.hsPeak = Math.max(hs, BND.hsPeak - 25 * dt);
+  const dec = dt > 0 ? (BND.prevHs - hs) / dt : 0; BND.prevHs = hs;
+  BND.decS += (dec - BND.decS) * (1 - Math.exp(-20 * dt));
+  if (mode === 'ground' && ctx.onGround && BND.hsPeak > BNDP.skidMinSpeed && BND.decS > BNDP.skidDecel) BND.skid = Math.max(BND.skid, BM.sst(BNDP.skidMinSpeed - 1, 14, BND.hsPeak));
+  BND.skid = Math.max(0, BND.skid - dt * (hs > 1.5 ? 1.6 : 3.5)); if (mode !== 'ground') BND.skid = 0;
+  BND.skidS += (BND.skid - BND.skidS) * (1 - Math.exp(-16 * dt));
+  if (ctx.yaw !== undefined) { if (BND.yaw !== null && dt > 0) { BND.turn += (BM.wrap(ctx.yaw - BND.yaw) / dt - BND.turn) * (1 - Math.exp(-12 * dt)); } BND.yaw = ctx.yaw; }
+  const G = bndGait(hs, ms);
+  if (mode === 'ground' && G.moveW > 0.01 && BND.skid < 0.3) BND.cyc = (BND.cyc + G.fr * dt) % 1;
+  // ── 입력(S) 구성 ──
+  const S = { dt, t: ctx.t, mode, hSpeed: hs, speed: spd, vy: ctx.vy, wallPhase: ctx.wall.phase, wallMoving: ctx.wall.moving, sling: ctx.sling,
+    ropeG: [0, 1, 0], ropeWR: [0, 1, 0], ropeWL: [0, 1, 0], twoHand: !!ctx.twoHand, cyc: BND.cyc, skid: BND.skidS, turn: BND.turn,
+    landT: BND.landT, landAmt: BND.landAmt, hero: BND.hero * BM.sst(0, 0.4, BND.landT), swT: BND.swT, relT: BND.relT, flipW: BND.flipW,
+    preLand: (mode === 'air') ? BM.sst(3.5, 1.2, gd) * BM.sst(-2, -8, ctx.vy) : 0 };
+  group.getWorldQuaternion(_gq); _gq.invert();
   if (mode === 'swing') {
-    const ch = bndNode(rig, 'DEF_CHEST_01') || model, sh = bndNode(rig, 'DEF_ARM_01.R') || model;
-    ch.getWorldPosition(_p0); _tv.set(ctx.anchorW[0] - _p0.x, ctx.anchorW[1] - _p0.y, ctx.anchorW[2] - _p0.z).normalize().applyQuaternion(gqi);
+    const ch = bndNode(rig, 'DEF_CHEST_01') || model, shR = bndNode(rig, 'DEF_ARM_01.R') || model, shL = bndNode(rig, 'DEF_ARM_01.L') || model;
+    ch.getWorldPosition(_p0); _tv.set(ctx.anchorW[0] - _p0.x, ctx.anchorW[1] - _p0.y, ctx.anchorW[2] - _p0.z).normalize().applyQuaternion(_gq);
     S.ropeG = [_tv.x, _tv.y, _tv.z];
-    sh.getWorldPosition(_p1); S.ropeWR = BM.norm([ctx.anchorW[0] - _p1.x, ctx.anchorW[1] - _p1.y, ctx.anchorW[2] - _p1.z]);
-    const shL = bndNode(rig, 'DEF_ARM_01.L') || model; shL.getWorldPosition(_p1); S.ropeWL = BM.norm([ctx.anchorW[0] - _p1.x, ctx.anchorW[1] - _p1.y, ctx.anchorW[2] - _p1.z]);
-    if (ctx.twoHand) {
-      const aL = bndNode(rig, 'DEF_ARM_01.L'), aR = bndNode(rig, 'DEF_ARM_01.R');
-      if (aL && aR) {
-        const pl = new THREE.Vector3(), pr = new THREE.Vector3(); aL.getWorldPosition(pl); aR.getWorldPosition(pr);
-        const sep = pl.distanceTo(pr), sc = sep / (rig.rest.shoulderSep || sep);
-        const mid = pl.clone().add(pr).multiplyScalar(0.5);
-        const dm = BM.norm([ctx.anchorW[0] - mid.x, ctx.anchorW[1] - mid.y, ctx.anchorW[2] - mid.z]);
-        S.gripW = [mid.x + dm[0] * 0.40 * sc, mid.y + dm[1] * 0.40 * sc, mid.z + dm[2] * 0.40 * sc];
-      }
-    }
+    shR.getWorldPosition(_p1); S.ropeWR = BM.norm([ctx.anchorW[0] - _p1.x, ctx.anchorW[1] - _p1.y, ctx.anchorW[2] - _p1.z]);
+    shL.getWorldPosition(_p1); S.ropeWL = BM.norm([ctx.anchorW[0] - _p1.x, ctx.anchorW[1] - _p1.y, ctx.anchorW[2] - _p1.z]);
   }
   const P = bndCompute(S, rig.rest);
-  const k = 1 - Math.exp(-(BND.blendT > 0 ? 14 : 50) * dt); BND.blendT = Math.max(0, BND.blendT - dt);
-  const sc = (key, v) => bndSm(key, v, k);
-  // 1) 전 뼈를 기준 자세로
-  for (const b of rig.list) { if (!b.userData.bndLayer) b.quaternion.copy(b.userData.bndBase); }   // bndLayer: FBX 손가락 레이어(BNDM)가 소유한 뼈
-  // 2) 몸통 기울기(피벗 회전, 가슴 높이 기준)
-  const pp = bndSm('pvP', P.pivot.pitch, 1 - Math.exp(-9 * dt)), pr = bndSm('pvR', P.pivot.roll, 1 - Math.exp(-9 * dt)), h = 0.95;
+  // ── 1) 전 뼈를 기준 자세로 (bndLayer: FBX 손가락 레이어가 소유한 뼈는 제외) ──
+  for (const b of rig.list) { if (!b.userData.bndLayer) b.quaternion.copy(b.userData.bndBase); }
+  // ── 2) 스칼라 채널 블렌딩 (스냅샷 → 새 포즈) ──
+  const w = (BND.snap.ok && BND.bT < BND.bDur) ? BM.sst(0, 1, BND.bT / BND.bDur) : 1, O = BND.out, SN = BND.snap;
+  bndScalars(P, _sc);
+  if (w < 1) for (let i = 0; i < BNDS.N; i++) _sc[i] = SN.sc[i] + (_sc[i] - SN.sc[i]) * w;
+  O.sc.set(_sc);
+  const kS = 1 - Math.exp(-40 * dt), kP = 1 - Math.exp(-9 * dt);
+  // 릴리즈 공중 회전각(스무딩 없이 직접). 공중이 아니면 가장 가까운 0 으로 풀어줌
+  if (mode === 'air' && BND.relT > 0 && BND.flipW) BND.flipAng = P.flip; else BND.flipAng = BM.wrap(BND.flipAng) * Math.exp(-14 * dt);
+  // ── 3) 몸통 기울기(피벗), 골반, 척추, 머리, 어깨 ──
+  const pp = bndSm('pvP', _sc[BNDS.pivP], kP) + BND.flipAng, pr = bndSm('pvR', _sc[BNDS.pivR], kP), h = bndSm('pvH', _sc[BNDS.pivH], kS);
   pivot.rotation.set(pp, 0, pr);
   pivot.position.set(h * Math.sin(pr), h - h * Math.cos(pr) * Math.cos(pp), -h * Math.cos(pr) * Math.sin(pp));
-  // 3) 골반 높이/좌우 이동, 골반·척추·머리 회전
-  if (rig.cog) { rig.cog.position.copy(rig.cogBase); rig.cog.position.z -= sc('drop', P.drop); rig.cog.position.x += sc('shiftX', P.shiftX); }
-  bndDelta(rig, 'DEF_HIPS', sc('hy', P.hip.yaw), sc('hp', P.hip.pitch), sc('hr', P.hip.roll));
-  const sy = sc('sy', P.spine.yaw), sp = sc('sp', P.spine.pitch), sr = sc('sr', P.spine.roll);
-  const wts = [['DEF_SPINE_01', 0.3], ['DEF_SPINE_02', 0.3], ['DEF_CHEST_01', 0.25], ['DEF_CHEST_02', 0.15]];
-  for (const [n, w] of wts) bndDelta(rig, n, sy * w, sp * w, sr * w);
-  const hp = sc('hdP', P.head.pitch), hy = sc('hdY', P.head.yaw);
+  if (rig.cog) { rig.cog.position.copy(rig.cogBase); rig.cog.position.z -= bndSm('drop', _sc[BNDS.drop], kS); rig.cog.position.x += bndSm('shiftX', _sc[BNDS.shiftX], kS); }
+  bndDelta(rig, 'DEF_HIPS', bndSm('hy', _sc[BNDS.hipY], kS), bndSm('hp', _sc[BNDS.hipP], kS), bndSm('hr', _sc[BNDS.hipR], kS));
+  const sy = bndSm('sy', _sc[BNDS.spY], kS), sp = bndSm('sp', _sc[BNDS.spP], kS), sr = bndSm('sr', _sc[BNDS.spR], kS);
+  bndDelta(rig, 'DEF_SPINE_01', sy * 0.3, sp * 0.3, sr * 0.3); bndDelta(rig, 'DEF_SPINE_02', sy * 0.3, sp * 0.3, sr * 0.3);
+  bndDelta(rig, 'DEF_CHEST_01', sy * 0.25, sp * 0.25, sr * 0.25); bndDelta(rig, 'DEF_CHEST_02', sy * 0.15, sp * 0.15, sr * 0.15);
+  const hp = bndSm('hdP', _sc[BNDS.hdP], kS), hy = bndSm('hdY', _sc[BNDS.hdY], kS);
   bndDelta(rig, 'DEF_NECK_01', hy * 0.4, hp * 0.4, 0); bndDelta(rig, 'DEF_HEAD', hy * 0.6, hp * 0.6, 0);
+  bndDelta(rig, 'DEF_SHOULDER.L', 0, 0, bndSm('shL', _sc[BNDS.shL], kS)); bndDelta(rig, 'DEF_SHOULDER.R', 0, 0, -bndSm('shR', _sc[BNDS.shR], kS));
   group.updateMatrixWorld(true);
-  const Qm = new THREE.Quaternion(); model.getWorldQuaternion(Qm);
-  const invM = new THREE.Matrix4().copy(model.matrixWorld).invert();
-  // 4) 팔
-  for (const s of BND_SIDES) {
-    const a = P.arm[s], ub = bndNode(rig, 'DEF_ARM_01.' + s), fb = bndNode(rig, 'DEF_FOREARM_01.' + s), hb = bndNode(rig, 'DEF_HAND.' + s);
-    if (!a || !ub || !fb || !hb) continue;
-    if (a.grip && S.gripW) {
-      // 한 줄을 두 손으로 잡기: 위팔은 잡는 지점 쪽(팔꿈치는 살짝 바깥), 팔뚝은 잡는 지점으로 곧장
-      const G = _tv.set(S.gripW[0], S.gripW[1], S.gripW[2]).clone();
-      const aL = bndNode(rig, 'DEF_ARM_01.L'), aR = bndNode(rig, 'DEF_ARM_01.R');
-      const pl = new THREE.Vector3(), pr = new THREE.Vector3(); aL.getWorldPosition(pl); aR.getWorldPosition(pr);
-      const lat = pl.clone().sub(pr).normalize().multiplyScalar(BND_SX[s]);
-      ub.getWorldPosition(_p0);
-      const to = G.clone().sub(_p0).normalize().addScaledVector(lat, 0.16).normalize();
-      const u = bndSmV('au' + s, [to.x, to.y, to.z], k);
-      bndAim(ub, fb, _tw.set(u[0], u[1], u[2]).clone());
-      fb.getWorldPosition(_p0);
-      const fd = G.clone().sub(_p0).normalize();
-      const f = bndSmV('af' + s, [fd.x, fd.y, fd.z], k);
-      bndAim(fb, hb, _tw.set(f[0], f[1], f[2]).clone());
-      continue;
-    }
-    const u = bndSmV('au' + s, a.u, k), f = bndSmV('af' + s, a.f, k);
-    bndAim(ub, fb, bndWorldDir(u, a.world, Qm)); bndAim(fb, hb, bndWorldDir(f, a.world, Qm));
+  model.getWorldQuaternion(_Qm); _Qmi.copy(_Qm).invert(); _invM.copy(model.matrixWorld).invert();
+  // ── 4) 팔 ──
+  const ubL = bndNode(rig, 'DEF_ARM_01.L'), ubR = bndNode(rig, 'DEF_ARM_01.R');
+  if (ubL && ubR) { ubL.getWorldPosition(_p0).applyMatrix4(_invM); _shL[0] = _p0.x; _shL[1] = _p0.y; _shL[2] = _p0.z; ubR.getWorldPosition(_p0).applyMatrix4(_invM); _shR[0] = _p0.x; _shR[1] = _p0.y; _shR[2] = _p0.z; }
+  bndBodyCaps(rig, _invM);
+  let hasG = false;
+  if (mode === 'swing' && S.twoHand && ubL && ubR) {
+    // 두 어깨 중점에서 앵커 쪽으로 gripDist 만큼 떨어진 한 점을 두 손이 같이 잡는다(모델 좌표)
+    _p1.set(ctx.anchorW[0], ctx.anchorW[1], ctx.anchorW[2]).applyMatrix4(_invM);
+    const mx = (_shL[0] + _shR[0]) / 2, my = (_shL[1] + _shR[1]) / 2, mz = (_shL[2] + _shR[2]) / 2;
+    let dx = _p1.x - mx, dy = _p1.y - my, dz = _p1.z - mz; const dl = Math.hypot(dx, dy, dz) || 1; dx /= dl; dy /= dl; dz /= dl;
+    // 앵커가 거의 머리 위면 손을 살짝 앞으로(얼굴 앞쪽) 모아 팔이 머리를 스치지 않게 함
+    { const up = BM.sst(0.35, 0.85, dy), bz = dz * (1 - 0.7 * up) + 0.55 * up, by = dy - 0.2 * up, bl = Math.hypot(dx, by, bz) || 1; dx /= bl; dy = by / bl; dz = bz / bl; }
+    let gdist = BM.lerp(BNDP.gripDist0, BNDP.gripDist1, BM.sst(BNDP.tensionLo, BNDP.tensionHi, spd));
+    const halfSep = Math.hypot(_shL[0] - _shR[0], _shL[1] - _shR[1], _shL[2] - _shR[2]) / 2, reach = 0.97 * Math.min(rig.rest.A1 + rig.rest.A2, 1e9);
+    gdist = Math.min(gdist, Math.sqrt(Math.max(0.01, reach * reach - halfSep * halfSep)));   // 두 손이 같은 점에 닿도록 팔 길이 안으로 제한
+    _G[0] = mx + dx * gdist; _G[1] = my + dy * gdist; _G[2] = mz + dz * gdist; hasG = true;
   }
-  // 5) 다리 (IK 또는 각도)
+  for (const s of BND_SIDES) {
+    const a = P.arm[s], ub = s === 'L' ? ubL : ubR, fb = bndNode(rig, 'DEF_FOREARM_01.' + s), hb = bndNode(rig, 'DEF_HAND.' + s);
+    if (!a || !ub || !fb || !hb) continue;
+    const sh = s === 'L' ? _shL : _shR;
+    // 목표 방향(모델 좌표): 자유 포즈
+    if (a.world) { bndWorldToModel(a.u[0], a.u[1], a.u[2], _tU); bndWorldToModel(a.f[0], a.f[1], a.f[2], _tF); } else { _tU.set(a.u); _tF.set(a.f); }
+    if (a.grip && hasG) {
+      const sx = BND_SX[s], A1 = rig.rest['A1' + s], A2 = rig.rest['A2' + s];
+      let r = null;
+      for (let it = 0; it < 4; it++) {   // 팔꿈치가 머리·몸통에 닿으면 바깥쪽으로 더 벌려 다시 계산(손 위치는 그대로)
+        r = bndIK([sh[0], sh[1], sh[2]], [_G[0], _G[1], _G[2]], A1, A2, [sx * (0.9 + it * 1.1), -0.2 + it * 0.1, -0.4]);
+        let bad = false;
+        for (const t of [[0.5, 0], [1, 0], [1, 0.5], [1, 1]]) {
+          const kk = t[0] * A1, k2 = t[1] * A2;
+          _pt[0] = sh[0] + r[0][0] * kk + r[1][0] * k2 * (t[1] ? 1 : 0); _pt[1] = sh[1] + r[0][1] * kk + r[1][1] * k2 * (t[1] ? 1 : 0); _pt[2] = sh[2] + r[0][2] * kk + r[1][2] * k2 * (t[1] ? 1 : 0);
+          if (t[1] < 1 && bndPushBody(_pt)) { bad = true; break; }
+        }
+        if (!bad) break;
+      }
+      const gw = a.gw;
+      for (let i = 0; i < 3; i++) { _tU[i] = _tU[i] + (r[0][i] - _tU[i]) * gw; _tF[i] = _tF[i] + (r[1][i] - _tF[i]) * gw; }
+    }
+    const au = O.au[s], af = O.af[s];
+    bndBlend3(au, SN.au[s], _tU, SN.ok ? w : 1); bndBlend3(af, SN.af[s], _tF, SN.ok ? w : 1);
+    if (!(a.grip && hasG)) bndAvoidArm(sh, au, af, rig.rest['A1' + s], rig.rest['A2' + s]);   // 잡기 팔은 손 위치가 고정이라 제외
+    bndAim(ub, fb, bndModelDirToWorld(au)); bndAim(fb, hb, bndModelDirToWorld(af));
+  }
+  // ── 5) 다리 (IK 또는 각도): 방향 계산·블렌딩 → 충돌 회피(접지 모드 제외) → 적용 ──
+  for (const s of BND_SIDES) {
+    const l = P.leg[s], tb = bndNode(rig, 'DEF_THIGH.' + s); if (!l || !tb) continue;
+    let td, sd;
+    if (l.ik) { tb.getWorldPosition(_p0).applyMatrix4(_invM); const r = bndIK([_p0.x, _p0.y, _p0.z], l.ankle, rig.rest['L1' + s], rig.rest['L2' + s], l.pole); td = r[0]; sd = r[1]; }
+    else { td = l.t; sd = l.s; }
+    const wl = (SN.ok && mode === 'ground') ? BM.sst(0, 1, BND.bT / 0.08) : (SN.ok ? w : 1);   // 접지 시 다리는 거의 즉시 IK(발이 땅에 붙어야 하므로), 상체만 천천히 블렌딩
+    bndBlend3(O.lt[s], SN.lt[s], td, wl); bndBlend3(O.ls[s], SN.ls[s], sd, wl);
+  }
+  if (mode !== 'ground') bndAvoidLegs(rig, O);
   for (const s of BND_SIDES) {
     const l = P.leg[s], tb = bndNode(rig, 'DEF_THIGH.' + s), kb = bndNode(rig, 'DEF_SHIN_01.' + s), fb = bndNode(rig, 'DEF_FOOT.' + s), toe = bndNode(rig, 'DEF_TOE.' + s);
     if (!l || !tb || !kb || !fb || !toe) continue;
-    let td, sd;
-    if (l.ik) { tb.getWorldPosition(_p0); _p0.applyMatrix4(invM); const r = bndIK([_p0.x, _p0.y, _p0.z], l.ankle, rig.rest['L1' + s], rig.rest['L2' + s], l.pole); td = r[0]; sd = r[1]; }
-    else { td = l.t; sd = l.s; }
-    td = bndSmV('lt' + s, td, k); sd = bndSmV('ls' + s, sd, k);
-    bndAim(tb, kb, bndWorldDir(td, false, Qm)); bndAim(kb, fb, bndWorldDir(sd, false, Qm));
-    const fo = P.foot[s], fpv = bndSm('fp' + s, fo.p, k);
-    const fd = BM.rotY(BM.rotX(rig.rest.footDir[s], fpv), fo.y);
-    bndAim(fb, toe, bndWorldDir(fd, false, Qm));
+    bndAim(tb, kb, bndModelDirToWorld(O.lt[s])); bndAim(kb, fb, bndModelDirToWorld(O.ls[s]));
+    const fpv = bndSm('fp' + s, _sc[s === 'L' ? BNDS.fpL : BNDS.fpR], kS), fyv = _sc[s === 'L' ? BNDS.fyL : BNDS.fyR];
+    const fd = BM.rotY(BM.rotX(rig.rest.footDir[s], fpv), fyv);
+    bndAim(fb, toe, bndModelDirToWorld(fd));
   }
+  // ── 6) 지면 침투 방지: 접지 상태에서 발목/발끝이 서 있을 때 높이보다 낮아지면 몸 전체를 그만큼 올림(전환 블렌딩 중 생기는 오차 보정) ──
+  if (mode === 'ground') {
+    let def = 0; const gy = group.position.y;
+    for (const s of BND_SIDES) for (const n of ['FOOT', 'TOE']) { const b = bndNode(rig, 'DEF_' + n + '.' + s); if (b) { b.getWorldPosition(_p0); def = Math.max(def, rig.restY[n + s] - (_p0.y - gy)); } }
+    BND.lift = Math.max(def, BND.lift - 0.6 * dt);
+  } else BND.lift = Math.max(0, BND.lift - 1.5 * dt);
+  if (BND.lift > 1e-4) pivot.position.y += BND.lift;
+  O.ok = true;
   group.updateMatrixWorld(true);
   return P;
 }
@@ -8473,6 +8688,7 @@ function bndPoseApply(rig, name) {
   rig.group.updateMatrixWorld(true);
 }
 
+const _uaHand = new THREE.Vector3(), _uaTo = new THREE.Vector3(), _uaRight = new THREE.Vector3(), _uaTmp = new THREE.Vector3();
 function updateSpiderManRig(dt) {
   if (!spideyGroup) return;
   spideyGroup.visible = !isPOVMode;
@@ -8493,14 +8709,15 @@ function updateSpiderManRig(dt) {
 
   // 모션: BND 모션 엔진 (보행 IK·점프·착지·웹스윙·벽타기·슬링)
   if (isSwinging) {
-    const handPos = new THREE.Vector3(player.pos.x, player.pos.y + 1.45, player.pos.z);
-    const toAnchor = new THREE.Vector3().subVectors(webAnchor, handPos).normalize();
-    const charRight = new THREE.Vector3(Math.cos(spideyGroup.rotation.y),0,-Math.sin(spideyGroup.rotation.y));
-    msm2BodyBank = L(msm2BodyBank, -toAnchor.dot(charRight)*0.58, 9*dt);
+    _uaHand.set(player.pos.x, player.pos.y + 1.45, player.pos.z);
+    _uaTo.subVectors(webAnchor, _uaHand).normalize();
+    _uaRight.set(Math.cos(spideyGroup.rotation.y), 0, -Math.sin(spideyGroup.rotation.y));
+    msm2BodyBank = L(msm2BodyBank, -_uaTo.dot(_uaRight)*0.58, 9*dt);
   }
   try {
     if (window.__bndPoseName && rig.bndMotions) bndPoseApply(rig, window.__bndPoseName); else bndStep(rig, {
-      dt, t: performance.now() / 1000, hSpeed, vy: player.vel.y, onGround: !!player.onGround,
+      dt, t: performance.now() / 1000, hSpeed, speed: player.vel.length(), vy: player.vel.y, onGround: !!player.onGround,
+      yaw: spideyGroup.rotation.y, groundDist: player.pos.y - GROUND_Y,
       swinging: !!isSwinging, twoHand: !!isSwinging && !msm2QuickWhip, diving: !!msm2IsDiving,
       wall: { active: !!wallState.active, phase: wallState.phase || 0, moving: player.vel.length() > 0.4 },
       sling: { active: !!slingState.charging, g: slingState.g || 0, aimW: [slingState.aim.x, slingState.aim.y, slingState.aim.z] },
@@ -8518,7 +8735,7 @@ function updateSpiderManRig(dt) {
     const hL = bnd('DEF_HAND.L') || rig.bones['HAND_IK.L'];
     if (hR) {
       hR.getWorldPosition(handRightWorldPos);
-      if (!msm2QuickWhip && hL) { const t = new THREE.Vector3(); hL.getWorldPosition(t); handRightWorldPos.add(t).multiplyScalar(0.5); }
+      if (!msm2QuickWhip && hL) { hL.getWorldPosition(_uaTmp); handRightWorldPos.add(_uaTmp).multiplyScalar(0.5); }
       const webDist = handRightWorldPos.distanceTo(webAnchor);
       webMesh.position.copy(handRightWorldPos).lerp(webAnchor, 0.5);
       webMesh.scale.set(1, 1, Math.max(0.001, webDist));
