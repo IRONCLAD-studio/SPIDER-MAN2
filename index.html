@@ -5959,7 +5959,7 @@ function pcState() {
     tenSm: 0, bank: 0, eyeOff: 1.58, bobPhase: 0, bobK: 0, qTilt: Q(), qLeg: Q(), Qf: Q(),
     snap: new PovSp6(5, 0.3), neck: new PovSp6(2.2, 0.42), act: new PovSp6(7, 0.35), land: new PovSp6(3.2, 0.45), fovS: new PovSp(6, 0.35),
     hIn: new PovSp6(3.4, 0.5), hAct: [new PovSp6(9, 0.32), new PovSp6(9, 0.32)], lagY: new PovSp(7, 0.55), lagP: new PovSp(7, 0.55),
-    prevYaw: 0, prevPitch: 0, side: 1, wRope: 0, wOff: 0, wGlide: 0, wDive: 0, kickT: 9, kickQ: 0,
+    prevYaw: 0, prevPitch: 0, side: 1, wRope: 0, wOff: 0, wGlide: 0, wDive: 0, wWall: 0, kickT: 9, kickQ: 0,
     T: { A: V(), F: V(), R: V(), U: V(), D: V(), D2: V(), Y: new THREE.Vector3(0, 1, 0), Qf: Q(), Qb: Q(), Qt: Q(), Qs: Q(), Qy: Q(), Qr: Q(), E: new THREE.Euler(),
          S: V(), Tg: V(), El: V(), Hd: V(), Pole: V(), d: V(), p: V(), dir: V(), W: V(), W2: V(), P3: V(), K: V(), An: V(), To: V() }
   };
@@ -6113,6 +6113,7 @@ function povCamUpdate(dt, speed) {
     rx += N.rx.x + povNoise(t * G.swayFreq + 71.4) * G.swayRot * sa; ry += N.ry.x + povNoise(t * G.swayFreq * 0.8 + 77.7) * G.swayRot * 0.8 * sa;
     rz += povNoise(t * G.swayFreq * 1.2 + 83.3) * G.swayRot * sa; py += N.py.x;
   }
+  if (wallNow) { const wp = (wallState.phase || 0) * 0.9; rz += Math.sin(wp) * 0.012; py += Math.abs(Math.sin(wp)) * 0.02; rx += Math.sin(wp * 2) * 0.006; }   // 벽타기 몸 흔들림
   // 지상 헤드밥 + 호흡
   {
     const bt = (onG && !sw) ? MU.clamp(hsp / 14, 0, 1) : 0; P.bobK += (bt - P.bobK) * (1 - Math.exp(-8 * dt)); P.bobPhase += hsp * dt * 0.55;
@@ -6171,6 +6172,7 @@ function povArmsUpdate(P, dt, t, M, tN, windK, sw, onG, hsp, speed) {
   P.wOff += ((sw ? 0.5 : 0) - P.wOff) * (1 - Math.exp(-8 * dt));
   P.wGlide += ((glide.active && !sw ? 1 : 0) - P.wGlide) * (1 - Math.exp(-6 * dt));
   P.wDive += ((msm2IsDiving && !sw ? 1 : 0) - P.wDive) * (1 - Math.exp(-7 * dt));
+  P.wWall += ((wallState.active && !sw ? 1 : 0) - P.wWall) * (1 - Math.exp(-10 * dt));
   // 카메라 회전 지연(Rotational Lag): 시선을 빠르게 돌리면 팔이 한 박자 늦게 따라옴
   let dY = cameraYaw - P.prevYaw; while (dY > Math.PI) dY -= 2 * Math.PI; while (dY < -Math.PI) dY += 2 * Math.PI;
   const wy = MU.clamp(dY / dt, -10, 10), wp = MU.clamp((povPitch - P.prevPitch) / dt, -10, 10);
@@ -6189,6 +6191,7 @@ function povArmsUpdate(P, dt, t, M, tN, windK, sw, onG, hsp, speed) {
     let bx = sgn * 0.17 * ex, by = -0.38 + Math.sin(P.bobPhase * 2 + i * 1.7) * 0.012 * P.bobK + Math.sin(t * 1.3 + i) * 0.003, bz = -0.40;
     bx += (sgn * 0.42 * ex - bx) * P.wGlide; by += (-0.14 - by) * P.wGlide; bz += (-0.46 - bz) * P.wGlide;
     bx += (sgn * 0.08 - bx) * P.wDive; by += (-0.10 - by) * P.wDive; bz += (-0.62 - bz) * P.wDive;
+    if (P.wWall > 0.001) { const cyc = Math.sin((wallState.phase || 0) * 0.9 + i * Math.PI); bx += (sgn * 0.20 * ex - bx) * P.wWall; by += (0.02 + 0.17 * cyc - by) * P.wWall; bz += (-0.48 - bz) * P.wWall; }   // 벽타기: 양손 번갈아 벽 짚기
     // 웹 슈터 포즈: 앵커 방향으로 팔 뻗기 (발사 순간 쭉 뻗었다가 팽팽한 줄을 쥔 자세로 정착)
     let len = 0.46 + 0.03 * tN;
     if (isRope) { const e = Math.min(1, P.shotT / 0.09); len = P.shotT < 0.09 ? 0.2 + 0.36 * (1 - (1 - e) * (1 - e)) : 0.46 + 0.03 * tN + 0.10 * Math.exp(-(P.shotT - 0.09) * 10); } else len = 0.36;
@@ -7393,6 +7396,10 @@ function wallJump(upward) {
 }
 function updateWallMechanic(dt, inputDir, inputMag) {
   wallState.noWall = Math.max(0, wallState.noWall - dt);
+  if (isSwinging && swingHardRope && isGameStarted && !wallState.active && wallState.noWall <= 0) {   // 하드 스윙 중 벽에 닿아 앞으로 밀면 줄을 놓고 벽 잡기
+    const cs = findWallContact(0.82);
+    if (cs && inputMag > 0.25 && -(inputDir.x*cs.nx + inputDir.z*cs.nz) > 0.85 && -(player.vel.x*cs.nx + player.vel.z*cs.nz) > 4.0) { releaseWeb(false); wallState.noWall = 0; wallState.attachT = 0.5; }
+  }
   if (isSwinging || !isGameStarted) { wallState.active = false; wallState.attachT = 0; return false; }
   const c = findWallContact(wallState.active ? 1.8 : 0.42+0.4);
   if (!wallState.active) {
@@ -7401,7 +7408,7 @@ function updateWallMechanic(dt, inputDir, inputMag) {
     const vInto = -(player.vel.x*c.nx + player.vel.z*c.nz);
     const air = !player.onGround;
     // [v12] 벽 쪽으로 거의 정면(0.85↑) + 충분한 접근속도일 때만, 일정 시간 꾹 밀어야 부착
-    if (into > 0.85 && (air ? vInto > 4.0 : (isRunning && vInto > 5.0))) wallState.attachT += dt; else wallState.attachT = 0;
+    if (into > 0.85 && (air ? vInto > 4.0 : ((isRunning || isPOVMode) && vInto > (isRunning ? 5.0 : 3.0)))) wallState.attachT += dt; else wallState.attachT = 0;   // 1인칭은 걷기만으로도 부착
     const ok = (air && wallState.attachT > (slingState.carryT > 0 ? 0.4 : 0.30)) || (!air && wallState.attachT > 0.45);
     if (!ok) return false;
     // 부착: 벽 방향 운동량을 상승 속도로 전환
