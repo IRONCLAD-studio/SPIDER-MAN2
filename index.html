@@ -5774,6 +5774,7 @@ function createRealScaleSpiderMan() {
     } else rig.clips = [];
     rig.pivot = spideyPivot; rig.group = spideyGroup; rig.model = model;
     try { bndSetupRig(rig, model); } catch (e) { console.error('[BND] 리그 준비 실패', e); }
+    try { bndMotionLoad(rig); } catch (e) { console.warn('[BNDM] 모션 로드 건너뜀', e); }
     rig.ready = true;
     console.info('[BND] GLB loaded', Object.keys(rig.bones).length, 'bones; clips:', rig.clips.length);
         }, (err) => {
@@ -8325,7 +8326,7 @@ function bndStep(rig, ctx) {
   const k = 1 - Math.exp(-(BND.blendT > 0 ? 14 : 50) * dt); BND.blendT = Math.max(0, BND.blendT - dt);
   const sc = (key, v) => bndSm(key, v, k);
   // 1) 전 뼈를 기준 자세로
-  for (const b of rig.list) b.quaternion.copy(b.userData.bndBase);
+  for (const b of rig.list) { if (!b.userData.bndLayer) b.quaternion.copy(b.userData.bndBase); }   // bndLayer: FBX 손가락 레이어(BNDM)가 소유한 뼈
   // 2) 몸통 기울기(피벗 회전, 가슴 높이 기준)
   const pp = bndSm('pvP', P.pivot.pitch, 1 - Math.exp(-9 * dt)), pr = bndSm('pvR', P.pivot.roll, 1 - Math.exp(-9 * dt)), h = 0.95;
   pivot.rotation.set(pp, 0, pr);
@@ -8381,6 +8382,97 @@ function bndStep(rig, ctx) {
   return P;
 }
 
+// ===================== BNDM: FBX 모션 레이어 (motions.json) =====================
+// motions.json 은 모델과 같은 Rigify 리그의 FBX 에서 오프라인 변환한 '로컬 쿼터니언' 키프레임이다(fbx_to_motions.py).
+// 같은 리그라 뼈 이름·로컬 축이 GLB 와 동일 → 월드 보정 없이 로컬 회전을 그대로 쓴다. FOREARM_01 은 attach 이후 기준으로 이미 구워져 있다.
+// 현재 FBX 에는 손가락 클립(THWIP, FIST_CURL)과 정지 포즈만 있으므로, 이동 모션(걷기·점프·스윙…)은 기존 절차적 엔진이 맡고
+// 이 레이어는 THREE.AnimationMixer 로 '손가락'만 덧씌운다(절차적 엔진은 손가락을 건드리지 않는다).
+//   손 상태: 이완(FIST_CURL 끝) / 주먹(FIST_CURL 시작) / 웹슈터 발사(THWIP 시작→0.5s 에 펴짐) 를 가중치로 크로스페이드.
+// 실패(파일 없음·뼈 없음·예외) 시 아무것도 바꾸지 않고 기존 모션으로 동작한다.
+const BNDM = { url: 'motions.json', ok: false, mix: null, relax: [null, null], fist: [null, null], thwip: [null, null],
+  w: { r: [1, 1], f: [0, 0], t: [0, 0] }, held: [false, false], rel: [0, 0], flagged: [] };
+const BNDM_RE = /^DEF_(PALM|FINGER|THUMB)_/;
+function bndMotionLoad(rig) {
+  try { const m = /[?&]bndpose=([^&]+)/.exec(location.search); if (m) window.__bndPoseName = decodeURIComponent(m[1]); } catch (e) {}
+  window.bndPose = (n) => { window.__bndPoseName = n || null; if (!n) console.info('[BNDM] 포즈 미리보기 해제: 손가락 레이어 복구를 위해 새로고침 권장'); };
+  if (typeof fetch !== 'function') return;
+  fetch(BNDM.url).then((r) => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+    .then((d) => { rig.bndMotions = d; window.bndPoses = Object.keys(d.clips); bndMotionBuild(rig, d); })
+    .catch((e) => console.warn('[BNDM] motions.json 로드 실패 → 절차적 모션 유지', e));
+}
+// 한 손(s='L'|'R')의 손가락 트랙만 모은 클립. hold=true 면 k0 프레임 하나를 [0,1] 두 키로 고정한 포즈 클립.
+function bndmClip(rig, name, src, s, k0, k1, hold, flag) {
+  const tracks = [], fps = src.fps, n = k1 - k0 + 1;
+  for (const bn in src.bones) {
+    if (!BNDM_RE.test(bn) || bn.charAt(bn.length - 1) !== s) continue;
+    const e = src.bones[bn]; if (!e.q) continue;
+    const node = bndNode(rig, bn); if (!node) continue;
+    const q = e.q.slice(4 * k0, 4 * (k1 + 1));
+    let times, vals;
+    if (hold) { times = [0, 1]; vals = q.concat(q); } else { times = []; for (let i = 0; i < n; i++) times.push(i / fps); vals = q; }
+    tracks.push(new THREE.QuaternionKeyframeTrack(node.uuid + '.quaternion', times, vals));
+    flag.push(node);
+  }
+  return new THREE.AnimationClip(name, hold ? 1 : Math.max(1 / fps, (n - 1) / fps), tracks);
+}
+function bndMotionBuild(rig, d) {
+  const fc = d.clips.FIST_CURL_FK, tw = d.clips.THWIP;
+  if (!fc || !tw || !rig.model) { console.warn('[BNDM] 필요한 클립(FIST_CURL_FK, THWIP) 없음'); return; }
+  const flag = [], mix = new THREE.AnimationMixer(rig.model), sides = ['L', 'R'];
+  try {
+    for (let i = 0; i < 2; i++) {
+      const s = sides[i];
+      const relax = mix.clipAction(bndmClip(rig, 'relax' + s, fc, s, fc.frames - 1, fc.frames - 1, true, flag));
+      const fist = mix.clipAction(bndmClip(rig, 'fist' + s, fc, s, 0, 0, true, flag));
+      const thwip = mix.clipAction(bndmClip(rig, 'thwip' + s, tw, s, 0, tw.frames - 1, false, flag));
+      thwip.setLoop(THREE.LoopOnce, 1); thwip.clampWhenFinished = true;
+      relax.play(); fist.play(); thwip.play(); thwip.paused = true;
+      relax.setEffectiveWeight(1); fist.setEffectiveWeight(0); thwip.setEffectiveWeight(0);
+      BNDM.relax[i] = relax; BNDM.fist[i] = fist; BNDM.thwip[i] = thwip;
+    }
+    if (!flag.length) throw new Error('손가락 뼈를 찾지 못함');
+  } catch (e) { console.warn('[BNDM] 빌드 실패 → 절차적 모션 유지', e); try { mix.stopAllAction(); mix.uncacheRoot(rig.model); } catch (e2) {} return; }
+  for (const b of flag) b.userData.bndLayer = true;   // bndStep 의 '전 뼈 기준 자세 리셋'에서 제외
+  BNDM.flagged = flag; BNDM.mix = mix; BNDM.ok = true; rig.bndMix = mix;
+  console.info('[BNDM] 손가락 레이어 준비:', flag.length, '트랙, 클립', Object.keys(d.clips).join(','));
+}
+// 프레임당 호출(할당 없음): 게임 상태 → 손 가중치 → mixer.update. bndStep 이후에 불러야 한다.
+function bndMotionUpdate(rig, dt, hSpeed) {
+  const M = BNDM; if (!M.ok || window.__bndPoseName) return;
+  if (dt > 0.1) dt = 0.1;
+  const sling = !!slingState.charging, wall = !!wallState.active, swing = !!isSwinging, quick = !!msm2QuickWhip;
+  const air = !player.onGround, kk = 1 - Math.exp(-14 * dt), W = M.w;
+  const run = air ? 0.3 : 0.62 * BM.sst(3.5, 12, hSpeed);
+  for (let i = 0; i < 2; i++) {                                   // i: 0=L, 1=R
+    const A = M.thwip[i];
+    const holdNow = swing && !sling && !wall && (i === 1 || !quick);   // 양손 스윙: 두 손, 퀵 휩: 오른손(웹슈터)만
+    if (holdNow && !M.held[i]) { A.reset(); A.paused = true; M.held[i] = true; M.rel[i] = 0; }                 // 발사 자세(t=0) 유지
+    else if (!holdNow && M.held[i]) { M.held[i] = false; A.paused = false; A.timeScale = 1; M.rel[i] = 1; }   // 해제: 펴지는 모션 재생
+    let tT = 0;
+    if (M.held[i]) tT = 1;
+    else if (M.rel[i] === 1) { tT = A.time < 0.6 ? 1 : 0; if (tT === 0 && W.t[i] < 0.02) M.rel[i] = 0; }
+    const tF = sling ? 1 : (wall ? 0 : run * (1 - tT));
+    const tR = wall ? 0 : Math.max(0, 1 - tF - tT);                // 벽: 손가락을 편 채(기본 자세) 붙임
+    W.t[i] += (tT - W.t[i]) * kk; W.f[i] += (tF - W.f[i]) * kk; W.r[i] += (tR - W.r[i]) * kk;
+    A.setEffectiveWeight(W.t[i]); M.fist[i].setEffectiveWeight(W.f[i]); M.relax[i].setEffectiveWeight(W.r[i]);
+  }
+  M.mix.update(dt);
+}
+// 개발용 미리보기: ?bndpose=Perch (또는 콘솔 bndPose('laying'), bndPoses 로 목록). 절차적 엔진을 끄고 클립의 첫(또는 현재) 프레임을 전신에 적용한다.
+function bndPoseApply(rig, name) {
+  const clip = rig.bndMotions && rig.bndMotions.clips[name]; if (!clip) return;
+  for (const b of rig.list) b.quaternion.copy(b.userData.bndBase);
+  if (rig.pivot) { rig.pivot.rotation.set(0, 0, 0); rig.pivot.position.set(0, 0, 0); }
+  if (rig.cog && rig.cogBase) rig.cog.position.copy(rig.cogBase);
+  const k = clip.frames > 1 ? Math.floor(performance.now() * 0.001 * clip.fps) % clip.frames : 0;
+  for (const n in clip.bones) {
+    const b = bndNode(rig, n); if (!b) continue; const e = clip.bones[n];
+    if (e.q) { const o = e.q.length > 4 ? 4 * k : 0; b.quaternion.set(e.q[o], e.q[o + 1], e.q[o + 2], e.q[o + 3]); }
+    if (e.p) { const o = e.p.length > 3 ? 3 * k : 0; b.position.set(e.p[o], e.p[o + 1], e.p[o + 2]); }
+  }
+  rig.group.updateMatrixWorld(true);
+}
+
 function updateSpiderManRig(dt) {
   if (!spideyGroup) return;
   spideyGroup.visible = !isPOVMode;
@@ -8407,7 +8499,7 @@ function updateSpiderManRig(dt) {
     msm2BodyBank = L(msm2BodyBank, -toAnchor.dot(charRight)*0.58, 9*dt);
   }
   try {
-    bndStep(rig, {
+    if (window.__bndPoseName && rig.bndMotions) bndPoseApply(rig, window.__bndPoseName); else bndStep(rig, {
       dt, t: performance.now() / 1000, hSpeed, vy: player.vel.y, onGround: !!player.onGround,
       swinging: !!isSwinging, twoHand: !!isSwinging && !msm2QuickWhip, diving: !!msm2IsDiving,
       wall: { active: !!wallState.active, phase: wallState.phase || 0, moving: player.vel.length() > 0.4 },
@@ -8415,6 +8507,7 @@ function updateSpiderManRig(dt) {
       anchorW: [webAnchor.x, webAnchor.y, webAnchor.z]
     });
   } catch (e) { if (!window.__bndErrShown) { window.__bndErrShown = 1; console.error('[BND] 모션 오류', e); } }
+  try { bndMotionUpdate(rig, dt, hSpeed); } catch (e) { if (!window.__bndmErr) { window.__bndmErr = 1; console.error('[BNDM] 손가락 레이어 오류 → 비활성화', e); } BNDM.ok = false; }
 
   // 거미줄: 한 줄. 일반 스윙은 두 손으로 같은 줄을 잡고(손 사이 중점에서 출발), 퀵 휩은 오른손 하나로 잡는다.
   if (webMeshL) webMeshL.visible = false;
