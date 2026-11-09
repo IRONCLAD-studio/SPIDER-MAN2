@@ -8053,8 +8053,8 @@ const BNDP = {
   blendT: { def: 0.22, 'ground>air': 0.22, 'air>ground': 0.12, 'air>swing': 0.20, 'swing>air': 0.32, 'ground>swing': 0.22, 'swing>ground': 0.24, 'dive>air': 0.25, 'air>dive': 0.22 },
   // 보행
   strideMin: 0.60, strideMax: 0.85,   // 한 발 지지 구간에서 발이 뒤로 이동하는 거리(m). 속도 낮음→높음
-  cadenceMax: 3.6,                    // 최대 보행 주기(회/초, 1회=두 걸음). 올리면 미끄럼↓ 다리가 더 빨리 움직임
-  stanceWalk: 0.62, stanceRun: 0.30,  // 지지 비율(발이 땅에 닿아 있는 비율). 달리기는 낮을수록 체공 구간이 길다
+  cadenceMax: 2.4,                    // 최대 보행 주기(회/초, 1회=두 걸음). 올리면 미끄럼↓ 다리가 더 빨리 움직임
+  stanceWalk: 0.62, stanceRun: 0.21,  // 지지 비율(발이 땅에 닿아 있는 비율). 달리기는 낮을수록 체공 구간이 길다
   reachSafe: 0.97,                    // 다리 최대 신장 비율(이 이상 뻗어야 하는 보폭이면 골반을 자동으로 낮춤)
   // 방향 전환·정지
   turnLeanK: 0.5, turnLeanMax: 0.35,  // 선회 기울임 계수/최대(rad)
@@ -8132,19 +8132,21 @@ function bndSetupRig(rig, model) {
 // ---- 보행 발 궤적 (u: 0~1 주기, ds: 지지 비율, Rr: 보폭 범위, lift: 발 들기) ----
 function bndFoot(u, ds, Rr, lift) {
   if (u < ds) { return [Rr * (0.5 - u / ds), 0]; }
-  const w = (u - ds) / (1 - ds), m = -Rr * (1 - ds) / ds * 0.6;
+  const w = (u - ds) / (1 - ds), m = -Rr * Math.min(0.6, (1 - ds) / ds * 0.6);
   const w2 = w * w, w3 = w2 * w;
   const z = (2 * w3 - 3 * w2 + 1) * (-Rr / 2) + (w3 - 2 * w2 + w) * m + (-2 * w3 + 3 * w2) * (Rr / 2) + (w3 - w2) * m;
   return [z, lift * Math.sin(Math.PI * Math.pow(w, 0.85))];
 }
 // 발이 지면 위에서 몸과 같은 속도로 뒤로 가려면 Rr = v·ds/fr. 케이던스가 한계(cadenceMax)면 보폭을 줄여 이동 거리가 모자라는 만큼만 미끄러진다.
 function bndGait(hs, ms) {
-  const r = BM.sst(3.5, 12, hs), moveW = BM.sst(0.3, 1.4, hs);
-  const ds = BM.lerp(BNDP.stanceWalk, BNDP.stanceRun, r), Rmax = BM.lerp(BNDP.strideMin, BNDP.strideMax, r);
-  const fr = BM.clamp(hs * ds / Rmax, 0.8, BNDP.cadenceMax);
-  BG.r = r; BG.moveW = moveW; BG.ds = ds; BG.fr = fr;
+  // 실측 기반: 걷기(스탠스 60%, ~1.1회/초) → 조깅(스탠스 ~38%, ~1.5회/초) → 스프린트(스탠스 ~20%, ~2.3회/초). 달리기에는 양발이 뜨는 체공 구간이 생긴다.
+  const r = BM.sst(3.5, 12, hs), rw = BM.sst(1.6, 4.5, hs), moveW = BM.sst(0.3, 1.4, hs);
+  const ds = BM.lerp(BM.lerp(BNDP.stanceWalk, 0.38, rw), BNDP.stanceRun, r), Rmax = BM.lerp(BNDP.strideMin, BNDP.strideMax, rw);
+  const fref = 0.8 + 1.6 * (1 - Math.exp(-hs / 7));                 // 속도에 따른 자연 케이던스(회/초, 1회=두 걸음)
+  const fr = BM.clamp(Math.max(fref, hs * ds / Rmax), 0.8, BNDP.cadenceMax);
+  BG.r = r; BG.moveW = moveW; BG.ds = ds; BG.fr = fr; BG.rw = rw;
   BG.Rr = BM.clamp(hs * ds / fr, 0.12, Rmax) / ms * moveW;     // 모델 단위
-  BG.lift = BM.lerp(0.09, 0.24, r) * moveW;
+  BG.lift = BM.lerp(0.07, 0.22, r) * moveW;
   return BG;
 }
 // ---- 2본 IK: 엉덩이→발목 → [허벅지 방향, 정강이 방향] (무릎은 pole 쪽으로 꺾임) ----
@@ -8202,12 +8204,12 @@ function bndCompute(S, R) {
     P.hip.roll = -0.05 * BM.clamp((fy.L - fy.R) / Math.max(lift, 0.05), -1, 1) * moveW + (1 - moveW) * 0.015 * Math.sin(t * 0.45);
     P.spine.roll = -P.hip.roll * 0.7;
     P.hip.pitch = 0.03 * r * moveW + crouch * 0.1 + hero * 0.15;
-    P.spine.pitch = BM.lerp(0.02, 0.30, r) * moveW + crouch * 0.45 + (1 - moveW) * 0.012 * Math.sin(t * 1.7) - skid * 0.30 + hero * 0.5;
+    P.spine.pitch = BM.lerp(0.02, 0.24, r) * moveW + crouch * 0.45 + (1 - moveW) * 0.012 * Math.sin(t * 1.7) - skid * 0.30 + hero * 0.5;
     P.head.pitch = -P.spine.pitch * 0.7;
     P.head.yaw = (1 - moveW) * 0.05 * Math.sin(t * 0.4);
     // 달리기 전경(발끝 기준) + 선회 기울임(안쪽으로)
     const lean = BM.clamp(BNDP.turnLeanK * Math.atan(hs * S.turn / 9.8), -BNDP.turnLeanMax, BNDP.turnLeanMax) * moveW0;
-    P.spine.roll += -lean * 0.8; P.hip.roll += -lean * 0.2; P.spine.pitch += 0.08 * r * moveW;   // 피벗 대신 척추/골반으로 기울여 접지 발이 안 흔들리게
+    P.spine.roll += -lean * 0.8; P.hip.roll += -lean * 0.2; P.spine.pitch += 0.06 * r * moveW;   // 피벗 대신 척추/골반으로 기울여 접지 발이 안 흔들리게
     for (const s of BND_SIDES) {
       const opp = s === 'L' ? 'R' : 'L', sx = BND_SX[s];
       const zA = BM.clamp(fz[opp] / Math.max(Rr / 2, 0.06), -1, 1) * moveW;
@@ -8273,7 +8275,7 @@ function bndCompute(S, R) {
       P.drop = 0.02 * ten;
     } else {
       P.arm.R = { grip: false, u: S.ropeWR, f: S.ropeWR, world: true };
-      P.arm.L = arm(BM.mix([0.45, -0.15, -0.88], [0.55, -0.75, 0.4], tuck), BM.mix([0.35, -0.2, -0.92], [0.25, -0.25, 0.95], tuck));
+      P.arm.L = arm(BM.mix([0.42, -0.90, -0.10], [0.36, -0.80, 0.35], tuck), BM.mix([0.25, -0.35, 0.90], [0.12, 0.20, 0.97], tuck));   // 반대 팔: 몸 옆으로 내려 팔꿈치를 굽힌 자연스러운 균형 자세
       P.leg.L = legA('L', BM.lerp(-0.30, 1.15, tuck) + fl, BM.lerp(0.35, 1.7, tuck));
       P.leg.R = legA('R', BM.lerp(0.05, 0.80, tuck) - fl, BM.lerp(0.9, 1.5, tuck));
       for (const s of BND_SIDES) P.foot[s] = { p: BM.lerp(0.65, 0.3, tuck), y: -BND_SX[s] * 0.07 };
@@ -8281,14 +8283,19 @@ function bndCompute(S, R) {
       P.shrug.L = 0;
     }
   } else if (mode === 'dive') {
-    P.pivot.pitch = 1.25;
-    for (const s of BND_SIDES) {
-      const sx = BND_SX[s];
-      P.arm[s] = arm([sx * 0.12, 0.97, 0.2], [sx * 0.1, 0.98, 0.15]);
-      P.leg[s] = { ik: false, t: BM.norm([sx * 0.06, -1, -0.05]), s: BM.norm([sx * 0.05, -1, -0.1]) };
-      P.foot[s] = { p: 0.9, y: 0 };
-    }
-    P.spine.pitch = -0.1; P.head.pitch = 0.25;
+    // 헤드퍼스트 다이빙 (스파이더맨: 브랜드 뉴 데이 포스터 자세). 리그(RIG_Spider-man_BND)의 모델 좌표: +Y 머리, +Z 앞(가슴), +X = 왼쪽(L).
+    // 몸 전체를 속도 방향으로 눕힌다: 머리가 진행 방향(앞·아래)을 향하고 발이 위로 뜬다. 낙하각이 가파를수록 거의 수직으로 선다.
+    const flt = BM.sst(10, 40, S.speed) * 0.045, fa = Math.sin(t * 9.0), fb = Math.sin(t * 7.3 + 1.7);
+    P.pivot.pitch = BM.clamp(Math.atan2(hs, S.vy), 1.5, 2.95);
+    // 다리: 거의 곧게 뻗어 몸 뒤(위)로 올라가고, 등을 살짝 젖힌 아치. 한쪽 무릎은 살짝 굽히고 두 다리는 가위처럼 벌어짐. 발끝은 완전히 편다(포인티드).
+    P.leg.L = { ik: false, t: BM.norm([0.10 + flt * fa, -0.97, -0.20]), s: BM.norm([0.10 + flt * fa, -0.96, -0.26]) };
+    P.leg.R = { ik: false, t: BM.norm([-0.16 - flt * fb, -0.94, -0.30]), s: BM.norm([-0.20 - flt * fb, -0.80, -0.58]) };
+    P.foot.L = { p: 1.05, y: -0.05 }; P.foot.R = { p: 1.05, y: 0.05 };
+    // 팔: 오른팔은 몸 옆으로 뒤(발 쪽)로 젖혀 손바닥을 펴 공기를 받고, 왼팔은 몸 옆으로 내려 팔꿈치만 살짝 굽힌 채 편안하게 뒤로 흐른다.
+    P.arm.R = arm([-0.45 - flt * fb, -0.82, -0.30], [-0.62 - flt * fa, -0.70, -0.22]);
+    P.arm.L = arm([0.40, -0.85, -0.15 + flt * fa], [0.30, -0.78, 0.50]);
+    P.spine.pitch = -0.22; P.spine.roll = 0.04 * fa * (flt > 0 ? 1 : 0); P.hip.pitch = -0.08; P.head.pitch = 0.32; P.head.yaw = 0.06;
+    P.shrug.L = 0.05; P.shrug.R = -0.04;
   } else if (mode === 'wall') {
     const amp = S.wallMoving ? 1 : 0.15, p = S.wallPhase;
     for (const s of BND_SIDES) {
@@ -8617,7 +8624,7 @@ function bndMotionUpdate(rig, dt, hSpeed) {
   if (dt > 0.1) dt = 0.1;
   const sling = !!slingState.charging, wall = !!wallState.active, swing = !!isSwinging, quick = !!msm2QuickWhip;
   const air = !player.onGround, kk = 1 - Math.exp(-14 * dt), W = M.w;
-  const run = air ? 0.3 : 0.62 * BM.sst(3.5, 12, hSpeed);
+  const run = air ? (msm2IsDiving ? 0 : 0.3) : 0.62 * BM.sst(3.5, 12, hSpeed);   // 다이빙 중에는 손가락을 활짝 편다
   for (let i = 0; i < 2; i++) {                                   // i: 0=L, 1=R
     const A = M.thwip[i];
     const holdNow = swing && !sling && !wall && (i === 1 || !quick);   // 양손 스윙: 두 손, 퀵 휩: 오른손(웹슈터)만
