@@ -5844,35 +5844,31 @@ const PHYS_TEL = { tension: 0, centripetal: 0, gForce: 1, entry: 0 };   // 실�
 
 // ===== [v8] Insomniac식 스윙 파라미터 =====
 const SWING = {
-  // 1) 물리 피벗 오프셋 (벽 법선 방향으로 가상 피벗을 도로 쪽으로 이동)
-  pivotOffsetRatio: 0.85,   // 플레이어~벽 수직거리 × 이 비율만큼 피벗을 벽 밖으로 이동 (1.0 = 플레이어 바로 위)
-  pivotOffsetMin: 3.0,      // m  최소 오프셋
-  pivotOffsetMax: 32.0,     // m  최대 오프셋
-  pivotMinRope: 14.0,       // m  오프셋 적용 후 최소 물리 로프 길이 (너무 짧은 진자 방지)
-  // 2) 동적 피벗 블렌딩 (physicsPivot → visualAnchor)
-  blendStart: 0.70,         // s  이 시간부터 실제 부착점으로 수렴 시작
-  blendEnd: 2.60,           // s  이 시간에 100% 수렴
-  blendRiseRate: 2.4,       // 1/s  수렴 속도 (지수 보간)
-  blendFallRate: 1.2,       // 1/s  조향을 풀었을 때 되돌아가는 속도
-  steerDeadzone: 0.35,      // 조향 입력 데드존
-  steerBlendGain: 0.90,     // 조향 최대 입력 시 목표 블렌드 비율
-  nadirBlendFloor: 0.45,    // 최저점 통과 후 최소 블렌드
-  steerAccel: 9.0,          // m/s²  스윙 중 좌우 조향 가속도 (속도에 수직 → 에너지 증가 없음)
-  // 3) 페이즈 / 킥오프
-  attachTime: 0.18,         // s  ATTACH 페이즈 길이
-  apexWindow: 0.22,         // s  최저점(APEX) 페이즈 길이
-  autoReleaseAngle: 42.0,   // deg  웹 홀드 안 할 때 이 각도 이상 상승 시 자동 킥오프
-  kickAngleCenter: 45.0,    // deg  킥 효율 최대 각도
-  kickAngleRange: 32.0,     // deg  이 범위 밖이면 킥 효율 0.35까지 감소
-  kickFwd: 5.0,             // m/s  전방 추가 임펄스
-  kickUp: 6.0,              // m/s  상방 추가 임펄스
-  kickQuickScale: 0.65,     // 퀵 휩(짧은 줄)일 때 킥 배율
-  kickWindow: 0.14,         // s  다리를 차는 동안 임펄스가 나눠 적용되는 시간
-  kickImmediate: 0.55       // 릴리즈 순간 즉시 적용되는 임펄스 비율 (나머지는 kickWindow 동안)
+  // [v10] 조이스틱 방향 스윙 + 묵직한 진자
+  gravityMul: 1.18,         // 스윙 중 중력 배율 (>1 = 더 묵직하고 떨어지는 맛)
+  subSteps: 6,              // 서브스텝 (위치 투영 구속이라 스프링보다 적어도 안정)
+  pivotMinLead: 8.0,        // m  피벗이 플레이어 앞(조준 방향)으로 최소 이 거리만큼 앞서도록
+  pivotMinRope: 14.0,       // m  최소 물리 로프 길이
+  steerDeadzone: 0.25,      // 조이스틱 데드존
+  steerSmooth: 7.0,         // 1/s  입력 스무딩(관성) — 낮을수록 방향 전환이 느리고 묵직
+  turnGain: 3.2,            // 1/s  목표 방향과의 각도 오차 → 선회율 비례 계수
+  turnRateSlow: 78.0,       // deg/s  저속 최대 선회율
+  turnRateFast: 36.0,       // deg/s  고속 최대 선회율 (빠를수록 크게 못 꺾음 = 무게감)
+  turnSpeedLo: 10.0, turnSpeedHi: 45.0,   // m/s  선회율 보간 구간
+  steerMaxAngle: 140.0,     // deg  입력이 진행방향과 이 각 이상 반대면 무시(급 유턴 방지)
+  reelMul: 1.5,             // PULL 줄 감기 속도 배율 (PHYS.reelSpeed 기준)
+  reelRamp: 7.0,            // 1/s  PULL 시작/종료 램프 (낮을수록 묵직하게 감김)
+  attachTime: 0.18, apexWindow: 0.22,
+  autoReleaseAngle: 42.0,
+  kickAngleCenter: 45.0, kickAngleRange: 32.0,
+  kickFwd: 5.0, kickUp: 6.0, kickQuickScale: 0.65,
+  kickWindow: 0.14, kickImmediate: 0.55
 };
+const GROUND = { accel: 42.0, brake: 70.0, decel: 48.0 };   // [v10] 지상 이동: 가속/반대방향 제동/무입력 감속 (m/s²)
 const SWING_PHASE = { NONE: 0, ATTACH: 1, DOWNSWING: 2, APEX: 3, UPSWING: 4 };
 const SWING_PHASE_NAMES = ['-', 'ATTACH', 'DOWNSWING', 'APEX', 'UPSWING+KICK'];
 let swingPhase = SWING_PHASE.NONE, swingElapsedTime = 0, swingPivotBlend = 0, swingSteerSm = 0;
+let swingInX = 0, swingInZ = 0, swingReel = 0, swingTurnRateDeg = 0;   // [v10] 스무딩된 입력 / PULL 램프 / 현재 선회율
 let swingSawDescent = false, swingApexTimer = 0;
 const swingKick = { active: false, t: 0, remaining: 0, imp: new THREE.Vector3(), q: 0 };
 
@@ -5914,17 +5910,26 @@ let msm2CamRoll = 0, msm2BodyBank = 0, msm2TrickSpin = 0;
 let msm2ApexStatusText = "", msm2ApexTimer = 0;
 const msm2SmoothLook = new THREE.Vector3();
 
+// [v10] 조준/스윙 방향: 조이스틱(WASD) 입력이 있으면 카메라 기준 그 방향, 없으면 카메라 전방+진행방향 혼합
+function getSwingAimDir(out) {
+  const fx = Math.sin(cameraYaw), fz = Math.cos(cameraYaw), rx = -fz, rz = fx;
+  const jx = THREE.MathUtils.clamp((keys.d ? 1 : 0) - (keys.a ? 1 : 0) + joyInput.x, -1, 1);
+  const jy = THREE.MathUtils.clamp((keys.w ? 1 : 0) - (keys.s ? 1 : 0) + joyInput.y, -1, 1);
+  if (Math.hypot(jx, jy) > SWING.steerDeadzone) { out.set(fx * jy + rx * jx, 0, fz * jy + rz * jx).normalize(); return true; }
+  const hs = Math.hypot(player.vel.x, player.vel.z);
+  if (hs > 4.0) out.set(fx + (player.vel.x / hs - fx) * 0.35, 0, fz + (player.vel.z / hs - fz) * 0.35).normalize();
+  else out.set(fx, 0, fz);
+  return false;
+}
+
 function evaluateWebTargets() {
   if (!camera) return;
   const pPos = player.pos;
   const handY = pPos.y + 1.45;
   const maxDist = webSwingAssist ? MSM2_ASSIST_RANGE : MSM2_RAW_RANGE;
   const lowMode = handY < GROUND_Y + 10.0; // 저고도: 낮은 건물 옥상 모서리를 우선 탐색
-  const camFwd = new THREE.Vector3(Math.sin(cameraYaw), 0, Math.cos(cameraYaw)).normalize();
-  const velHoriz = new THREE.Vector3(player.vel.x, 0, player.vel.z);
-  const moveDir = velHoriz.lengthSq() > 16.0
-    ? camFwd.clone().lerp(velHoriz.clone().normalize(), 0.35).normalize()
-    : camFwd;
+  const moveDir = new THREE.Vector3();
+  const aimHasInput = getSwingAimDir(moveDir);   // [v10] 조이스틱 방향 우선
   let bestSpot = null, bestScore = Infinity;
   const gx = Math.floor(pPos.x / SPATIAL_CELL);
   const gz = Math.floor(pPos.z / SPATIAL_CELL);
@@ -5949,16 +5954,16 @@ function evaluateWebTargets() {
         if (horizontalDist < 2.0) continue;
         const hDist = Math.max(0.1, horizontalDist);
         const fwdDot = (dx * moveDir.x + dz * moveDir.z) / hDist;
-        if (fwdDot < (webSwingAssist ? 0.05 : 0.20)) continue;
+        if (fwdDot < (aimHasInput ? (webSwingAssist ? 0.25 : 0.40) : (webSwingAssist ? 0.05 : 0.20))) continue;
         // Keep line-of-sight checks so the selected web does not pass through a building.
         if (!isWebLineClearToSpot(new THREE.Vector3(pPos.x, handY, pPos.z), spot)) continue;
         // 이상적인 거리(42m)·높이차(28m)에 가산점
         let score;
         if (lowMode && spot.y < GROUND_Y + QW_PREFER_H) {
           // 로우 앵글 쇼트 스윙: 짧은 줄(≈22m)·낮은 앵커(높이차≈10m) 선호
-          score = Math.abs(dist - 22.0) * 0.9 + Math.abs(Math.abs(dy) - 10.0) * 0.35 - fwdDot * 32.0 - 4.0;
+          score = Math.abs(dist - 22.0) * 0.9 + Math.abs(Math.abs(dy) - 10.0) * 0.35 - fwdDot * (aimHasInput ? 48.0 : 32.0) - 4.0;
         } else {
-          score = Math.abs(dist - 34.0) * 0.8 + Math.abs(Math.abs(dy) - 12.0) * 0.35 - fwdDot * 32.0;
+          score = Math.abs(dist - 34.0) * 0.8 + Math.abs(Math.abs(dy) - 12.0) * 0.35 - fwdDot * (aimHasInput ? 48.0 : 32.0);
         }
         if (score < bestScore) { bestScore = score; bestSpot = spot; }
       }
@@ -5997,20 +6002,17 @@ function shootWeb() {
   webAnchor.copy(currentBestSpot);
   const handPos = new THREE.Vector3(player.pos.x, player.pos.y + 1.45, player.pos.z);
   const visDist = handPos.distanceTo(webAnchor);   // 시각적 줄 길이 (렌더링용)
-  // [v8] 벽 법선 → 물리 피벗을 벽 밖(도로 쪽)으로 이동: 벽으로 끌려가는 지그재그 제거
-  { const ud = currentBestSpot.userData || {};
-    swingWallNormal.set(ud.nx || 0, 0, ud.nz || 0);
-    if (swingWallNormal.lengthSq() < 0.01) swingWallNormal.set(handPos.x - webAnchor.x, 0, handPos.z - webAnchor.z);
-    if (swingWallNormal.lengthSq() < 1e-4) swingWallNormal.set(0, 0, 1);
-    swingWallNormal.normalize();
-    const lateral = Math.max(0, (handPos.x - webAnchor.x) * swingWallNormal.x + (handPos.z - webAnchor.z) * swingWallNormal.z);
-    let off = THREE.MathUtils.clamp(lateral * SWING.pivotOffsetRatio, SWING.pivotOffsetMin, SWING.pivotOffsetMax);
-    const tryPivot = (o) => swingBasePivot.set(webAnchor.x + swingWallNormal.x * o, webAnchor.y, webAnchor.z + swingWallNormal.z * o);
-    tryPivot(off);
-    for (let i = 0; i < 14 && handPos.distanceTo(swingBasePivot) < SWING.pivotMinRope && off > 0.5; i++) { off *= 0.85; tryPivot(off); }
-    physicsPivotPoint.copy(swingBasePivot);
-    ropeLength = handPos.distanceTo(physicsPivotPoint);   // 물리 로프 길이 = 피벗 기준 (초기 장력 0)
+  // [v10] 물리 피벗 = 앵커를 '조이스틱(조준) 방향 직선' 위로 투영한 가상점 (벽 쪽 쏠림 제거, 입력 방향으로 직진)
+  { const aim = new THREE.Vector3(); getSwingAimDir(aim);
+    const ax = webAnchor.x - handPos.x, az = webAnchor.z - handPos.z;
+    const dy0 = webAnchor.y - handPos.y;
+    let lead = Math.max(ax * aim.x + az * aim.z, SWING.pivotMinLead);
+    if (Math.hypot(lead, dy0) < SWING.pivotMinRope) lead = Math.sqrt(Math.max(0, SWING.pivotMinRope * SWING.pivotMinRope - dy0 * dy0));
+    physicsPivotPoint.set(handPos.x + aim.x * lead, webAnchor.y, handPos.z + aim.z * lead);
+    swingBasePivot.copy(physicsPivotPoint);
+    ropeLength = handPos.distanceTo(physicsPivotPoint);
   }
+  swingInX = 0; swingInZ = 0; swingReel = 0; swingTurnRateDeg = 0;
   swingPhase = SWING_PHASE.ATTACH; swingElapsedTime = 0; swingPivotBlend = 0; swingSteerSm = 0;
   swingSawDescent = false; swingApexTimer = 0; swingKick.active = false; swingKick.q = 0;
   // 줄이 짧거나 앵커가 낮으면 쇼트 아크(퀵 휩) 모드
@@ -6514,72 +6516,82 @@ function updatePhysics(dt) {
     msm2SwingTime += dt;
     swingElapsedTime = msm2SwingTime;
     msm2IsDiving = false;
-    const reelIn = (keys.w || joyInput.y > 0.35 || pullHeld);
-    const reelRate = pullHeld ? PHYS.reelSpeed * 1.5 : PHYS.reelSpeed;   // PULL은 W보다 빠르게 감김
 
-    // ── [v8-2] 동적 피벗 블렌딩: 시간 경과 / 강한 조향 / 최저점 통과 → physicsPivot이 visualAnchor로 수렴 ──
-    swingSteerSm += (rawSideInput - swingSteerSm) * (1 - Math.exp(-8 * dt));
-    const steerAbs = Math.abs(swingSteerSm);
-    const sstep = (a, b, x) => { const t = THREE.MathUtils.clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
-    const tTime = sstep(SWING.blendStart, SWING.blendEnd, swingElapsedTime);
-    const tSteer = (steerAbs > SWING.steerDeadzone && swingElapsedTime > 0.25)
-      ? THREE.MathUtils.clamp((steerAbs - SWING.steerDeadzone) / (1 - SWING.steerDeadzone), 0, 1) * SWING.steerBlendGain : 0;
-    const tPhase = msm2PassedNadir ? SWING.nadirBlendFloor : 0;
-    const blendTarget = Math.max(tTime, tSteer, tPhase);
-    const blendRate = blendTarget > swingPivotBlend ? SWING.blendRiseRate : SWING.blendFallRate;
-    swingPivotBlend += (blendTarget - swingPivotBlend) * (1 - Math.exp(-blendRate * dt));
+    // ── [v10-1] 방향 조향: 조이스틱 방향으로 스윙 평면을 회전 (관성 있는 입력 + 속도 비례 선회율 제한) ──
+    // 시스템 전체(피벗 상대위치 + 수평속도)를 플레이어 수직축 기준으로 같은 각만큼 회전 → 에너지 보존, 줄 구속 유지
     {
-      const hx0 = player.pos.x, hy0 = player.pos.y + 1.45, hz0 = player.pos.z;
-      const dBefore = Math.hypot(hx0 - physicsPivotPoint.x, hy0 - physicsPivotPoint.y, hz0 - physicsPivotPoint.z);
-      const e = swingPivotBlend * swingPivotBlend * (3 - 2 * swingPivotBlend);
-      physicsPivotPoint.lerpVectors(swingBasePivot, visualAnchorPoint, e);
-      const dAfter = Math.hypot(hx0 - physicsPivotPoint.x, hy0 - physicsPivotPoint.y, hz0 - physicsPivotPoint.z);
-      ropeLength = Math.max(1.0, ropeLength + (dAfter - dBefore));   // 피벗 이동으로 장력이 튀지 않도록 로프 길이 동기화
-    }
-
-    // ── 좌우 조향: 속도에 수직인 가속도만 가해 에너지 증가 없이 궤적만 휘게 함 ──
-    if (Math.abs(swingSteerSm) > 0.05) {
-      const hs0 = Math.hypot(player.vel.x, player.vel.z);
-      if (hs0 > 3.0) {
-        const a = SWING.steerAccel * swingSteerSm * dt;
-        player.vel.x += (-player.vel.z / hs0) * a;
-        player.vel.z += ( player.vel.x / hs0) * a;
+      const hasIn = inputMag > SWING.steerDeadzone;
+      const ks = 1 - Math.exp(-SWING.steerSmooth * dt);
+      swingInX += ((hasIn ? inputDir.x * inputMag : 0) - swingInX) * ks;
+      swingInZ += ((hasIn ? inputDir.z * inputMag : 0) - swingInZ) * ks;
+      const im = Math.hypot(swingInX, swingInZ), vh = Math.hypot(player.vel.x, player.vel.z);
+      let turn = 0;
+      if (im > 0.15 && vh > 3.0) {
+        let d = Math.atan2(swingInX, swingInZ) - Math.atan2(player.vel.x, player.vel.z);
+        while (d > Math.PI) d -= Math.PI * 2; while (d < -Math.PI) d += Math.PI * 2;
+        if (Math.abs(d) < THREE.MathUtils.degToRad(SWING.steerMaxAngle)) {
+          const sp = THREE.MathUtils.clamp((vh - SWING.turnSpeedLo) / (SWING.turnSpeedHi - SWING.turnSpeedLo), 0, 1);
+          const maxRate = THREE.MathUtils.degToRad(THREE.MathUtils.lerp(SWING.turnRateSlow, SWING.turnRateFast, sp)) * Math.min(1, im);
+          turn = THREE.MathUtils.clamp(d * SWING.turnGain, -maxRate, maxRate) * dt;
+        }
+      }
+      swingTurnRateDeg = dt > 0 ? THREE.MathUtils.radToDeg(turn / dt) : 0;
+      if (turn !== 0) {
+        const c = Math.cos(turn), s = Math.sin(turn);
+        const vx = player.vel.x, vz = player.vel.z;
+        player.vel.x = vx * c + vz * s; player.vel.z = -vx * s + vz * c;
+        const ox = physicsPivotPoint.x - player.pos.x, oz = physicsPivotPoint.z - player.pos.z;
+        physicsPivotPoint.x = player.pos.x + ox * c + oz * s; physicsPivotPoint.z = player.pos.z - ox * s + oz * c;
       }
     }
 
-    const SUB_STEPS = PHYS.subSteps, subDt = dt / SUB_STEPS;
-    let tension = 0, aC = 0;
-    for (let step = 0; step < SUB_STEPS; step++) {
-      // 1) 순수 중력 + 2) 자세별 v² 공기저항
-      player.vel.y -= PHYS.gravity * subDt;
-      physApplyDrag(subDt, false);
-      // 3) 순수 로프 길이 단축 (이미 minRope보다 짧은 줄은 늘리지 않음)
-      if (reelIn) ropeLength = Math.max(Math.min(ropeLength, PHYS.minRope), ropeLength - reelRate * subDt);
-      // 4) 비대칭 스프링-댐퍼 장력 — [v8] 기준점은 physicsPivotPoint (렌더링 줄은 visualAnchorPoint)
-      const hx = player.pos.x - physicsPivotPoint.x, hy = player.pos.y + 1.45 - physicsPivotPoint.y, hz = player.pos.z - physicsPivotPoint.z;
-      const dist = Math.max(0.001, Math.hypot(hx, hy, hz));
-      const dx = -hx / dist, dy = -hy / dist, dz = -hz / dist;          // 손 → 피벗 단위벡터
-      const stretch = dist - ropeLength;
-      if (stretch > 0) {
-        const radialV = player.vel.x * dx + player.vel.y * dy + player.vel.z * dz;   // (+) 피벗으로 접근
-        const spring = PHYS.springK * stretch;
-        const damper = radialV < 0 ? -PHYS.damperC * radialV : -PHYS.damperC * 0.25 * radialV;
-        tension = Math.max(0, spring + damper);
-        const acc = tension / PHYS.mass * subDt;
-        player.vel.x += dx * acc; player.vel.y += dy * acc; player.vel.z += dz * acc;
-        const tvx = player.vel.x - dx * radialV, tvy = player.vel.y - dy * radialV, tvz = player.vel.z - dz * radialV;
-        aC = (tvx * tvx + tvy * tvy + tvz * tvz) / Math.max(dist, 1.0);          // a_c = v_t² / r
-      } else { tension = 0; aC = 0; }
+    // ── [v10-2] PULL(E) = 줄 감기. 램프로 부드럽게 시작, 각운동량 보존으로 감을수록 가속 ──
+    swingReel += ((pullHeld ? 1 : 0) - swingReel) * (1 - Math.exp(-SWING.reelRamp * dt));
+    const reelRate = PHYS.reelSpeed * SWING.reelMul * swingReel;
+
+    // ── [v10-3] 위치 투영(inelastic) 로프 구속 + 묵직한 중력 ──
+    const SUB = SWING.subSteps, sd = dt / SUB;
+    let sumVr = 0, aC = 0;
+    for (let step = 0; step < SUB; step++) {
+      player.vel.y -= PHYS.gravity * SWING.gravityMul * sd;
+      physApplyDrag(sd, false);
+      if (reelRate > 0.01) {
+        const L0 = ropeLength;
+        ropeLength = Math.max(Math.min(ropeLength, PHYS.minRope), ropeLength - reelRate * sd);
+        if (ropeLength < L0) {
+          const hx = player.pos.x - physicsPivotPoint.x, hy = player.pos.y + 1.45 - physicsPivotPoint.y, hz = player.pos.z - physicsPivotPoint.z;
+          const dist = Math.max(0.001, Math.hypot(hx, hy, hz));
+          if (dist > L0 - 0.6) {     // 줄이 팽팽할 때만: 접선 속도 × (L0/L) (각운동량 보존)
+            const nx = hx / dist, ny = hy / dist, nz = hz / dist, vr = player.vel.x * nx + player.vel.y * ny + player.vel.z * nz;
+            const k = Math.min(1.12, L0 / ropeLength);
+            player.vel.x = nx * vr + (player.vel.x - nx * vr) * k;
+            player.vel.y = ny * vr + (player.vel.y - ny * vr) * k;
+            player.vel.z = nz * vr + (player.vel.z - nz * vr) * k;
+          }
+        }
+      }
+      player.pos.addScaledVector(player.vel, sd);
+      {
+        const hx = player.pos.x - physicsPivotPoint.x, hy = player.pos.y + 1.45 - physicsPivotPoint.y, hz = player.pos.z - physicsPivotPoint.z;
+        const dist = Math.max(0.001, Math.hypot(hx, hy, hz));
+        if (dist > ropeLength) {
+          const nx = hx / dist, ny = hy / dist, nz = hz / dist, over = dist - ropeLength;
+          player.pos.x -= nx * over; player.pos.y -= ny * over; player.pos.z -= nz * over;   // 위치 투영
+          const vr = player.vel.x * nx + player.vel.y * ny + player.vel.z * nz;               // (+) 바깥 방향
+          if (vr > 0) { player.vel.x -= nx * vr; player.vel.y -= ny * vr; player.vel.z -= nz * vr; sumVr += vr; }
+          const tv2 = player.vel.x * player.vel.x + player.vel.y * player.vel.y + player.vel.z * player.vel.z;
+          aC = tv2 / Math.max(ropeLength, 1.0);
+        }
+      }
       const curTotalSpd = player.vel.length();
       if (curTotalSpd > msm2PeakSwingSpeed) msm2PeakSwingSpeed = curTotalSpd;
-      player.pos.addScaledVector(player.vel, subDt);
-      // 지면 충돌만 처리 (바닥 자동 회피/부양 없음)
       if (player.pos.y < GROUND_Y) { player.pos.y = GROUND_Y; if (player.vel.y < 0) player.vel.y = 0; }
     }
+    const tension = dt > 0 ? PHYS.mass * sumVr / dt : 0;     // 제거된 반경 임펄스로 장력 추정
     PHYS_TEL.tension = tension; PHYS_TEL.centripetal = aC;
     PHYS_TEL.gForce = tension > 0 ? (tension / PHYS.mass) / PHYS.gravity : 1.0;
 
-    // ── [v8-3] 스윙 페이즈: ATTACH → DOWNSWING → APEX(최저점) → UPSWING(킥오프) ──
+    // ── 스윙 페이즈: ATTACH → DOWNSWING → APEX(최저점) → UPSWING(킥오프) ──
     {
       const handY = player.pos.y + 1.45;
       const ry = handY - physicsPivotPoint.y;
@@ -6591,15 +6603,12 @@ function updatePhysics(dt) {
         if (swingElapsedTime >= SWING.attachTime) swingPhase = SWING_PHASE.DOWNSWING;
       } else if (swingPhase === SWING_PHASE.DOWNSWING) {
         const nadir = swingSawDescent && vy > -0.3 && ry < 0;
-        const fallback = swingElapsedTime > 1.5 && vy > 0.5 && ry < -2.0;   // 내려간 적 없이 올라가는 진입 보정
-        if (nadir || fallback) {
-          swingPhase = SWING_PHASE.APEX; msm2PassedNadir = true; swingApexTimer = SWING.apexWindow;
-        }
+        const fallback = swingElapsedTime > 1.5 && vy > 0.5 && ry < -2.0;
+        if (nadir || fallback) { swingPhase = SWING_PHASE.APEX; msm2PassedNadir = true; swingApexTimer = SWING.apexWindow; }
       } else if (swingPhase === SWING_PHASE.APEX) {
         swingApexTimer -= dt;
         if (swingApexTimer <= 0) swingPhase = SWING_PHASE.UPSWING;
       }
-      // 웹을 쥐고 있지 않으면 킥오프 각도에서 자동 릴리즈 (플레이어가 놓는 경우는 releaseWeb이 같은 각도 기준으로 킥 계산)
       if (!webHeld && swingPhase === SWING_PHASE.UPSWING && vy > 1.0 && angleDeg >= SWING.autoReleaseAngle) {
         releaseWeb(true);
         return;
@@ -6609,12 +6618,21 @@ function updatePhysics(dt) {
   } else if (player.onGround) {
     msm2IsDiving = false;
     msm2TrickSpin = 0;
-    if (inputMag > 0.01) {
-      player.vel.x = THREE.MathUtils.lerp(player.vel.x, inputDir.x * targetGroundSpeed, Math.min(1, (isPOVMode ? 48 : 15) * dt));
-      player.vel.z = THREE.MathUtils.lerp(player.vel.z, inputDir.z * targetGroundSpeed, Math.min(1, (isPOVMode ? 48 : 15) * dt));
+    if (!isPOVMode) {
+      // [v10] 가속도 기반 지상 이동: 즉시 반응하지 않고 질량감 있게 가속/제동
+      const tvx = inputDir.x * targetGroundSpeed, tvz = inputDir.z * targetGroundSpeed;
+      const dvx = tvx - player.vel.x, dvz = tvz - player.vel.z, dl = Math.hypot(dvx, dvz);
+      const against = inputMag > 0.01 && (player.vel.x * tvx + player.vel.z * tvz) < 0;
+      const a = inputMag > 0.01 ? (against ? GROUND.brake : GROUND.accel) : GROUND.decel;
+      const stp = a * dt;
+      if (dl <= stp) { player.vel.x = tvx; player.vel.z = tvz; }
+      else { player.vel.x += dvx / dl * stp; player.vel.z += dvz / dl * stp; }
+    } else if (inputMag > 0.01) {
+      player.vel.x = THREE.MathUtils.lerp(player.vel.x, inputDir.x * targetGroundSpeed, Math.min(1, 48 * dt));
+      player.vel.z = THREE.MathUtils.lerp(player.vel.z, inputDir.z * targetGroundSpeed, Math.min(1, 48 * dt));
     } else {
-      player.vel.x *= Math.pow(isPOVMode ? 1e-9 : 0.0008, dt);
-      player.vel.z *= Math.pow(isPOVMode ? 1e-9 : 0.0008, dt);
+      player.vel.x *= Math.pow(1e-9, dt);
+      player.vel.z *= Math.pow(1e-9, dt);
       if (Math.hypot(player.vel.x, player.vel.z) < 0.05) { player.vel.x = 0; player.vel.z = 0; }
     }
     player.pos.addScaledVector(player.vel, dt);
@@ -8934,7 +8952,7 @@ function updateCameraAndHUD(dt) {
   if (speedEl) speedEl.innerText = speedKmh;
   if (isSwinging && msm2ApexTimer <= 0) {
     const de_ = document.getElementById('hud-road-detail');
-    if (de_) de_.innerText = `🕸️ ${SWING_PHASE_NAMES[swingPhase]} · pivot ${Math.round(swingPivotBlend * 100)}% | T ${Math.round(PHYS_TEL.tension)} N | ${PHYS_TEL.gForce.toFixed(1)} G | a_c ${PHYS_TEL.centripetal.toFixed(1)} m/s² | v_in ${Math.round(PHYS_TEL.entry * 3.6)} km/h`;
+    if (de_) de_.innerText = `🕸️ ${SWING_PHASE_NAMES[swingPhase]} · turn ${swingTurnRateDeg.toFixed(0)}°/s | T ${Math.round(PHYS_TEL.tension)} N | ${PHYS_TEL.gForce.toFixed(1)} G | a_c ${PHYS_TEL.centripetal.toFixed(1)} m/s² | v_in ${Math.round(PHYS_TEL.entry * 3.6)} km/h`;
   }
   if (altEl) altEl.innerText = Math.max(0, player.pos.y).toFixed(1);
   if (coordsEl) {
