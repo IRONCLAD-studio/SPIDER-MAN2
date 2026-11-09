@@ -5812,8 +5812,13 @@ function createTargetAndWebMarkers() {
 }
 
 // ===== [MSM2 통합] 마블 스파이더맨 2 스타일 웹스윙 물리 + 조작감/카메라 =====
-const MSM2_GRAVITY = 28.5;
-const MSM2_MAX_SPEED_MS = 55.0; // 최고속도 제한: 약 198 km/h
+// ===== 물리 재설계 (실측 분석 데이터 기반, 1:1 스케일) =====
+const MSM2_GRAVITY = 9.81;                 // 실제 중력 (분석표 초기 가속도 ≈ 9 m/s²)
+const MSM2_TERMINAL_V = 48.0;              // 자유낙하 최고 속도 ≈ 48 m/s (172.8 km/h)
+const MSM2_DRAG_K = MSM2_GRAVITY / (MSM2_TERMINAL_V * MSM2_TERMINAL_V);   // 2차 공기저항 a = -k|v|v → 종단속도 48 m/s
+const MSM2_SWING_MAX = 45.0;               // 웹스윙 최고 속도 ≈ 45 m/s (162 km/h), 최저점 R≈45m → 구심가속도 ≈ 45 m/s² (4.6G)
+const MSM2_PUMP_ACCEL = 5.0;               // 어시스트 ON 시 최저점 패시브 가속 (입력 무관)
+const MSM2_MAX_SPEED_MS = 48.0; // 최고속도 제한 = 종단속도
 const MSM2_ASSIST_RANGE = 98.0;
 const MSM2_RAW_RANGE = 68.0;
 let msm2SwingTime = 0, msm2EntrySpeed = 0, msm2PeakSwingSpeed = 0;
@@ -5923,7 +5928,7 @@ function shootWeb() {
     player.onGround = false;
     player.pos.y += 0.25;
     // 퀵 휩: 높이 솟구치지 않고 낮고 빠르게 앞으로 튕겨 나간다
-    player.vel.y = msm2QuickWhip ? (webSwingAssist ? 9.5 : 8.0) : (webSwingAssist ? 13.5 : 11.0);
+    player.vel.y = msm2QuickWhip ? (webSwingAssist ? 8.0 : 6.5) : (webSwingAssist ? 12.0 : 10.0);
     const launchSpd = Math.max(Math.hypot(player.vel.x, player.vel.z),
       msm2QuickWhip ? (webSwingAssist ? 27.0 : 21.0) : (webSwingAssist ? 22.0 : 17.0));
     player.vel.x = forward.x * launchSpd;
@@ -5938,9 +5943,6 @@ function shootWeb() {
         const conserved = Math.max(player.vel.length(), speedBefore * (msm2IsDiving ? 0.98 : 0.94));
         player.vel.setLength(Math.min(msm2SpeedCap(), conserved));
       }
-    }
-    if (webSwingAssist && Math.hypot(player.vel.x, player.vel.z) < 18.0) {
-      player.vel.addScaledVector(forward, msm2QuickWhip ? 14.0 : 10.0);
     }
   }
   if (slingState.carryT > 0 && player.vel.length() > 0.1) { const keep = Math.min(msm2SpeedCap(), speedBefore * 0.97); if (player.vel.length() < keep) player.vel.setLength(keep); }
@@ -5970,27 +5972,12 @@ function releaseWeb(giveBoost) {
   const fwdDir = hSpeed > 1.0
     ? new THREE.Vector3(player.vel.x, 0, player.vel.z).normalize()
     : new THREE.Vector3(Math.sin(cameraYaw), 0, Math.cos(cameraYaw)).normalize();
-  if (isRisingPhase && swingAngleDeg >= 16 && swingAngleDeg <= 62) {
-    // 골든 타이밍: 최저점 통과 후 상승 아크에서 놓으면 슬링샷 가속
-    const whip = msm2QuickWhip;
-    const apexBoost = Math.min(msm2SpeedCap(), Math.max(hSpeed * (whip ? 1.22 : 1.18), msm2PeakSwingSpeed * (whip ? 1.14 : 1.12)));
-    player.vel.x = fwdDir.x * apexBoost;
-    player.vel.z = fwdDir.z * apexBoost;
-    // 퀵 휩은 낮고 평평한 고속 궤적, 일반 스윙은 높이 솟구치는 슬링샷
-    player.vel.y = whip ? Math.max(player.vel.y + 4.0, 8.5) : Math.max(player.vel.y * 1.15 + 9.5, 16.5);
-    msm2TrickSpin = whip ? 0 : Math.PI * 2;
-    msm2ApexStatusText = whip
-      ? `⚡ QUICK WHIP! (${Math.round(player.vel.length() * 3.6)} km/h)`
-      : `⚡ PERFECT APEX RELEASE! (${Math.round(player.vel.length() * 3.6)} km/h)`;
-    msm2ApexTimer = whip ? 1.4 : 1.8;
-  } else {
-    const stdMult = webSwingAssist ? 1.10 : 1.04;
-    player.vel.x *= stdMult;
-    player.vel.z *= stdMult;
-    player.vel.y = Math.max(player.vel.y + 6.5, 12.0);
-    msm2ApexStatusText = `🕸️ WEB RELEASE (${Math.round(player.vel.length() * 3.6)} km/h)`;
-    msm2ApexTimer = 1.1;
-  }
+  // 물리 기반 릴리즈: 속도를 증폭하지 않고 현재 속도 벡터 그대로 탄도 비행으로 전환한다.
+  const relSpd = player.vel.length();
+  const apex = isRisingPhase && swingAngleDeg >= 16 && swingAngleDeg <= 62;
+  msm2TrickSpin = (apex && !msm2QuickWhip) ? Math.PI * 2 : 0;
+  msm2ApexStatusText = apex ? `⚡ APEX RELEASE (${Math.round(relSpd * 3.6)} km/h)` : `🕸️ WEB RELEASE (${Math.round(relSpd * 3.6)} km/h)`;
+  msm2ApexTimer = apex ? 1.6 : 1.1;
 }
 
 function applyWeatherTheme(mode) {
@@ -6339,7 +6326,7 @@ function triggerJump() {
   if (wallState.active) { wallJump(player.vel.y > 4); return; }
   if (isSwinging) {
     releaseWeb(true);
-    player.vel.y = Math.max(player.vel.y + 5.5, 18.5);
+    player.vel.y = player.vel.y + 4.0;
     msm2TrickSpin = Math.PI * 2;
     player.onGround = false;
   } else if (player.onGround) {
@@ -6351,12 +6338,12 @@ function triggerJump() {
       const burst = Math.max(Math.hypot(player.vel.x, player.vel.z) * 1.35, 28.0);
       player.vel.x = fwd.x * burst;
       player.vel.z = fwd.z * burst;
-      player.vel.y = 17.5;
+      player.vel.y = 11.0;
       msm2TrickSpin = Math.PI * 2;
       msm2ApexStatusText = `🚀 POINT LAUNCH BOOST!`;
       msm2ApexTimer = 1.5;
     } else {
-      player.vel.y = isRunning ? 15.0 : 11.5;
+      player.vel.y = isRunning ? 7.0 : 5.5;
       if (isRunning) { player.vel.x *= 1.18; player.vel.z *= 1.18; }
     }
   }
@@ -6386,7 +6373,7 @@ function triggerWebZip() {
   if (horizontalPull.lengthSq() > 0.001) horizontalPull.normalize();
   player.vel.x = horizontalPull.x * pullSpeed;
   player.vel.z = horizontalPull.z * pullSpeed;
-  player.vel.y = Math.min(24.0, Math.max(17.0, player.vel.y * 0.25 + 17.0 + Math.max(0, pullDir.y) * 5.0));
+  player.vel.y = Math.min(14.0, Math.max(9.0, player.vel.y * 0.25 + 9.0 + Math.max(0, pullDir.y) * 3.0));
   msm2TrickSpin = Math.PI * 2;
   msm2ApexStatusText = `🕸️ WEB PULL LAUNCH (${Math.round(player.vel.length() * 3.6)} km/h)`;
   msm2ApexTimer = 1.4;
@@ -6411,11 +6398,11 @@ function updatePhysics(dt) {
   if (isSwinging) {
     msm2SwingTime += dt;
     msm2IsDiving = false;
-    const steerDir = inputMag > 0.05 ? inputDir : forward;
     const SUB_STEPS = 6;
     const subDt = dt / SUB_STEPS;
     for (let step = 0; step < SUB_STEPS; step++) {
       player.vel.y -= MSM2_GRAVITY * subDt;
+      { const sp_ = player.vel.length(); if (sp_ > 0.01) player.vel.multiplyScalar(Math.max(0, 1 - MSM2_DRAG_K * sp_ * subDt)); }   // 2차 공기저항
       const handPos = new THREE.Vector3(player.pos.x, player.pos.y + 1.45, player.pos.z);
       const toPlayer = new THREE.Vector3().subVectors(handPos, webAnchor);
       const curDist = Math.max(0.1, toPlayer.length());
@@ -6432,46 +6419,14 @@ function updatePhysics(dt) {
       if (swingTangentVel.lengthSq() > 0.25 && handPos.y < webAnchor.y - 1.5) {
         swingTangentVel.normalize();
         const nadirFactor = THREE.MathUtils.clamp(-ropeDir.y, 0.2, 1.0);
-        const pumpAccel = webSwingAssist
-          ? (inputMag > 0.05 ? 13.5 : 7.0) * nadirFactor
-          : (inputMag > 0.05 ? 9.0 : 3.5) * nadirFactor;
+        const pumpAccel = (webSwingAssist ? MSM2_PUMP_ACCEL : 0) * nadirFactor;   // 조이스틱/키 입력과 무관
         // 쇼트 아크: 반지름이 작을수록 진자 각가속이 커져 '짧고 빠른 휩' 궤적이 된다
         const whipGain = msm2QuickWhip
           ? 1.0 + (THREE.MathUtils.clamp(QW_REF_R / curDist, 1.0, 2.4) - 1.0) * (webSwingAssist ? 1.0 : 0.6)
           : 1.0;
         player.vel.addScaledVector(swingTangentVel, pumpAccel * whipGain * subDt);
       }
-      // 코너 테더 턴: 로프 접선 방향으로 조향
-      const steerTangent = steerDir.clone().addScaledVector(ropeDir, -steerDir.dot(ropeDir));
-      if (steerTangent.lengthSq() > 0.001) {
-        steerTangent.normalize();
-        const cornerForce = Math.abs(rawSideInput) > 0.25 ? 15.0 : 8.0;
-        const steerAccel = webSwingAssist
-          ? (inputMag > 0.05 ? cornerForce : 4.0)
-          : (inputMag > 0.05 ? cornerForce * 0.65 : 0);
-        player.vel.addScaledVector(steerTangent, steerAccel * subDt);
-      }
-
-      // 조이스틱 우선 조향: 관성보다 입력 방향을 더 강하게 반영한다.
-      // 수평 입력 방향으로 속도를 부드럽게 돌리되, 수직 속도와 로프 장력은 유지한다.
-      if (inputMag > 0.12) {
-        const desiredHorizontal = new THREE.Vector3(inputDir.x, 0, inputDir.z);
-        if (desiredHorizontal.lengthSq() > 0.001) {
-          desiredHorizontal.normalize();
-          const horizontalSpeed = Math.hypot(player.vel.x, player.vel.z);
-          const steerStrength = webSwingAssist ? 0.92 : 0.62;
-          const turnBlend = 1.0 - Math.exp(-steerStrength * subDt * 8.0);
-          if (horizontalSpeed > 2.0) {
-            const currentHorizontal = new THREE.Vector3(player.vel.x, 0, player.vel.z).normalize();
-            currentHorizontal.lerp(desiredHorizontal, turnBlend).normalize();
-            player.vel.x = currentHorizontal.x * horizontalSpeed;
-            player.vel.z = currentHorizontal.z * horizontalSpeed;
-          }
-          const joystickAccel = webSwingAssist ? 24.0 : 15.0;
-          player.vel.x += desiredHorizontal.x * joystickAccel * inputMag * subDt;
-          player.vel.z += desiredHorizontal.z * joystickAccel * inputMag * subDt;
-        }
-      }
+      // [제거됨] 스윙 중 조이스틱/키 입력 조향 — 방향은 발사 시 카메라 방향과 앵커 위치, 진자 물리로만 결정된다.
       // 지면 스키밍 (Ground Skimming): 최저점 부근에서 줄을 자동으로 감고 수직 부양력을 넣어
       // 아스팔트 위 1~2m를 스치듯 지나가게 한다.
       if (webSwingAssist) {
@@ -6488,7 +6443,7 @@ function updatePhysics(dt) {
         const feet = player.pos.y - GROUND_Y;
         if (feet < SKIM_SOFT_FEET && player.vel.y < 3.0) {
           const k = THREE.MathUtils.clamp((SKIM_SOFT_FEET - feet) / (SKIM_SOFT_FEET - SKIM_MIN_FEET), 0, 1);
-          player.vel.y += 38.0 * k * subDt; // 수직 부양력
+          player.vel.y += 14.0 * k * subDt; // 수직 부양력
         }
       }
       player.pos.addScaledVector(player.vel, subDt);
@@ -6505,6 +6460,7 @@ function updatePhysics(dt) {
         if (radialSpeed > 0) player.vel.addScaledVector(normal, -radialSpeed);
       }
     }
+    if (player.vel.length() > MSM2_SWING_MAX) player.vel.setLength(MSM2_SWING_MAX);   // 스윙 최고 속도 45 m/s
     // 쇼트 아크 자동 릴리즈: 최저점을 지난 뒤 ~42° 상승 구간에서 튕겨 나간다
     if (msm2QuickWhip && msm2PassedNadir && msm2SwingTime > 0.28 && player.vel.y > 0) {
       const qh = new THREE.Vector3(player.pos.x, player.pos.y + 1.45, player.pos.z).sub(webAnchor);
@@ -6539,7 +6495,7 @@ function updatePhysics(dt) {
   } else {
     // 공중 + 급강하 다이빙 (S/조이스틱 아래, 고도 16m 이상)
     msm2IsDiving = (player.pos.y > 16.0 && player.vel.y < 2.0 && rawForwardInput < -0.35);
-    player.vel.y -= MSM2_GRAVITY * (msm2IsDiving ? 1.68 : 1.0) * (slingState.glideT > 0 ? 0.28 : 1.0) * dt;
+    player.vel.y -= MSM2_GRAVITY * (msm2IsDiving ? 1.3 : 1.0) * (slingState.glideT > 0 ? 0.28 : 1.0) * dt;
     if (msm2IsDiving) {
       player.vel.addScaledVector(forward, 12.0 * dt);
     } else if (inputMag > 0.01) {
@@ -6547,7 +6503,7 @@ function updatePhysics(dt) {
       player.vel.x = THREE.MathUtils.lerp(player.vel.x, inputDir.x * desiredSpd, 2.6 * dt);
       player.vel.z = THREE.MathUtils.lerp(player.vel.z, inputDir.z * desiredSpd, 2.6 * dt);
     }
-    player.vel.multiplyScalar(1.0 - 0.005 * dt);
+    { const sp_ = player.vel.length(); player.vel.multiplyScalar(Math.max(0, 1 - MSM2_DRAG_K * sp_ * dt)); }   // 2차 공기저항 (종단속도 48 m/s)
     player.pos.addScaledVector(player.vel, dt);
     if (player.pos.y <= GROUND_Y && player.vel.y <= 0) {
       player.pos.y = GROUND_Y;
