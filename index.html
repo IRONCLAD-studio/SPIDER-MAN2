@@ -2419,7 +2419,7 @@ canvas { display: block; width: 100%; height: 100%; }
 <div id="start-overlay">
   <div class="start-card">
     <div class="start-badge">MANHATTAN 1:1 · REAL-SCALE MAP</div>
-    <div id="game-version" class="game-version">v7</div>
+    <div id="game-version" class="game-version">v8</div>
     <h1 class="start-title">MANHATTAN 1:1 WEB-SWING</h1>
     <div class="start-subtitle">실제 뉴욕 맨해튼 크기(1유닛 = 1m) 그대로의 건물 약 4.6만 동 · 삼각형 366만 개 · 지형 고저차까지 반영한 병합 맵 (001~006)</div>
     <div class="start-controls-guide">
@@ -2972,7 +2972,7 @@ function nmMakeAnchors(col) {
     if ((cx - ex) * nx + (cz - ez) * nz > 0) { nx = -nx; nz = -nz; }
     for (const y of lv) {
       const sp = new THREE.Vector3(ex + nx * 0.22, y, ez + nz * 0.22);
-      sp.userData = { name: col.name, ringXZ: ring, buildingHeight: col.maxY, isBuildingAnchor: true };
+      sp.userData = { name: col.name, ringXZ: ring, buildingHeight: col.maxY, isBuildingAnchor: true, nx, nz };
       const k = Math.floor(sp.x / SPATIAL_CELL) + ',' + Math.floor(sp.z / SPATIAL_CELL); let l = M.get(k); if (!l) M.set(k, l = []); l.push(sp);
     }
   }
@@ -3343,6 +3343,7 @@ void shopCell(float u, float y, float w, float gH, float SW, out float h, out ve
           float hv2 = fract(sin(dot(ci + seed * 7.0 + 3.1, vec2(39.346, 11.135))) * 24634.6345);
           vec3 wallC = gWC * (0.86 + 0.28 * fbF) * dkF;
           vec3 glassC = gGC * (pFam < 0.5 ? 1.7 : 1.1) * (0.75 + 0.55 * hv) * dkF;
+          glassC = mix(glassC, mix(vec3(0.20, 0.19, 0.17), vec3(1.0, 0.78, 0.46) * 0.55, step(0.68, hv2)) * 0.8, 0.72);   // v8: 근거리 창 톤과 일치
           farC = mix(avg, mix(wallC, glassC, farWin), lodF);
           totalEmissiveRadiance += vec3(1.0, 0.80, 0.52) * farWin * step(0.68, hv2) * uWinGlow * 0.55 * lodF;
           farWin *= lodF;
@@ -3486,12 +3487,16 @@ void shopCell(float u, float y, float w, float gH, float SW, out float h, out ve
     glassC = mix(glassC, vec3(0.42, 0.38, 0.30) * (0.55 + 0.4 * uvW.y), blind * 0.8);
     float cool = step(pFam < 0.5 ? 0.45 : 0.82, h21(cellId + 3.7));
     vec3 lc = mix(vec3(1.0, 0.78, 0.46), vec3(0.78, 0.9, 1.0), cool); if (ground) lc = vec3(1.0, 0.82, 0.55) * 1.25;
-    if (cdist < 70.0 && gls > 0.01) {
-      vec3 dl_ = vec3(dot(vv, T3) / 3.2, vv.y / 3.0, abs(dot(vv, wn)) / 4.5);
-      vec3 im_ = imap(uvW, dl_, cellId + seed, ground ? max(lit, 0.22 * (1.0 - uWinGlow)) : lit, lc);
-      float imK = (1.0 - smoothstep(30.0, 70.0, cdist)) * (1.0 - smoothstep(0.025, 0.07, w));
+    {   // v8: 실내 평균색은 거리와 무관하게 항상 적용 → 인테리어 매핑 범위 경계에서 창 색이 갑자기 바뀌는(팝인) 현상 제거
       vec3 imAvg = mix(vec3(0.20, 0.19, 0.17), lc * 0.55, lit) * 0.8;
-      glassC = mix(glassC, mix(imAvg, im_, imK), 0.8 * (1.0 - blind));
+      vec3 imC = imAvg;
+      if (cdist < 70.0 && gls > 0.01) {
+        vec3 dl_ = vec3(dot(vv, T3) / 3.2, vv.y / 3.0, abs(dot(vv, wn)) / 4.5);
+        vec3 im_ = imap(uvW, dl_, cellId + seed, ground ? max(lit, 0.22 * (1.0 - uWinGlow)) : lit, lc);
+        float imK = (1.0 - smoothstep(30.0, 70.0, cdist)) * (1.0 - smoothstep(0.025, 0.07, w));
+        imC = mix(imAvg, im_, imK);
+      }
+      glassC = mix(glassC, imC, 0.8 * (1.0 - blind));
     }
     // 유리 전용 BRDF: 벽과 분리된 재질. 평평한 법선 + 프레넬 하늘 반사 + 실내 깊이. 멀수록 부드럽게 평균 반사로 수렴(깜빡임 방지).
     float ndv = clamp(abs(dot(-vv, wn)), 0.0, 1.0);
@@ -3898,7 +3903,7 @@ function fcUpdate(dt) {
   FC.acc += dt; if (FC.acc < 0.5) return; FC.acc = 0;
   const cx = camera.position.x, cz = camera.position.z;
   if (Math.hypot(cx - FC.corCx, cz - FC.corCz) > 45 || (FC.corT++ === 6)) fcCornerBuild(cx, cz);
-  const R = Math.min(260, Math.max(120, gfxEffDetail() * 0.4)), n = Math.ceil(R / SPATIAL_CELL) + 1, gx = Math.floor(cx / SPATIAL_CELL), gz = Math.floor(cz / SPATIAL_CELL);
+  const R = Math.min(600, Math.max(120, gfxEffDetail() * 0.4)), n = Math.ceil(R / SPATIAL_CELL) + 1, gx = Math.floor(cx / SPATIAL_CELL), gz = Math.floor(cz / SPATIAL_CELL);
   let built = 0;
   scan: for (let r = 0; r <= n; r++) for (let a = -r; a <= r; a++) for (let b = -r; b <= r; b++) {
     if (Math.max(Math.abs(a), Math.abs(b)) !== r) continue;
@@ -5367,7 +5372,11 @@ let cameraPitch = 0.22;
 let isRunning = true;
 let isSwinging = false;
 let webHeld = false; // WEB 버튼/F키를 누르고 있는 동안 true — 누르고 있으면 줄이 절대 끊기지 않음
-const webAnchor = new THREE.Vector3();
+const webAnchor = new THREE.Vector3();            // = visualAnchorPoint (실제 벽면 부착점: 로프 렌더링/손 IK 전용)
+const visualAnchorPoint = webAnchor;             // [v8] 시각적 부착점 (alias)
+const physicsPivotPoint = new THREE.Vector3();   // [v8] 진자 운동·장력 계산용 가상 피벗 (매 프레임 보간)
+const swingBasePivot = new THREE.Vector3();      // [v8] 스윙 시작 시 계산된 보정 피벗 (보간 시작점)
+const swingWallNormal = new THREE.Vector3(0, 0, 1);
 let ropeLength = 0;
 let currentBestSpot = null;
 
@@ -5830,6 +5839,51 @@ const PHYS = {
   rollStartAcc: 25.0, rollGain: 0.25, rollMaxDeg: 14.0
 };
 const PHYS_TEL = { tension: 0, centripetal: 0, gForce: 1, entry: 0 };   // 실시간 텔레메트리
+
+// ===== [v8] Insomniac식 스윙 파라미터 =====
+const SWING = {
+  // 1) 물리 피벗 오프셋 (벽 법선 방향으로 가상 피벗을 도로 쪽으로 이동)
+  pivotOffsetRatio: 0.85,   // 플레이어~벽 수직거리 × 이 비율만큼 피벗을 벽 밖으로 이동 (1.0 = 플레이어 바로 위)
+  pivotOffsetMin: 3.0,      // m  최소 오프셋
+  pivotOffsetMax: 32.0,     // m  최대 오프셋
+  pivotMinRope: 14.0,       // m  오프셋 적용 후 최소 물리 로프 길이 (너무 짧은 진자 방지)
+  // 2) 동적 피벗 블렌딩 (physicsPivot → visualAnchor)
+  blendStart: 0.70,         // s  이 시간부터 실제 부착점으로 수렴 시작
+  blendEnd: 2.60,           // s  이 시간에 100% 수렴
+  blendRiseRate: 2.4,       // 1/s  수렴 속도 (지수 보간)
+  blendFallRate: 1.2,       // 1/s  조향을 풀었을 때 되돌아가는 속도
+  steerDeadzone: 0.35,      // 조향 입력 데드존
+  steerBlendGain: 0.90,     // 조향 최대 입력 시 목표 블렌드 비율
+  nadirBlendFloor: 0.45,    // 최저점 통과 후 최소 블렌드
+  steerAccel: 9.0,          // m/s²  스윙 중 좌우 조향 가속도 (속도에 수직 → 에너지 증가 없음)
+  // 3) 페이즈 / 킥오프
+  attachTime: 0.18,         // s  ATTACH 페이즈 길이
+  apexWindow: 0.22,         // s  최저점(APEX) 페이즈 길이
+  autoReleaseAngle: 42.0,   // deg  웹 홀드 안 할 때 이 각도 이상 상승 시 자동 킥오프
+  kickAngleCenter: 45.0,    // deg  킥 효율 최대 각도
+  kickAngleRange: 32.0,     // deg  이 범위 밖이면 킥 효율 0.35까지 감소
+  kickFwd: 5.0,             // m/s  전방 추가 임펄스
+  kickUp: 6.0,              // m/s  상방 추가 임펄스
+  kickQuickScale: 0.65,     // 퀵 휩(짧은 줄)일 때 킥 배율
+  kickWindow: 0.14,         // s  다리를 차는 동안 임펄스가 나눠 적용되는 시간
+  kickImmediate: 0.55       // 릴리즈 순간 즉시 적용되는 임펄스 비율 (나머지는 kickWindow 동안)
+};
+const SWING_PHASE = { NONE: 0, ATTACH: 1, DOWNSWING: 2, APEX: 3, UPSWING: 4 };
+const SWING_PHASE_NAMES = ['-', 'ATTACH', 'DOWNSWING', 'APEX', 'UPSWING+KICK'];
+let swingPhase = SWING_PHASE.NONE, swingElapsedTime = 0, swingPivotBlend = 0, swingSteerSm = 0;
+let swingSawDescent = false, swingApexTimer = 0;
+const swingKick = { active: false, t: 0, remaining: 0, imp: new THREE.Vector3(), q: 0 };
+
+// 4) 속도 기반 동적 카메라
+const CAMV = {
+  v0: 12.0, v1: 62.0,            // m/s  이 구간에서 0→1 매핑
+  fovBase: 72.0, fovMax: 104.0,  // deg
+  distBase: 4.2, distMax: 8.8,   // m  cameraFollowDistance
+  speedRise: 5.0, speedFall: 1.8,// 1/s  측정 속도 스무딩 (가속은 빠르게, 감속은 천천히)
+  fovRise: 4.5, fovFall: 2.0,    // 1/s
+  distRise: 3.0, distFall: 1.6   // 1/s
+};
+let cameraFollowDistance = CAMV.distBase, cameraSpeedSm = 0;
 function physDragAccel(speed, diving) {
   const cd = diving ? PHYS.cdDiving : PHYS.cdNormal, area = diving ? PHYS.areaDiving : PHYS.areaNormal;
   return (0.5 * PHYS.airDensity * speed * speed * cd * area) / PHYS.mass;   // 항력 가속도 (m/s²)
@@ -5940,9 +5994,25 @@ function shootWeb() {
   if (!currentBestSpot) return;
   webAnchor.copy(currentBestSpot);
   const handPos = new THREE.Vector3(player.pos.x, player.pos.y + 1.45, player.pos.z);
-  ropeLength = handPos.distanceTo(webAnchor);
+  const visDist = handPos.distanceTo(webAnchor);   // 시각적 줄 길이 (렌더링용)
+  // [v8] 벽 법선 → 물리 피벗을 벽 밖(도로 쪽)으로 이동: 벽으로 끌려가는 지그재그 제거
+  { const ud = currentBestSpot.userData || {};
+    swingWallNormal.set(ud.nx || 0, 0, ud.nz || 0);
+    if (swingWallNormal.lengthSq() < 0.01) swingWallNormal.set(handPos.x - webAnchor.x, 0, handPos.z - webAnchor.z);
+    if (swingWallNormal.lengthSq() < 1e-4) swingWallNormal.set(0, 0, 1);
+    swingWallNormal.normalize();
+    const lateral = Math.max(0, (handPos.x - webAnchor.x) * swingWallNormal.x + (handPos.z - webAnchor.z) * swingWallNormal.z);
+    let off = THREE.MathUtils.clamp(lateral * SWING.pivotOffsetRatio, SWING.pivotOffsetMin, SWING.pivotOffsetMax);
+    const tryPivot = (o) => swingBasePivot.set(webAnchor.x + swingWallNormal.x * o, webAnchor.y, webAnchor.z + swingWallNormal.z * o);
+    tryPivot(off);
+    for (let i = 0; i < 14 && handPos.distanceTo(swingBasePivot) < SWING.pivotMinRope && off > 0.5; i++) { off *= 0.85; tryPivot(off); }
+    physicsPivotPoint.copy(swingBasePivot);
+    ropeLength = handPos.distanceTo(physicsPivotPoint);   // 물리 로프 길이 = 피벗 기준 (초기 장력 0)
+  }
+  swingPhase = SWING_PHASE.ATTACH; swingElapsedTime = 0; swingPivotBlend = 0; swingSteerSm = 0;
+  swingSawDescent = false; swingApexTimer = 0; swingKick.active = false; swingKick.q = 0;
   // 줄이 짧거나 앵커가 낮으면 쇼트 아크(퀵 휩) 모드
-  msm2QuickWhip = ropeLength < QW_ROPE_MAX || (webAnchor.y - GROUND_Y) < QW_ANCHOR_MAX_H;
+  msm2QuickWhip = visDist < QW_ROPE_MAX || (webAnchor.y - GROUND_Y) < QW_ANCHOR_MAX_H;
   const speedBefore = player.vel.length();
   // 물리 버전: 가짜 전방 발사/속도 보존 보정 없음. 지상에서는 점프 도약만 하고, 이후는 진입 속도(v_entry)와
   // 낙하 고도(Δh)에 따른 에너지 보존 진자 운동 + 스프링-댐퍼 로프 장력만 작용한다.
@@ -5968,9 +6038,12 @@ function releaseWeb(giveBoost) {
   if (!isSwinging) return;
   isSwinging = false;
   webMesh.visible = false;
+  const phaseAtRelease = swingPhase;
+  swingPhase = SWING_PHASE.NONE;
+  swingKick.q = 0;
   if (!giveBoost) return;
   const handPos = new THREE.Vector3(player.pos.x, player.pos.y + 1.45, player.pos.z);
-  const toPlayer = new THREE.Vector3().subVectors(handPos, webAnchor);
+  const toPlayer = new THREE.Vector3().subVectors(handPos, physicsPivotPoint);   // 각도는 물리 피벗 기준
   const dist = Math.max(1.0, toPlayer.length());
   const cosTheta = THREE.MathUtils.clamp(-toPlayer.y / dist, -1.0, 1.0);
   const swingAngleDeg = THREE.MathUtils.radToDeg(Math.acos(cosTheta));
@@ -5979,12 +6052,42 @@ function releaseWeb(giveBoost) {
   const fwdDir = hSpeed > 1.0
     ? new THREE.Vector3(player.vel.x, 0, player.vel.z).normalize()
     : new THREE.Vector3(Math.sin(cameraYaw), 0, Math.cos(cameraYaw)).normalize();
-  // 물리 기반 릴리즈: 속도를 증폭하지 않고 현재 속도 벡터 그대로 탄도 비행으로 전환한다.
   const relSpd = player.vel.length();
   const apex = isRisingPhase && swingAngleDeg >= 16 && swingAngleDeg <= 62;
+  // ── [v8] 킥오프 임펄스: UPSWING에서 놓을 때만, 각도가 ~45°에 가까울수록 강하게 ──
+  let q = 0;
+  if ((phaseAtRelease === SWING_PHASE.UPSWING || phaseAtRelease === SWING_PHASE.APEX) && player.vel.y > -1.0) {
+    const off = Math.abs(swingAngleDeg - SWING.kickAngleCenter) / SWING.kickAngleRange;
+    q = THREE.MathUtils.lerp(1.0, 0.35, THREE.MathUtils.clamp(off, 0, 1));
+    if (phaseAtRelease === SWING_PHASE.APEX) q *= 0.5;
+    if (msm2QuickWhip) q *= SWING.kickQuickScale;
+    q *= THREE.MathUtils.clamp(relSpd / 20.0, 0.5, 1.2);
+  }
+  if (q > 0.01) {
+    swingKick.imp.set(fwdDir.x * SWING.kickFwd * q, SWING.kickUp * q, fwdDir.z * SWING.kickFwd * q);
+    const first = SWING.kickImmediate;
+    player.vel.addScaledVector(swingKick.imp, first);          // 발차기 순간 즉시 임펄스
+    swingKick.remaining = 1.0 - first;                          // 나머지는 다리가 뻗는 동안 분산
+    swingKick.t = 0; swingKick.active = true; swingKick.q = q;  // q → 애니메이션 킥 트리거
+    player.onGround = false;
+  }
   msm2TrickSpin = (apex && !msm2QuickWhip) ? Math.PI * 2 : 0;
-  msm2ApexStatusText = apex ? `⚡ APEX RELEASE (${Math.round(relSpd * 3.6)} km/h)` : `🕸️ WEB RELEASE (${Math.round(relSpd * 3.6)} km/h)`;
-  msm2ApexTimer = apex ? 1.6 : 1.1;
+  const shown = player.vel.length();
+  msm2ApexStatusText = q > 0.6 ? `⚡ KICK-OFF! (${Math.round(shown * 3.6)} km/h)` : apex ? `⚡ APEX RELEASE (${Math.round(shown * 3.6)} km/h)` : `🕸️ WEB RELEASE (${Math.round(shown * 3.6)} km/h)`;
+  msm2ApexTimer = (apex || q > 0.6) ? 1.6 : 1.1;
+}
+
+// [v8] 킥 임펄스 후반부 분산 적용 (공중 프레임마다 호출)
+function applySwingKick(dt) {
+  if (!swingKick.active) return;
+  swingKick.t += dt;
+  if (swingKick.t > 0.5 || swingKick.remaining <= 1e-4) { swingKick.active = false; return; }
+  const f = Math.min(swingKick.remaining, dt / SWING.kickWindow * (1.0 - SWING.kickImmediate));
+  const before = player.vel.length();
+  player.vel.addScaledVector(swingKick.imp, f);
+  swingKick.remaining -= f;
+  const cap = Math.max(msm2SpeedCap(), before);   // 기존 속도는 깎지 않고, 킥으로 인한 과속만 억제
+  if (player.vel.length() > cap) player.vel.setLength(cap);
 }
 
 function applyWeatherTheme(mode) {
@@ -6403,23 +6506,55 @@ function updatePhysics(dt) {
 
   if (isSwinging) {
     msm2SwingTime += dt;
+    swingElapsedTime = msm2SwingTime;
     msm2IsDiving = false;
     const reelIn = (keys.w || joyInput.y > 0.35);
+
+    // ── [v8-2] 동적 피벗 블렌딩: 시간 경과 / 강한 조향 / 최저점 통과 → physicsPivot이 visualAnchor로 수렴 ──
+    swingSteerSm += (rawSideInput - swingSteerSm) * (1 - Math.exp(-8 * dt));
+    const steerAbs = Math.abs(swingSteerSm);
+    const sstep = (a, b, x) => { const t = THREE.MathUtils.clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+    const tTime = sstep(SWING.blendStart, SWING.blendEnd, swingElapsedTime);
+    const tSteer = (steerAbs > SWING.steerDeadzone && swingElapsedTime > 0.25)
+      ? THREE.MathUtils.clamp((steerAbs - SWING.steerDeadzone) / (1 - SWING.steerDeadzone), 0, 1) * SWING.steerBlendGain : 0;
+    const tPhase = msm2PassedNadir ? SWING.nadirBlendFloor : 0;
+    const blendTarget = Math.max(tTime, tSteer, tPhase);
+    const blendRate = blendTarget > swingPivotBlend ? SWING.blendRiseRate : SWING.blendFallRate;
+    swingPivotBlend += (blendTarget - swingPivotBlend) * (1 - Math.exp(-blendRate * dt));
+    {
+      const hx0 = player.pos.x, hy0 = player.pos.y + 1.45, hz0 = player.pos.z;
+      const dBefore = Math.hypot(hx0 - physicsPivotPoint.x, hy0 - physicsPivotPoint.y, hz0 - physicsPivotPoint.z);
+      const e = swingPivotBlend * swingPivotBlend * (3 - 2 * swingPivotBlend);
+      physicsPivotPoint.lerpVectors(swingBasePivot, visualAnchorPoint, e);
+      const dAfter = Math.hypot(hx0 - physicsPivotPoint.x, hy0 - physicsPivotPoint.y, hz0 - physicsPivotPoint.z);
+      ropeLength = Math.max(1.0, ropeLength + (dAfter - dBefore));   // 피벗 이동으로 장력이 튀지 않도록 로프 길이 동기화
+    }
+
+    // ── 좌우 조향: 속도에 수직인 가속도만 가해 에너지 증가 없이 궤적만 휘게 함 ──
+    if (Math.abs(swingSteerSm) > 0.05) {
+      const hs0 = Math.hypot(player.vel.x, player.vel.z);
+      if (hs0 > 3.0) {
+        const a = SWING.steerAccel * swingSteerSm * dt;
+        player.vel.x += (-player.vel.z / hs0) * a;
+        player.vel.z += ( player.vel.x / hs0) * a;
+      }
+    }
+
     const SUB_STEPS = PHYS.subSteps, subDt = dt / SUB_STEPS;
     let tension = 0, aC = 0;
     for (let step = 0; step < SUB_STEPS; step++) {
       // 1) 순수 중력 + 2) 자세별 v² 공기저항
       player.vel.y -= PHYS.gravity * subDt;
       physApplyDrag(subDt, false);
-      // 3) 순수 로프 길이 단축
-      if (reelIn) ropeLength = Math.max(PHYS.minRope, ropeLength - PHYS.reelSpeed * subDt);
-      // 4) 비대칭 스프링-댐퍼 장력 (늘어났을 때만 작용, 느슨하면 자유낙하)
-      const hx = player.pos.x - webAnchor.x, hy = player.pos.y + 1.45 - webAnchor.y, hz = player.pos.z - webAnchor.z;
+      // 3) 순수 로프 길이 단축 (이미 minRope보다 짧은 줄은 늘리지 않음)
+      if (reelIn) ropeLength = Math.max(Math.min(ropeLength, PHYS.minRope), ropeLength - PHYS.reelSpeed * subDt);
+      // 4) 비대칭 스프링-댐퍼 장력 — [v8] 기준점은 physicsPivotPoint (렌더링 줄은 visualAnchorPoint)
+      const hx = player.pos.x - physicsPivotPoint.x, hy = player.pos.y + 1.45 - physicsPivotPoint.y, hz = player.pos.z - physicsPivotPoint.z;
       const dist = Math.max(0.001, Math.hypot(hx, hy, hz));
-      const dx = -hx / dist, dy = -hy / dist, dz = -hz / dist;          // 손 → 앵커 단위벡터
+      const dx = -hx / dist, dy = -hy / dist, dz = -hz / dist;          // 손 → 피벗 단위벡터
       const stretch = dist - ropeLength;
       if (stretch > 0) {
-        const radialV = player.vel.x * dx + player.vel.y * dy + player.vel.z * dz;   // (+) 앵커로 접근
+        const radialV = player.vel.x * dx + player.vel.y * dy + player.vel.z * dz;   // (+) 피벗으로 접근
         const spring = PHYS.springK * stretch;
         const damper = radialV < 0 ? -PHYS.damperC * radialV : -PHYS.damperC * 0.25 * radialV;
         tension = Math.max(0, spring + damper);
@@ -6430,19 +6565,38 @@ function updatePhysics(dt) {
       } else { tension = 0; aC = 0; }
       const curTotalSpd = player.vel.length();
       if (curTotalSpd > msm2PeakSwingSpeed) msm2PeakSwingSpeed = curTotalSpd;
-      // 최저점 통과 판정 (릴리즈 연출용)
-      if (!msm2PassedNadir && msm2SwingTime > 0.12 &&
-          player.vel.x * hx + player.vel.z * hz > 0) msm2PassedNadir = true;
       player.pos.addScaledVector(player.vel, subDt);
       // 지면 충돌만 처리 (바닥 자동 회피/부양 없음)
       if (player.pos.y < GROUND_Y) { player.pos.y = GROUND_Y; if (player.vel.y < 0) player.vel.y = 0; }
     }
     PHYS_TEL.tension = tension; PHYS_TEL.centripetal = aC;
     PHYS_TEL.gForce = tension > 0 ? (tension / PHYS.mass) / PHYS.gravity : 1.0;
-    // 손을 뗀 상태(웹 홀드 아님)로 스윙 중이면 아크 정점에서 릴리즈 (순수 해제, 속도 보정 없음)
-    if (!webHeld && msm2SwingTime > 0.35 && player.pos.y + 1.45 >= webAnchor.y - 2.0 && player.vel.y > 0) {
-      releaseWeb(true);
-      return;
+
+    // ── [v8-3] 스윙 페이즈: ATTACH → DOWNSWING → APEX(최저점) → UPSWING(킥오프) ──
+    {
+      const handY = player.pos.y + 1.45;
+      const ry = handY - physicsPivotPoint.y;
+      const rLen = Math.max(1.0, Math.hypot(player.pos.x - physicsPivotPoint.x, ry, player.pos.z - physicsPivotPoint.z));
+      const angleDeg = THREE.MathUtils.radToDeg(Math.acos(THREE.MathUtils.clamp(-ry / rLen, -1, 1)));
+      const vy = player.vel.y;
+      if (vy < -1.0) swingSawDescent = true;
+      if (swingPhase === SWING_PHASE.ATTACH) {
+        if (swingElapsedTime >= SWING.attachTime) swingPhase = SWING_PHASE.DOWNSWING;
+      } else if (swingPhase === SWING_PHASE.DOWNSWING) {
+        const nadir = swingSawDescent && vy > -0.3 && ry < 0;
+        const fallback = swingElapsedTime > 1.5 && vy > 0.5 && ry < -2.0;   // 내려간 적 없이 올라가는 진입 보정
+        if (nadir || fallback) {
+          swingPhase = SWING_PHASE.APEX; msm2PassedNadir = true; swingApexTimer = SWING.apexWindow;
+        }
+      } else if (swingPhase === SWING_PHASE.APEX) {
+        swingApexTimer -= dt;
+        if (swingApexTimer <= 0) swingPhase = SWING_PHASE.UPSWING;
+      }
+      // 웹을 쥐고 있지 않으면 킥오프 각도에서 자동 릴리즈 (플레이어가 놓는 경우는 releaseWeb이 같은 각도 기준으로 킥 계산)
+      if (!webHeld && swingPhase === SWING_PHASE.UPSWING && vy > 1.0 && angleDeg >= SWING.autoReleaseAngle) {
+        releaseWeb(true);
+        return;
+      }
     }
     player.onGround = false;
   } else if (player.onGround) {
@@ -6461,6 +6615,7 @@ function updatePhysics(dt) {
     // 공중 자유낙하 / 다이빙 (S/조이스틱 아래, 고도 16m 이상)
     // v7: 다이빙 중력 배율·전방 부스터·공중 조향 제거 → 중력 + 자세별 v² 항력만 적용
     msm2IsDiving = (player.pos.y > 16.0 && player.vel.y < 2.0 && rawForwardInput < -0.35);
+    applySwingKick(dt);   // [v8] 다리 킥 임펄스 후반부
     player.vel.y -= PHYS.gravity * (slingState.glideT > 0 ? 0.28 : 1.0) * dt;
     physApplyDrag(dt, msm2IsDiving);
     player.pos.addScaledVector(player.vel, dt);
@@ -6896,6 +7051,7 @@ function gfxUserSave() { try { localStorage.setItem('gfxUser2', JSON.stringify(G
 function gfxEffDetail() { const P = GFX_PRESETS[GFX.quality] || {}; return GFXU.detail != null ? GFXU.detail : (GFX_MOBILE ? 520 : (P.loadR || 700)); }
 function gfxApplyUser() {
   NYC_LOAD_R = gfxEffDetail(); NYC_UNLOAD_R = NYC_LOAD_R + 250;
+  if (window.__winFar) window.__winFar.value = Math.min(2600, Math.max(250, gfxEffDetail()));   // v8: 즉시 반영
   NYC_CHUNK_SCALE = GFXU.chunk / 2300;
 }
 function gfxShadowParams() {
@@ -8387,7 +8543,7 @@ function bndStep(rig, ctx) {
     BND.bT = 0; BND.bDur = bndBlendDur(prev, mode);
     if (mode === 'swing') BND.swT = 0;
     if (prev === 'swing' && mode === 'air') {                      // 릴리즈
-      BND.flipW = (spd > BNDP.flipMinSpeed && ctx.vy > BNDP.flipMinVy && gd > BNDP.flipMinGround) ? 1 : 0;
+      BND.flipW = ((spd > BNDP.flipMinSpeed && ctx.vy > BNDP.flipMinVy && gd > BNDP.flipMinGround) || ((ctx.kickQ || 0) > 0.35 && gd > BNDP.flipMinGround)) ? 1 : 0;   // [v8] 킥오프 시 즉시 발차기/플립 트리거
       BND.relT = 1; BND.relDur = BND.flipW ? BNDP.flipDur : BNDP.relDur;
     } else BND.relT = 0;
     BND.mode = mode;
@@ -8648,7 +8804,8 @@ function updateSpiderManRig(dt) {
       swinging: !!isSwinging, twoHand: !!isSwinging && !msm2QuickWhip, diving: !!msm2IsDiving,
       wall: { active: !!wallState.active, phase: wallState.phase || 0, moving: player.vel.length() > 0.4 },
       sling: { active: !!slingState.charging, g: slingState.g || 0, aimW: [slingState.aim.x, slingState.aim.y, slingState.aim.z] },
-      anchorW: [webAnchor.x, webAnchor.y, webAnchor.z]
+      anchorW: [webAnchor.x, webAnchor.y, webAnchor.z],   // 손/로프 IK는 항상 visualAnchorPoint
+      kickQ: swingKick.q
     });
   } catch (e) { if (!window.__bndErrShown) { window.__bndErrShown = 1; console.error('[BND] 모션 오류', e); } }
   try { bndMotionUpdate(rig, dt, hSpeed); } catch (e) { if (!window.__bndmErr) { window.__bndmErr = 1; console.error('[BNDM] 손가락 레이어 오류 → 비활성화', e); } BNDM.ok = false; }
@@ -8675,6 +8832,13 @@ function updateSpiderManRig(dt) {
 function updateCameraAndHUD(dt) {
   const speed = player.vel.length();
   const speedKmh = Math.round(speed * 3.6);
+  // ── [v8-4] 속도 기반 동적 카메라: currentSpeed → FOV / cameraFollowDistance (가속 빠르게, 감속 천천히 복귀) ──
+  const currentSpeed = speed;
+  cameraSpeedSm += (currentSpeed - cameraSpeedSm) * (1 - Math.exp(-(currentSpeed > cameraSpeedSm ? CAMV.speedRise : CAMV.speedFall) * dt));
+  const speedT = THREE.MathUtils.clamp((cameraSpeedSm - CAMV.v0) / (CAMV.v1 - CAMV.v0), 0, 1);
+  const speedK = speedT * speedT * (3 - 2 * speedT);
+  const targetFollowDist = THREE.MathUtils.lerp(CAMV.distBase, CAMV.distMax, speedK);
+  cameraFollowDistance += (targetFollowDist - cameraFollowDistance) * (1 - Math.exp(-(targetFollowDist > cameraFollowDistance ? CAMV.distRise : CAMV.distFall) * dt));
   const swingLowOffset = isSwinging ? THREE.MathUtils.clamp(-player.vel.y * 0.02, -0.25, 0.45) : 0;
   const rawTarget = new THREE.Vector3(player.pos.x, player.pos.y + 1.35 + swingLowOffset, player.pos.z);
   if (msm2SmoothLook.lengthSq() === 0) msm2SmoothLook.copy(rawTarget);
@@ -8705,7 +8869,7 @@ function updateCameraAndHUD(dt) {
     // lookAt(up=Y)이 이미 수평을 보장하므로 rotation.z를 건드리지 않음 (건드리면 시점이 기울어짐)
   } else {
     povYawSm = cameraYaw; povPitch = 0.05;
-    const camDist = isBirdEyeMode ? 165.0 : THREE.MathUtils.clamp(3.9 + (speed - 10) * 0.075, 3.8, 8.4);
+    const camDist = isBirdEyeMode ? 165.0 : cameraFollowDistance;
     const effPitch = isBirdEyeMode ? Math.max(0.95, cameraPitch) : cameraPitch;
     const cx = msm2SmoothLook.x - Math.sin(cameraYaw) * Math.cos(effPitch) * camDist;
     const cy = msm2SmoothLook.y + Math.sin(effPitch) * camDist;
@@ -8728,9 +8892,8 @@ function updateCameraAndHUD(dt) {
     }
   }
   camera.near = (isBirdEyeMode || camera.position.y > 45) ? 2.0 : camera.position.y > 18 ? 0.6 : isPOVMode ? 0.12 : 0.3;
-  const targetFov = THREE.MathUtils.lerp(PHYS.fovBase, PHYS.fovMax,
-    THREE.MathUtils.clamp((speed - PHYS.fovV0) / (PHYS.fovV1 - PHYS.fovV0), 0, 1));   // v7: 18~68.5 m/s → 75°~105°
-  camera.fov = THREE.MathUtils.lerp(camera.fov, targetFov, 9 * dt);
+  const targetFov = THREE.MathUtils.lerp(CAMV.fovBase, CAMV.fovMax, speedK);   // [v8] 속도 비례 FOV
+  camera.fov += (targetFov - camera.fov) * (1 - Math.exp(-(targetFov > camera.fov ? CAMV.fovRise : CAMV.fovFall) * dt));
   { const shk = THREE.MathUtils.clamp((speed - 28) / 40, 0, 1) * (isPOVMode ? 0.6 : 1);   // 고속 카메라 셰이크
     if (shk > 0 && !isBirdEyeMode && !isSpectator) { const tt = performance.now() * 0.001;
       camera.position.x += Math.sin(tt * 47.0) * 0.018 * shk; camera.position.y += Math.sin(tt * 61.0 + 1.3) * 0.014 * shk; camera.rotateZ(Math.sin(tt * 37.0) * 0.0016 * shk); } }
@@ -8754,7 +8917,7 @@ function updateCameraAndHUD(dt) {
   if (speedEl) speedEl.innerText = speedKmh;
   if (isSwinging && msm2ApexTimer <= 0) {
     const de_ = document.getElementById('hud-road-detail');
-    if (de_) de_.innerText = `🕸️ T ${Math.round(PHYS_TEL.tension)} N | ${PHYS_TEL.gForce.toFixed(1)} G | a_c ${PHYS_TEL.centripetal.toFixed(1)} m/s² | v_in ${Math.round(PHYS_TEL.entry * 3.6)} km/h`;
+    if (de_) de_.innerText = `🕸️ ${SWING_PHASE_NAMES[swingPhase]} · pivot ${Math.round(swingPivotBlend * 100)}% | T ${Math.round(PHYS_TEL.tension)} N | ${PHYS_TEL.gForce.toFixed(1)} G | a_c ${PHYS_TEL.centripetal.toFixed(1)} m/s² | v_in ${Math.round(PHYS_TEL.entry * 3.6)} km/h`;
   }
   if (altEl) altEl.innerText = Math.max(0, player.pos.y).toFixed(1);
   if (coordsEl) {
@@ -9037,6 +9200,7 @@ function applySpawn(S) {
   cameraYaw = S.yaw;
   cameraPitch = 0.18;
   msm2SmoothLook.set(0, 0, 0); msm2TrickSpin = 0; msm2CamRoll = 0; msm2BodyBank = 0;
+  swingPhase = SWING_PHASE.NONE; swingKick.active = false; swingKick.q = 0; cameraSpeedSm = 0; cameraFollowDistance = CAMV.distBase;
   if (spideyGroup) spideyGroup.rotation.y = S.yaw;
 }
 function updateMapInfoPanel() {
@@ -11957,7 +12121,7 @@ if (uRceOn > 0.5) {
 GLSL_BLD.room = `vec3 wE_ = lc * lit * gls * uWinQ * lightK * (0.6 + 0.9 * h21(cellId + 7.3)) * (ground ? 1.2 : 1.0);
 #ifndef GBUF
 if (uRceOn > 0.5 && gls > 0.01) {
-  float rk_ = 1.0 - smoothstep(60.0, 220.0, cdist);
+  float rk_ = 1.0 - smoothstep(60.0 * RCE_DI, 220.0 * RCE_DI, cdist);
   if (rk_ > 0.001) {
     float rid_ = floor(h21(cellId + seed * 5.1) * 16.0); vec2 rc_ = vec2(mod(rid_, 4.0), floor(rid_ / 4.0));
     vec3 rm_ = texture2D(tRceE, (rc_ + clamp(uvW, 0.03, 0.97)) * 0.25).rgb;
