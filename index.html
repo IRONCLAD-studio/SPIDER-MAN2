@@ -3550,7 +3550,7 @@ void shopCell(float u, float y, float w, float gH, float SW, out float h, out ve
       }
     }
     // 먼 거리로 갈수록 평균색으로 부드럽게 전환 (uWinFar 부근에서 갑작스런 변화·노이즈 방지)
-    float fk = 1.0 - smoothstep(0.7, 1.0, cdist / uWinFar);
+    float fk = 1.0 - smoothstep(0.92, 1.0, cdist / uWinFar);
     vec3 avg2 = mix(gWC, gGC * 1.5, pFam < 0.5 ? 0.78 : 0.34) * (0.86 + 0.28 * ton) * mix(0.62, 1.0, smoothstep(0.0, 40.0, y));
     col = mix(avg2, col, fk); emi *= fk; gls *= fk;
     float shadowK = 1.0 - 0.45 * shd * (1.0 - uWinGlow * 0.55);
@@ -4263,7 +4263,7 @@ function nmFrame(dt) {
   if (!NM.ready) return; NM.camT += dt; if (NM.camT < 0.3) return; NM.camT = 0;
   const cx = camera.position.x, cz = camera.position.z, R = (GFXU.chunk || 2300) + 250;
   for (const c of NM.cellMeshes) c.mesh.visible = Math.hypot(c.x - cx, c.z - cz) < (c.r || R) + 300;
-  if (window.__winFar) window.__winFar.value = Math.max(250, gfxEffDetail() * 0.72);
+  if (window.__winFar) window.__winFar.value = Math.min(2600, Math.max(250, gfxEffDetail() * 1.0));
   const gx = Math.floor(player.pos.x / SPATIAL_CELL), gz = Math.floor(player.pos.z / SPATIAL_CELL);
   for (let a = -3; a <= 3; a++) for (let b = -3; b <= 3; b++) nmEnsureCell((gx + a) + ',' + (gz + b));
 }
@@ -4350,7 +4350,7 @@ function nrAtlas() {
   x0 = 22 * W; base(x0, '40,84,36'); noise(x0, 0.25);                                                                      // 생울타리
   x0 = 23 * W; base(x0, '146,144,138'); noise(x0, 0.10); g.fillStyle = 'rgba(0,0,0,0.22)'; for (let k = 0; k < 5; k++) g.fillRect(x0, H * k / 5, W, 2);   // 담장·옹벽
   x0 = 24 * W; base(x0, '116,96,74'); noise(x0, 0.12); g.fillStyle = 'rgba(0,0,0,0.35)'; for (let k = 0; k < 6; k++) g.fillRect(x0, H * k / 6, W, 2);   // 부두 목재
-  const tex = new THREE.CanvasTexture(cv); tex.wrapT = THREE.RepeatWrapping; tex.wrapS = THREE.ClampToEdgeWrapping; tex.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy()); return tex;
+  const tex = new THREE.CanvasTexture(cv); tex.wrapT = THREE.RepeatWrapping; tex.wrapS = THREE.ClampToEdgeWrapping; tex.anisotropy = renderer.capabilities.getMaxAnisotropy(); return tex;
 }
 const nrU = (slot, t) => (slot * NR_W + NR_PAD + t * (NR_W - 2 * NR_PAD)) / NR_ATW;
 // ---------- 지오메트리 빌더 ----------
@@ -7110,7 +7110,7 @@ const GFX_SKY = {
 };
 const GFX_MOBILE = !!(window.matchMedia && window.matchMedia('(pointer:coarse)').matches);
 const GFX = {
-  quality: 'medium', pr: 1.5, envTex: null, envKey: '', minPR: 1.0, sky: null,
+  quality: 'medium', pr: 1.5, envTex: null, envKey: '', minPR: 1.0, lockPR: false, sky: null,
   sunDir: new THREE.Vector3(0.3, 0.85, 0.35).normalize(),
   frames: 0, acc: 0, last: 0, lockUp: 0, frozen: false
 };
@@ -7606,9 +7606,9 @@ function gfxApplyShadows() {
   if (GFXS.mesh) GFXS.mesh.visible = !!(P.shadow && P.bShadow);
   GFXS.dirty = true;
   const seen = new Set();   // 셰이더 재컴파일
-  const ult = !!P.ultra, aniso = GFX.quality !== 'low' ? Math.min(16, renderer.capabilities.getMaxAnisotropy()) : 4;
+  const ult = !!P.ultra, aniso = GFX.quality !== 'low' ? renderer.capabilities.getMaxAnisotropy() : 4;
   gfxApplyEnv();
-  scene.traverse(o => { if (o.material) { (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => { if (!seen.has(m)) { seen.add(m); if (m.map) { m.map.anisotropy = aniso; m.map.needsUpdate = true; } m.needsUpdate = true; } }); } });
+  scene.traverse(o => { if (o.material) { (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => { if (!seen.has(m)) { seen.add(m); for (const k of ['map','emissiveMap','bumpMap','roughnessMap','metalnessMap']) { if (m[k] && m[k].anisotropy !== aniso) { m[k].anisotropy = aniso; m[k].needsUpdate = true; } } m.needsUpdate = true; } }); } });
   if (window.__winQ) window.__winQ.value = 1.0;
 }
 function gfxSetPR(pr) {
@@ -7789,7 +7789,11 @@ function gfxUpdate() {
   if (GFX.frames >= 45) {
     const avg = GFX.acc / GFX.frames; GFX.frames = 0; GFX.acc = 0;
     const maxPR = Math.min(window.devicePixelRatio || 1, GFX_MOBILE ? Math.min(GFX_PRESETS[GFX.quality].maxPR, 2.0) : GFX_PRESETS[GFX.quality].maxPR);
-    if (avg > 24 && GFX.pr > GFX.minPR + 0.01) { gfxSetPR(Math.max(GFX.minPR, GFX.pr - 0.1)); GFX.lockUp = 480; }
+    const hiQ = GFX.quality === 'high' || GFX.quality === 'ultra' || GFX.quality === 'cinema' || GFX.quality === 'realistic';
+    const lockPR = GFX.lockPR || (hiQ && gfxEffDetail() >= 1200);
+    const floorPR = lockPR ? maxPR : Math.min(maxPR, GFX_MOBILE ? 1.0 : 1.5);
+    if (lockPR) { if (Math.abs(GFX.pr - maxPR) > 0.01) gfxSetPR(maxPR); }
+    else if (avg > 24 && GFX.pr > floorPR + 0.01) { gfxSetPR(Math.max(floorPR, GFX.pr - 0.1)); GFX.lockUp = 480; }
     else if (avg < 18.5 && GFX.lockUp === 0 && GFX.pr < maxPR - 0.01) { gfxSetPR(Math.min(maxPR, GFX.pr + 0.05)); GFX.lockUp = 240; }
   }
 }
@@ -10617,7 +10621,7 @@ class RGSystem {
       const set = (o, rr, gg, bb) => { o[2].data[i] = rr; o[2].data[i + 1] = gg; o[2].data[i + 2] = bb; o[2].data[i + 3] = 255; };
       set(A, (0.65 + 0.35 * h) * 255, (0.65 + 0.35 * h) * 255, (0.65 + 0.35 * h) * 255); set(B, h * 255, h * 255, h * 255); set(R, 0, rgsLerp(rough[0], rough[1], h) * 255, p * 255);
     }
-    const tex = (o, srgb) => { o[1].putImageData(o[2], 0, 0); const t = new THREE.CanvasTexture(o[0]); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(repeat[0], repeat[1]); t.anisotropy = 8; if (srgb) t.encoding = THREE.sRGBEncoding; return t; };
+    const tex = (o, srgb) => { o[1].putImageData(o[2], 0, 0); const t = new THREE.CanvasTexture(o[0]); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(repeat[0], repeat[1]); t.anisotropy = renderer.capabilities.getMaxAnisotropy(); if (srgb) t.encoding = THREE.sRGBEncoding; return t; };
     return this.applyWetness(new THREE.MeshStandardMaterial({ color, map: tex(A, true), bumpMap: tex(B), bumpScale: bump, roughnessMap: tex(R), roughness: 1, metalness: 0 }));
   }
   createAsphaltMaterial(o = {}) { return this._pbr(Object.assign({ color: 0x3a3a3d, scale: 20, grain: 0.5, rough: [0.75, 1], puddle: 1, puddleScale: 3, repeat: [4, 86], bump: 1.5 }, o)); }
@@ -11012,7 +11016,7 @@ async function genDetailMaps(N, seed, onProgress) {
   const mk = (img) => {
     const t = new THREE.DataTexture(new Uint8Array(img.data.buffer), N, N, THREE.RGBAFormat, THREE.UnsignedByteType);
     t.wrapS = t.wrapT = THREE.RepeatWrapping; t.magFilter = THREE.LinearFilter; t.minFilter = THREE.LinearMipmapLinearFilter;
-    t.generateMipmaps = true; t.anisotropy = 8; t.needsUpdate = true; return t;
+    t.generateMipmaps = true; t.anisotropy = __maxAniso(); t.needsUpdate = true; return t;
   };
   return { D: mk(iD), R: mk(iR), H: mk(iH) };
 }
@@ -11020,13 +11024,14 @@ async function genDetailMaps(N, seed, onProgress) {
 /* ============================================================================
  * 2. 범용 노이즈 텍스처(512²): R/A = 저주파 블롭(물웅덩이용), G = 중주파, B = 고주파 입자
  * ========================================================================== */
+function __maxAniso() { try { return renderer.capabilities.getMaxAnisotropy(); } catch (e) { return 16; } }
 function genNoiseTexture(seed) {
   const M = 512, a = makeField(M, 3, 3, 5, seed + 5), b = makeField(M, 8, 8, 5, seed + 17), c = makeField(M, 128, 128, 2, seed + 29, 0.6), d = makeField(M, 5, 5, 5, seed + 41);
   const px = new Uint8Array(M * M * 4);
   for (let i = 0; i < M * M; i++) { px[i * 4] = a[i] * 255; px[i * 4 + 1] = b[i] * 255; px[i * 4 + 2] = c[i] * 255; px[i * 4 + 3] = d[i] * 255; }
   const t = new THREE.DataTexture(px, M, M, THREE.RGBAFormat, THREE.UnsignedByteType);
   t.wrapS = t.wrapT = THREE.RepeatWrapping; t.magFilter = THREE.LinearFilter; t.minFilter = THREE.LinearMipmapLinearFilter;
-  t.generateMipmaps = true; t.anisotropy = 4; t.needsUpdate = true; return t;
+  t.generateMipmaps = true; t.anisotropy = __maxAniso(); t.needsUpdate = true; return t;
 }
 
 /* ============================================================================
@@ -11539,7 +11544,7 @@ class RealisticCityEnvironment {
   }
 
   _canvasTex(cv, srgbLike) {
-    const t = new THREE.CanvasTexture(cv); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = 8;
+    const t = new THREE.CanvasTexture(cv); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = __maxAniso();
     t.encoding = THREE.LinearEncoding; t.needsUpdate = true; return t;
   }
   _findLights() {
@@ -11752,7 +11757,7 @@ class RealisticCityEnvironment {
     if (this.tex.full) return;
     const o = this.opt, s = TEX.genFacadeSheet(o.facadeCols, o.facadeRows, o.facadeCellPx, o.seed, true);
     this.tex.full = { D: this._canvasTex(s.D), E: this._canvasTex(s.E), R: this._canvasTex(s.R), H: this._canvasTex(s.H) };
-    const bump = this.tex.full.H; bump.anisotropy = 8;
+    const bump = this.tex.full.H; bump.anisotropy = __maxAniso();
   }
   /** MeshPhysicalMaterial: 수천 개 창문 파사드(Diffuse/Roughness(+Metalness+Clearcoat 마스크)/Bump/Emissive). repeat 로 타일 수 조절 */
   createFacadeMaterial(opts) {
@@ -11964,8 +11969,8 @@ class RceSSRPass extends THREE.ShaderPass {
 const GLSL_BLD = {};
 GLSL_BLD.decl = `uniform float uGlassR;
 uniform float uRceOn, uRceDetail, uRceReflK, uRceEnvK, uRceTile, uRceTileM; uniform vec2 uRceFacadeTiles;
-#define RCE_DS (uRceOn > 0.5 ? clamp(uWinFar / 455.0, 0.7, 2.5) : 1.0)
-#define RCE_DI (uRceOn > 0.5 ? clamp(uWinFar / 455.0, 0.7, 1.7) : 1.0)
+#define RCE_DS (uRceOn > 0.5 ? clamp(uWinFar / 455.0, 0.7, 4.5) : 1.0)
+#define RCE_DI (uRceOn > 0.5 ? clamp(uWinFar / 455.0, 0.7, 2.2) : 1.0)
 #ifndef GBUF
 uniform sampler2D tRceD, tRceR, tRceH, tRceE, tRceFD, tRceFE; uniform samplerCube tRceEnv; uniform float uRceWet, uRceTime;
 void rceFar(float u, float yy, vec3 wn, vec3 vv, out vec3 alb, out vec3 emc){
@@ -12031,7 +12036,7 @@ if (uRceOn > 0.5 && gls > 0.01) {
 emi += wE_;`;
 GLSL_BLD.fadeA = `vec3 rceFE_ = vec3(0.0);
 #ifndef GBUF
-if (uRceOn > 0.5) { float fK_ = smoothstep(0.5 * uWinFar, 0.95 * uWinFar, cdist);
+if (uRceOn > 0.5) { float fK_ = smoothstep(0.85 * uWinFar, 1.0 * uWinFar, cdist);
   if (fK_ > 0.001) { vec3 fa_, fe_; rceFar(u, yy, wn, vv, fa_, fe_); avg2 = mix(avg2, fa_ * (0.86 + 0.28 * ton) * mix(0.62, 1.0, smoothstep(0.0, 40.0, y)), fK_); rceFE_ = fe_ * fK_; } }
 #endif`;
 GLSL_BLD.far = `
