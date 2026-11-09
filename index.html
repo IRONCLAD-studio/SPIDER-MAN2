@@ -5851,7 +5851,12 @@ const SWING = {
   boostUpRatio: 0.7,          // 임펄스 = 정규화(속도방향 + Up × 이 값)
   kickAngleCenter: 45.0, kickAngleRange: 32.0, apexBoostScale: 0.5,
   kickWindow: 0.14, kickImmediate: 0.55,   // 임펄스를 다리 차는 시간에 분산(즉시 비율)
-  autoReleaseAngle: 42.0      // 버튼을 놓친 경우 상승 구간 자동 릴리즈 각도
+  autoReleaseAngle: 42.0,     // 버튼을 놓친 경우 상승 구간 자동 릴리즈 각도
+  // ── ⑦ 1인칭 하드 웹스윙: 시선 방향 발사 + 부착 시점 줄 길이 고정 ──
+  povHardSwing: true,         // 1인칭에서만 적용 (설정창 토글)
+  povHardRange: 130.0, povHardMinDist: 8.0, povHardMinRise: 3.0,   // m  최대 사거리 / 최소 거리 / 손보다 최소 이만큼 높아야 함
+  povHardTol1: 3.0, povHardTol2: 6.5,                              // deg 시선 중심 레이가 빗나갔을 때 시도하는 허용 링
+  hardAirSteer: 7.0           // m/s² 하드 스윙 중 WASD 공중 조향 (줄 길이는 그대로)
 };
 const GROUND = { accel: 95.0, brake: 150.0, decel: 90.0 };   // 지상 이동 가속/제동/무입력 감속 (m/s²)
 const SWING_PHASE = { NONE: 0, DOWNSWING: 1, APEX: 2, UPSWING: 3, RELEASE: 4 };
@@ -5901,7 +5906,401 @@ const SpeedCamera = {
   stepFov(cur, dt) { return cur + (this.targetFov - cur) * (1 - Math.exp(-(this.targetFov > cur ? this.fovRise : this.fovFall) * dt)); }
 };
 let cameraFollowDistance = SpeedCamera.distMin, cameraSpeedSm = 0;
+let swingHardRope = false;   // 이번 스윙이 1인칭 하드 웹스윙인지 (발사 시점에 고정)
 window.SPIDER_SWING = { SWING, WINGS, SpeedCamera, PHYS };   // 콘솔 튜닝용: SPIDER_SWING.SWING.swingAssistLevel = 10 …
+
+// ════════════════════════════════════════════════════════════════════════════════════════
+//  [POV v2] 1인칭 리얼 카메라 · 5단계 다중 레이어 흔들림 · VOR 수평유지/뱅크 · 절차적 팔/다리
+//  + 1인칭 '하드 웹스윙': 시선 방향으로 웹 발사 / 부착 시점의 줄 길이를 끝까지 유지
+//  콘솔 튜닝: POV_CAM.masterShakeIntensity = 0.5 (0.0 ~ 2.0)  ·  SPIDER_SWING.SWING.povHardSwing = false
+// ════════════════════════════════════════════════════════════════════════════════════════
+var POV_CAM = {
+  enabled: true,
+  masterShakeIntensity: 1.0,          // 0.0 ~ 2.0  전체 흔들림 배율 (멀미 민감 유저용: 0.3~0.6 권장)
+  horizonLockRatio: 0.70,             // 0.0 ~ 1.0  1 = 스윙 진자 회전을 완전히 무시(수평 고정) / 0 = 몸의 기울기를 그대로 따라감 (VOR)
+  bodyTiltWeight: 0.60, tiltSmooth: 5.0,
+  bankMaxDeg: 18.0, bankGain: 0.75, bankDeadAcc: 4.0, bankResponse: 4.5, glideBank: 0.35,   // 코너링 뱅크 (횡가속 → 스윙 안쪽 롤)
+  snap:   { intensity: 1.0, freq: 5.0, damping: 0.30, pos: 2.4, rot: 1.5, fov: 3.2, minVr: 2.5 },                                  // ① 거미줄 장력 반동
+  rope:   { intensity: 1.0, freqMin: 15.0, freqMax: 25.0, pos: 0.0032, rot: 0.0012, apexBoost: 0.9 },                              // ② 로프 현 진동 (15~25Hz)
+  wind:   { intensity: 1.0, speedStart: 26.0, speedFull: 70.0, freqMin: 6.0, freqMax: 12.0, pos: 0.016, rot: 0.0075 },             // ③ 풍압 버페트 (6~12Hz, 속도² 비례)
+  gforce: { intensity: 1.0, neckFreq: 2.2, damping: 0.42, accPitch: 0.0035, accDown: 0.0032, accYaw: 0.0016, accPosY: 0.0014, swayFreq: 1.4, swayRot: 0.0045, maxPitch: 0.15 },   // ④ 목 관성 + 저주파 스웨이 (1~3Hz)
+  action: { intensity: 1.0, recoil: 1.0, kick: 1.0, landing: 1.0 },                                                                // ⑤ 발사 반동 / 킥오프 / 착지 압축
+  hand:   { vibScale: 1.8, phase: 0.37, lagTime: 0.045, lagMax: 0.12, inertia: 1.0 },                                              // 손 비동기: 장력 떨림 1.8배 · 위상차 · 회전 지연
+  arms: true, legs: true
+};
+window.POV_CAM = POV_CAM;
+
+// ── 스프링-댐퍼 (반암시적 오일러, 서브스텝) ──
+function PovSp(f, z) { this.f = f; this.z = z; this.x = 0; this.v = 0; }
+PovSp.prototype.step = function (dt, tgt) {
+  const w = 6.2831853 * this.f, n = Math.max(1, Math.ceil(dt / 0.004)), h = dt / n, g = tgt || 0;
+  for (let i = 0; i < n; i++) { this.v += (w * w * (g - this.x) - 2 * this.z * w * this.v) * h; this.x += this.v * h; }
+  return this.x;
+};
+var _K6 = ['px', 'py', 'pz', 'rx', 'ry', 'rz'];   // 위치 xyz(카메라 로컬: x 오른쪽, y 위, z 뒤) + 회전 pitch/yaw/roll(rx>0 = 위를 봄, ry>0 = 왼쪽, rz<0 = 오른쪽으로 기울임)
+function PovSp6(f, z) { for (const k of _K6) this[k] = new PovSp(f, z); }
+PovSp6.prototype.step = function (dt) { for (const k of _K6) this[k].step(dt, 0); };
+
+// ── 1D 그래디언트(퍼린) 노이즈 ──
+function _pnH(n) { n = Math.sin(n * 127.1 + 311.7) * 43758.5453; return n - Math.floor(n); }
+function povNoise(x) {
+  const i = Math.floor(x), f = x - i, u = f * f * f * (f * (f * 6 - 15) + 10), a = _pnH(i) * 2 - 1, b = _pnH(i + 1) * 2 - 1;
+  return 2 * ((a * f) * (1 - u) + (b * (f - 1)) * u);
+}
+
+var _pcS = null, povFovOffset = 0, _povFovLast = 0;
+function pcState() {
+  if (_pcS) return _pcS;
+  const V = () => new THREE.Vector3(), Q = () => new THREE.Quaternion();
+  _pcS = {
+    t: 0, init: false, rig: null,
+    prevVel: V(), accS: V(), aL: new THREE.Vector3(0, 0.5, -0.85), ropeLocal: V(),
+    prevGround: true, prevVy: 0, prevWall: false, prevVr: 0, snapCool: 0, shotT: 9, pendVr: 0, pendDone: true,
+    tenSm: 0, bank: 0, eyeOff: 1.58, bobPhase: 0, bobK: 0, qTilt: Q(), qLeg: Q(), Qf: Q(),
+    snap: new PovSp6(5, 0.3), neck: new PovSp6(2.2, 0.42), act: new PovSp6(7, 0.35), land: new PovSp6(3.2, 0.45), fovS: new PovSp(6, 0.35),
+    hIn: new PovSp6(3.4, 0.5), hAct: [new PovSp6(9, 0.32), new PovSp6(9, 0.32)], lagY: new PovSp(7, 0.55), lagP: new PovSp(7, 0.55),
+    prevYaw: 0, prevPitch: 0, side: 1, wRope: 0, wOff: 0, wGlide: 0, wDive: 0, kickT: 9, kickQ: 0,
+    T: { A: V(), F: V(), R: V(), U: V(), D: V(), D2: V(), Y: new THREE.Vector3(0, 1, 0), Qf: Q(), Qb: Q(), Qt: Q(), Qs: Q(), Qy: Q(), Qr: Q(), E: new THREE.Euler(),
+         S: V(), Tg: V(), El: V(), Hd: V(), Pole: V(), d: V(), p: V(), dir: V(), W: V(), W2: V(), P3: V(), K: V(), An: V(), To: V() }
+  };
+  return _pcS;
+}
+
+// ── 절차적 팔/다리 메쉬 (카메라 자식 / 월드 자식) ──
+function povRigEnsure(P) {
+  if (P.rig) return;
+  const mat = (c, e) => new THREE.MeshStandardMaterial({ color: c, roughness: 0.62, metalness: 0.05, emissive: e, emissiveIntensity: 1 });
+  const suit = mat(0xb3121c, 0x2a0508), glove = mat(0x9c0f19, 0x240407), dark = mat(0x1b2035, 0x05060c);
+  const cyl = (r0, r1, m) => { const g = new THREE.CylinderGeometry(r1, r0, 1, 10, 1); g.translate(0, 0.5, 0); const o = new THREE.Mesh(g, m); o.frustumCulled = false; return o; };
+  const ell = (m) => { const o = new THREE.Mesh(new THREE.SphereGeometry(1, 14, 10), m); o.frustumCulled = false; return o; };
+  const group = new THREE.Group(); group.frustumCulled = false;
+  const arms = [];
+  for (let i = 0; i < 2; i++) {
+    const a = { upper: cyl(0.046, 0.038, suit), fore: cyl(0.040, 0.034, suit), shooter: cyl(0.05, 0.05, dark), hand: ell(glove) };
+    group.add(a.upper, a.fore, a.shooter, a.hand); arms.push(a);
+  }
+  camera.add(group);
+  const lg = new THREE.Group(); lg.frustumCulled = false;
+  const legs = [];
+  for (let i = 0; i < 2; i++) {
+    const l = { thigh: cyl(0.085, 0.062, suit), shin: cyl(0.062, 0.046, suit), foot: cyl(0.05, 0.042, dark) };
+    lg.add(l.thigh, l.shin, l.foot); legs.push(l);
+  }
+  scene.add(lg);
+  P.rig = { group, arms, legs: { group: lg, list: legs } };
+}
+function povSetVisible(v) {
+  if (!_pcS || !_pcS.rig) return;
+  _pcS.rig.group.visible = !!v && POV_CAM.arms; _pcS.rig.legs.group.visible = !!v && POV_CAM.legs;
+}
+function povSeg(m, A, B, tmp, Y) {
+  tmp.subVectors(B, A); const len = Math.max(1e-4, tmp.length()); tmp.multiplyScalar(1 / len);
+  m.position.copy(A); m.quaternion.setFromUnitVectors(Y, tmp); m.scale.set(1, len, 1);
+}
+function povSolveArm(P, l1, l2) {   // 2본 IK: T.S(어깨) → T.Tg(손 목표), 폴 벡터 T.Pole → T.El(팔꿈치), T.Hd(손)
+  const T = P.T; T.d.subVectors(T.Tg, T.S);
+  let dist = Math.max(0.12, Math.min(T.d.length(), (l1 + l2) * 0.995)); T.d.normalize();
+  T.Hd.copy(T.S).addScaledVector(T.d, dist);
+  const a = (l1 * l1 - l2 * l2 + dist * dist) / (2 * dist), h = Math.sqrt(Math.max(0, l1 * l1 - a * a));
+  T.p.copy(T.Pole).addScaledVector(T.d, -T.Pole.dot(T.d)); if (T.p.lengthSq() < 1e-6) T.p.set(0, -1, 0); T.p.normalize();
+  T.El.copy(T.S).addScaledVector(T.d, a).addScaledVector(T.p, h);
+}
+
+// ── 이벤트 임펄스 ──
+function povFovKick(P, deg) { P.fovS.v += deg * 38; }
+function povOnShoot() {   // ⑤ 웹 슈터 발사 반동 (앵커가 있는 쪽 손으로 발사)
+  const P = pcState(), C = POV_CAM, k = C.action.intensity * C.action.recoil;
+  const sy = Math.sin(cameraYaw), cy = Math.cos(cameraYaw);
+  P.side = ((webAnchor.x - player.pos.x) * (-cy) + (webAnchor.z - player.pos.z) * sy) >= 0 ? 1 : 0;   // 1 = 오른손
+  P.shotT = 0; P.pendVr = 0; P.pendDone = false; P.prevVr = 0; P.snapCool = 0.25;
+  P.act.rx.v += 1.5 * k; P.act.pz.v += 0.45 * k; P.act.rz.v += (P.side ? -1 : 1) * 0.6 * k;
+  const h = P.hAct[P.side]; h.pz.v += 1.8 * k; h.py.v += 0.6 * k; h.rx.v += 3.0 * k;
+  povFovKick(P, 1.2 * k);
+}
+function povOnKick(q) {   // ⑤ 스윙 끝 킥오프 휩
+  const P = pcState(), C = POV_CAM, k = C.action.intensity * C.action.kick * (0.4 + 0.8 * Math.min(1, q));
+  if (q > 0.01) { P.act.rx.v += 2.4 * k; P.act.py.v += 0.8 * k; P.act.pz.v -= 0.9 * k; povFovKick(P, 2.2 * k); P.kickT = 0; P.kickQ = Math.max(0.35, Math.min(1, q)); }
+  for (let i = 0; i < 2; i++) { P.hAct[i].py.v -= 2.2 * k; P.hAct[i].pz.v -= 1.2 * k; }
+}
+function povOnLand(impact) {   // ⑤ 착지 수직 압축
+  const P = pcState(), C = POV_CAM, k = C.action.intensity * C.action.landing;
+  P.land.py.v -= Math.min(impact * 0.28, 5.5) * k; P.land.rx.v -= Math.min(impact * 0.045, 1.4) * k; P.land.pz.v += Math.min(impact * 0.02, 0.5) * k;
+  for (let i = 0; i < 2; i++) P.hAct[i].py.v -= Math.min(impact * 0.2, 4.0) * k;
+}
+function povOnSnap(vr) {   // ① 슬랙→팽팽 전환: 부착점 방향 단발성 스프링 임펄스 (낙하 속도 비례)
+  const P = pcState(), C = POV_CAM, S = P.snap, a = P.aL;
+  const s = THREE.MathUtils.clamp(vr / 12, 0.15, 1.6) * C.snap.intensity; P.snapCool = 0.35;
+  for (const k of _K6) { S[k].f = C.snap.freq; S[k].z = C.snap.damping; }
+  S.px.v += a.x * C.snap.pos * s; S.py.v += a.y * C.snap.pos * s; S.pz.v += a.z * C.snap.pos * s;
+  S.rx.v += (a.y * 1.6 + 0.3) * C.snap.rot * s; S.ry.v += -a.x * C.snap.rot * s; S.rz.v += -a.x * C.snap.rot * 1.3 * s;
+  povFovKick(P, C.snap.fov * s);
+  for (let i = 0; i < 2; i++) { P.hAct[i].px.v += a.x * 1.2 * s; P.hAct[i].py.v += a.y * 1.2 * s; P.hAct[i].pz.v += a.z * 1.2 * s; }
+}
+
+// ══════════ 메인: 카메라 + 흔들림 합성 + 팔/다리 + 로프 시작점 ══════════
+function povCamSafe(dt, speed) {
+  try { return povCamUpdate(dt, speed); }
+  catch (e) { console.error('[POV_CAM] 오류 → 기본 1인칭 카메라로 복귀', e); POV_CAM.enabled = false; try { povSetVisible(false); } catch (_) {} return false; }
+}
+function povCamUpdate(dt, speed) {
+  if (!isPOVMode || isSpectator || isBirdEyeMode) return false;
+  const P = pcState(), C = POV_CAM, T = P.T, MU = THREE.MathUtils;
+  dt = Math.min(Math.max(dt, 1e-4), 0.05);
+  const M = MU.clamp(C.masterShakeIntensity, 0, 2), Mt = Math.min(M, 1.5);
+  P.t += dt; const t = P.t;
+  povRigEnsure(P);
+  const vel = player.vel, onG = !!player.onGround, sw = !!isSwinging, hsp = Math.hypot(vel.x, vel.z);
+  if (!P.init) { P.init = true; P.prevVel.copy(vel); P.prevYaw = cameraYaw; P.prevPitch = povPitch; P.prevGround = onG; P.eyeOff = onG ? 1.58 : 1.48; }
+
+  // ── 가속도 벡터 acceleration = (현재속도 - 이전속도) / dt  (충돌 스파이크는 저역통과) ──
+  T.A.copy(vel).sub(P.prevVel).multiplyScalar(1 / dt); P.prevVel.copy(vel);
+  { const am = T.A.length(); if (am > 80) T.A.multiplyScalar(80 / am); }
+  P.accS.lerp(T.A, 1 - Math.exp(-12 * dt));
+
+  // ── 시선 기저 (F 전방 · R 오른쪽 · U 위) ──
+  const cp = Math.cos(povPitch), sp = Math.sin(povPitch), sy = Math.sin(cameraYaw), cy = Math.cos(cameraYaw);
+  T.F.set(sy * cp, sp, cy * cp); T.R.set(-cy, 0, sy); T.U.set(-sy * sp, cp, -cy * sp);
+  P.eyeOff += ((onG ? 1.58 : 1.48) - P.eyeOff) * (1 - Math.exp(-9 * dt));
+  const ex = player.pos.x, ey = player.pos.y + P.eyeOff, ez = player.pos.z;
+  if (sw) { T.D.set(webAnchor.x - ex, webAnchor.y - ey, webAnchor.z - ez).normalize(); P.aL.set(T.D.dot(T.R), T.D.dot(T.U), -T.D.dot(T.F)); }
+
+  // ── 이벤트 감지: 착지 / 벽 부착 / 줄 팽팽해짐 ──
+  if (onG && !P.prevGround && P.prevVy < -3.5) povOnLand(-P.prevVy);
+  const wallNow = !!(typeof wallState !== 'undefined' && wallState.active);
+  if (wallNow && !P.prevWall) povOnLand(Math.max(3, Math.min(speed, 40) * 0.6));
+  P.prevGround = onG; P.prevWall = wallNow;
+  P.snapCool = Math.max(0, P.snapCool - dt); P.shotT += dt;
+  const vr = sw ? (PHYS_TEL.vr || 0) : 0;
+  if (sw) {
+    if (P.shotT < 0.07) P.pendVr = Math.max(P.pendVr, vr);     // 발사 직후 줄이 뻗는 동안의 최대 반경속도 → 줄이 다 뻗은 시점에 채임
+    else if (!P.pendDone) { P.pendDone = true; if (P.pendVr > C.snap.minVr) povOnSnap(P.pendVr); }
+    else if (P.prevVr < 0.7 && vr > C.snap.minVr && P.snapCool <= 0) povOnSnap(vr);   // 느슨했다가 팽팽해지는 프레임
+  }
+  P.prevVr = vr;
+  P.tenSm += ((sw ? PHYS_TEL.tension : 0) - P.tenSm) * (1 - Math.exp(-14 * dt));
+  const tN = sw ? MU.clamp(P.tenSm / (PHYS.mass * PHYS.gravity * 2.2), 0, 1.6) : 0;
+  let hang = 0;   // 1 = 스윙 최저점(Apex), 장력 최대
+  if (sw) { const ry0 = player.pos.y + 1.45 - physicsPivotPoint.y, rl = Math.max(1, Math.hypot(player.pos.x - physicsPivotPoint.x, ry0, player.pos.z - physicsPivotPoint.z)); hang = MU.clamp(-ry0 / rl, 0, 1); }
+
+  // ── 레이어 합성 (카메라 로컬) ──
+  let px = 0, py = 0, pz = 0, rx = 0, ry = 0, rz = 0;
+  // ① 웹 장력 반동 + ⑤ 액션 + 착지 압축 스프링
+  P.snap.step(dt); P.act.step(dt); P.land.step(dt); P.fovS.step(dt, 0);
+  for (const S of [P.snap, P.act, P.land]) { px += S.px.x; py += S.py.x; pz += S.pz.x; rx += S.rx.x; ry += S.ry.x; rz += S.rz.x; }
+  // ② 로프 현 진동 (15~25Hz 고주파 지터, 최저점에서 최대)
+  if (sw) {
+    const R = C.rope, a = R.intensity * tN * (1 + R.apexBoost * Math.pow(hang, 5)), fr = (k) => R.freqMin + (R.freqMax - R.freqMin) * k;
+    px += povNoise(t * fr(0.15) + 3.1) * R.pos * a; py += povNoise(t * fr(0.60) + 8.7) * R.pos * a; pz += povNoise(t * fr(0.95) + 14.2) * R.pos * a * 0.6;
+    rx += povNoise(t * fr(0.35) + 21.9) * R.rot * a; ry += povNoise(t * fr(0.80) + 27.4) * R.rot * a; rz += povNoise(t * fr(0.50) + 33.8) * R.rot * a * 1.4;
+  }
+  // ③ 고속 풍압 버페트 (속도 임계값 초과 시 제곱 비례, 6~12Hz 퍼린)
+  const wk0 = MU.clamp((speed - C.wind.speedStart) / (C.wind.speedFull - C.wind.speedStart), 0, 1), windK = wk0 * wk0 * C.wind.intensity;
+  if (windK > 0.0005) {
+    const W = C.wind, fw = (k) => W.freqMin + (W.freqMax - W.freqMin) * k;
+    px += povNoise(t * fw(0.2) + 41.3) * W.pos * windK; py += povNoise(t * fw(0.7) + 47.9) * W.pos * windK * 0.8; pz += povNoise(t * fw(0.45) + 52.6) * W.pos * windK * 0.7;
+    rx += povNoise(t * fw(0.9) + 58.1) * W.rot * windK; ry += povNoise(t * fw(0.3) + 63.5) * W.rot * windK * 0.8; rz += povNoise(t * fw(0.6) + 69.2) * W.rot * windK * 1.2;
+  }
+  // ④ G-Force 목 관성 스프링 + 저주파 스웨이 (급가속 → 고개 젖혀짐 / 급감속·착지 → 앞으로 쏠림 / 최저점 → 아래로 눌림)
+  {
+    const G = C.gforce, N = P.neck, gi = G.intensity * ((onG && !sw) ? 0.3 : 1);
+    for (const k of _K6) { N[k].f = G.neckFreq; N[k].z = G.damping; }
+    const aF = P.accS.dot(T.F), aR = P.accS.dot(T.R), aUp = P.accS.y < 0 ? P.accS.y * 0.25 : P.accS.y;
+    const load = sw ? MU.clamp((PHYS_TEL.gForce - 1) / 1.4, 0, 1) * (swingPhase === SWING_PHASE.APEX ? 1.25 : 1) : 0;
+    N.rx.step(dt, MU.clamp((aF * G.accPitch - aUp * G.accDown - load * 0.025) * gi, -G.maxPitch, G.maxPitch));
+    N.ry.step(dt, MU.clamp(aR * G.accYaw * gi, -0.08, 0.08));
+    N.py.step(dt, MU.clamp((-aUp * G.accPosY - load * 0.03) * gi, -0.08, 0.08));
+    const sa = MU.clamp(speed / 50, 0, 1) * (sw ? 1 : 0.55) * G.intensity;
+    rx += N.rx.x + povNoise(t * G.swayFreq + 71.4) * G.swayRot * sa; ry += N.ry.x + povNoise(t * G.swayFreq * 0.8 + 77.7) * G.swayRot * 0.8 * sa;
+    rz += povNoise(t * G.swayFreq * 1.2 + 83.3) * G.swayRot * sa; py += N.py.x;
+  }
+  // 지상 헤드밥 + 호흡
+  {
+    const bt = (onG && !sw) ? MU.clamp(hsp / 14, 0, 1) : 0; P.bobK += (bt - P.bobK) * (1 - Math.exp(-8 * dt)); P.bobPhase += hsp * dt * 0.55;
+    const bk = P.bobK, ph = P.bobPhase;
+    px += Math.sin(ph * 0.5) * 0.014 * bk; py += (Math.abs(Math.sin(ph)) * 0.055 - 0.03) * bk + Math.sin(t * 1.3) * 0.0025;
+    rz += Math.sin(ph * 0.5) * 0.005 * bk; rx += Math.sin(ph + 0.6) * 0.0035 * bk + Math.sin(t * 1.3 + 0.5) * 0.0012;
+  }
+  px *= M; py *= M; pz *= M; rx *= M; ry *= M; rz *= M;   // 전체 배율 (멀미 방지)
+  // 코너링 뱅크: 횡방향 구심가속도에 비례해 스윙 안쪽으로 최대 bankMaxDeg 롤 (지상 제외)
+  {
+    let aLat = (onG && !sw) ? 0 : P.accS.dot(T.R);
+    aLat = Math.sign(aLat) * Math.max(0, Math.abs(aLat) - C.bankDeadAcc);
+    const mx = C.bankMaxDeg * Math.PI / 180;
+    let bt = -MU.clamp(aLat * C.bankGain * Math.PI / 180, -mx, mx);   // rotateZ 음수 = 오른쪽 기울임
+    if (glide.active) bt += -glide.bank * C.glideBank;
+    bt = MU.clamp(bt, -mx * 1.4, mx * 1.4);
+    P.bank += (bt - P.bank) * (1 - Math.exp(-C.bankResponse * dt));
+    rz += P.bank * Mt;
+  }
+  // VOR 수평 유지: 스윙 진자(몸이 로프를 따라 매달린 기울기)를 horizonLockRatio 만큼 억제
+  if (sw) { T.D2.set(physicsPivotPoint.x - player.pos.x, physicsPivotPoint.y - (player.pos.y + 1.45), physicsPivotPoint.z - player.pos.z).normalize(); P.Qf.setFromUnitVectors(T.Y, T.D2); }
+  else P.Qf.identity();
+  T.Qb.identity().slerp(P.Qf, C.bodyTiltWeight);
+  P.qTilt.slerp(T.Qb, 1 - Math.exp(-C.tiltSmooth * dt));
+  T.Qt.identity().slerp(P.qTilt, MU.clamp((1 - C.horizonLockRatio) * Mt, 0, 1));
+
+  // ── 카메라 트랜스폼 최종 합성 ──
+  camera.position.set(ex, Math.max(0.35, ey), ez);
+  T.W.copy(camera.position).addScaledVector(T.F, 24); camera.lookAt(T.W);
+  camera.quaternion.premultiply(T.Qt);
+  T.E.set(rx, ry, rz, 'YXZ'); T.Qs.setFromEuler(T.E); camera.quaternion.multiply(T.Qs);
+  T.P3.set(px, py, pz).applyQuaternion(camera.quaternion); camera.position.add(T.P3);
+  povFovOffset = P.fovS.x * M;
+  povYawSm = cameraYaw;
+
+  // ── 팔/다리/로프 ──
+  povArmsUpdate(P, dt, t, M, tN, windK, sw, onG, hsp, speed);
+  povLegsUpdate(P, dt, t, M, sw, onG, hsp, speed, windK);
+  P.prevVy = vel.y;
+  if (sw && webMesh) {   // 로프는 1인칭 손끝에서 시작해 앵커까지 뻗어 나감
+    camera.updateMatrixWorld(true);
+    T.W.copy(P.ropeLocal); camera.localToWorld(T.W);
+    const e = MU.clamp(P.shotT / 0.10, 0, 1), prog = 1 - (1 - e) * (1 - e);
+    T.W2.copy(T.W).lerp(webAnchor, prog);
+    webMesh.position.copy(T.W).lerp(T.W2, 0.5); webMesh.scale.set(1, 1, Math.max(0.001, T.W.distanceTo(T.W2))); webMesh.lookAt(webAnchor); webMesh.updateMatrixWorld(true);
+  }
+  return true;
+}
+
+// ── 절차적 양팔: 발사(Shoot) → 매달림 당김(Taut Pull) → 킥오프(Release), 카메라와 비동기 진동/지연 ──
+function povArmsUpdate(P, dt, t, M, tN, windK, sw, onG, hsp, speed) {
+  const C = POV_CAM, H = C.hand, MU = THREE.MathUtils, T = P.T, rig = P.rig, ex = MU.clamp(camera.aspect * 0.9, 0.55, 1.25);
+  rig.group.visible = C.arms;
+  if (!C.arms) return;
+  P.wRope += ((sw ? 1 : 0) - P.wRope) * (1 - Math.exp(-(sw ? 16 : 6) * dt));
+  P.wOff += ((sw ? 0.5 : 0) - P.wOff) * (1 - Math.exp(-8 * dt));
+  P.wGlide += ((glide.active && !sw ? 1 : 0) - P.wGlide) * (1 - Math.exp(-6 * dt));
+  P.wDive += ((msm2IsDiving && !sw ? 1 : 0) - P.wDive) * (1 - Math.exp(-7 * dt));
+  // 카메라 회전 지연(Rotational Lag): 시선을 빠르게 돌리면 팔이 한 박자 늦게 따라옴
+  let dY = cameraYaw - P.prevYaw; while (dY > Math.PI) dY -= 2 * Math.PI; while (dY < -Math.PI) dY += 2 * Math.PI;
+  const wy = MU.clamp(dY / dt, -10, 10), wp = MU.clamp((povPitch - P.prevPitch) / dt, -10, 10);
+  P.prevYaw = cameraYaw; P.prevPitch = povPitch;
+  P.lagY.step(dt, MU.clamp(-wy * H.lagTime, -H.lagMax, H.lagMax)); P.lagP.step(dt, MU.clamp(-wp * H.lagTime, -H.lagMax, H.lagMax));
+  // 손 관성 (카메라 목 스프링과 다른 주파수 → 입체적 분리)
+  const aX = P.accS.dot(T.R), aY = P.accS.dot(T.U), aZ = -P.accS.dot(T.F), kI = 0.0011 * H.inertia, I = P.hIn;
+  I.px.step(dt, MU.clamp(-aX * kI, -0.06, 0.06)); I.py.step(dt, MU.clamp(-aY * kI, -0.06, 0.06)); I.pz.step(dt, MU.clamp(-aZ * kI, -0.06, 0.06));
+  const tt = t + H.phase, vib = C.rope.intensity * tN * (1 + C.rope.apexBoost * 0.5) * H.vibScale;   // 장력 떨림: 카메라보다 1.8배, 위상차 적용
+  const a = P.aL, dl = Math.max(0.2, Math.hypot(a.x, a.y, Math.min(a.z, -0.15)));
+  for (let i = 0; i < 2; i++) {
+    const sgn = i === 1 ? 1 : -1, isRope = i === P.side, w = isRope ? P.wRope : P.wOff, A = P.hAct[i];
+    A.step(dt);
+    T.S.set(sgn * 0.21 * ex, -0.25, 0.10);
+    // 기본 포즈: 대기 → 활공(양팔 펼침) → 다이브(양팔 앞으로)
+    let bx = sgn * 0.17 * ex, by = -0.38 + Math.sin(P.bobPhase * 2 + i * 1.7) * 0.012 * P.bobK + Math.sin(t * 1.3 + i) * 0.003, bz = -0.40;
+    bx += (sgn * 0.42 * ex - bx) * P.wGlide; by += (-0.14 - by) * P.wGlide; bz += (-0.46 - bz) * P.wGlide;
+    bx += (sgn * 0.08 - bx) * P.wDive; by += (-0.10 - by) * P.wDive; bz += (-0.62 - bz) * P.wDive;
+    // 웹 슈터 포즈: 앵커 방향으로 팔 뻗기 (발사 순간 쭉 뻗었다가 팽팽한 줄을 쥔 자세로 정착)
+    let len = 0.46 + 0.03 * tN;
+    if (isRope) { const e = Math.min(1, P.shotT / 0.09); len = P.shotT < 0.09 ? 0.2 + 0.36 * (1 - (1 - e) * (1 - e)) : 0.46 + 0.03 * tN + 0.10 * Math.exp(-(P.shotT - 0.09) * 10); } else len = 0.36;
+    const dx = a.x / dl, dy = a.y / dl, dz = Math.min(a.z, -0.15) / dl;
+    T.Tg.set(bx + (T.S.x + dx * len * ex - bx) * w, by + (T.S.y + dy * len - by) * w, bz + (T.S.z + dz * len - bz) * w);
+    // 오프셋: 관성 + 액션 스프링 + 회전 지연 + 풍압 + 장력 떨림
+    let ox = I.px.x + A.px.x - P.lagY.x * 0.5, oy = I.py.x + A.py.x + P.lagP.x * 0.5, oz = I.pz.x + A.pz.x;
+    let hrx = A.rx.x + P.lagP.x * 0.8, hry = P.lagY.x * 0.8, hrz = A.rz.x;
+    if (windK > 0.0005) {
+      const ws = 0.012 * windK * 1.4;
+      ox += povNoise(tt * 8.3 + i * 5.1) * ws; oy += povNoise(tt * 10.1 + i * 7.3 + 9) * ws; oz += povNoise(tt * 7.2 + i * 3.7 + 19) * ws;
+      hrx += povNoise(tt * 9.4 + i * 4.1 + 29) * 0.03 * windK; hrz += povNoise(tt * 11.2 + i * 2.9 + 39) * 0.03 * windK;
+    }
+    if (sw) {
+      const vv = vib * (isRope ? 1 : 0.35), Rr = C.rope, f1 = Rr.freqMin + (Rr.freqMax - Rr.freqMin) * 0.3, f2 = Rr.freqMin + (Rr.freqMax - Rr.freqMin) * 0.75, f3 = Rr.freqMax;
+      ox += povNoise(tt * f1 + i * 6.7 + 91) * Rr.pos * vv; oy += povNoise(tt * f2 + i * 6.7 + 97) * Rr.pos * vv; oz += povNoise(tt * f3 + i * 6.7 + 103) * Rr.pos * vv * 0.7;
+      hrx += povNoise(tt * f2 + i * 4.3 + 109) * Rr.rot * vv * 6; hry += povNoise(tt * f1 + i * 4.3 + 113) * Rr.rot * vv * 6; hrz += povNoise(tt * f3 + i * 4.3 + 127) * Rr.rot * vv * 8;
+    }
+    T.Tg.x += ox * M; T.Tg.y += oy * M; T.Tg.z += oz * M;
+    T.Pole.set(sgn * 0.7, -1.0, 0.35);
+    povSolveArm(P, 0.30, 0.28);
+    const ar = rig.arms[i];
+    povSeg(ar.upper, T.S, T.El, T.dir, T.Y);
+    povSeg(ar.fore, T.El, T.Hd, T.dir, T.Y);   // 이후 T.dir = 팔꿈치→손 방향
+    T.An.copy(T.El).lerp(T.Hd, 0.64); T.To.copy(T.El).lerp(T.Hd, 0.93); povSeg(ar.shooter, T.An, T.To, T.K, T.Y);
+    T.K.copy(T.dir);   // 손 방향 보존
+    ar.hand.position.copy(T.Hd).addScaledVector(T.K, 0.06);
+    ar.hand.quaternion.setFromUnitVectors(T.Y, T.K);
+    T.E.set(hrx * M, hry * M, hrz * M, 'XYZ'); T.Qr.setFromEuler(T.E); ar.hand.quaternion.multiply(T.Qr);
+    ar.hand.scale.set(0.05, 0.085, 0.034);
+    if (isRope) P.ropeLocal.copy(T.Hd).addScaledVector(T.K, 0.15);
+  }
+}
+
+// ── 절차적 하체: 고개를 숙이면 보이는 다리 (바람에 펄럭임 / 매달림 / 킥오프) ──
+function povLegsUpdate(P, dt, t, M, sw, onG, hsp, speed, windK) {
+  const C = POV_CAM, L = P.rig.legs, T = P.T, MU = THREE.MathUtils;
+  L.group.visible = C.legs;
+  if (!C.legs) return;
+  L.group.position.set(player.pos.x, player.pos.y + 0.92, player.pos.z);
+  T.Qy.setFromAxisAngle(T.Y, cameraYaw);
+  T.Qb.copy(sw ? P.Qf : T.Qs.identity());
+  P.qLeg.slerp(T.Qb, 1 - Math.exp(-8 * dt));
+  L.group.quaternion.copy(P.qLeg).multiply(T.Qy);
+  const kick = P.kickT < 0.3 ? Math.sin(Math.PI * P.kickT / 0.3) * P.kickQ : 0; P.kickT += dt;
+  const sk = MU.clamp(speed / 60, 0, 1), L1 = 0.46, L2 = 0.46;
+  for (let i = 0; i < 2; i++) {
+    const sgn = i === 1 ? 1 : -1, lg = L.list[i];
+    let th, kn;
+    if (onG && !sw) { const ph = P.bobPhase + (i ? Math.PI : 0); th = Math.sin(ph) * 0.55 * P.bobK; kn = Math.max(0, -Math.sin(ph)) * 0.9 * P.bobK; }
+    else if (sw) { th = 0.28 + 0.2 * sk + Math.sin(t * 1.7 + i * 2.1) * 0.06; kn = 0.55 + 0.25 * sk * (i ? 1 : 0.6); }
+    else if (msm2IsDiving) { th = 0.55; kn = 0.10; }
+    else { th = 0.18 + 0.45 * sk + Math.sin(t * 1.9 + i * 2.4) * 0.05; kn = 0.45 + 0.3 * sk; }
+    if (!onG || sw) { th += (povNoise(t * 9 + i * 3.1 + 7) * 0.30 + povNoise(t * 5 + i * 1.7 + 17) * 0.12) * windK * M; kn += povNoise(t * 11 + i * 2.3 + 27) * 0.25 * windK * M; }
+    th -= kick * 1.15 * (i ? 0.85 : 1); kn += kick * 0.2;
+    const f2 = th + kn;
+    T.S.set(sgn * 0.10, 0, 0);
+    T.El.set(T.S.x, -L1 * Math.cos(th), -L1 * Math.sin(th));                     // 무릎
+    T.Hd.set(T.S.x, T.El.y - L2 * Math.cos(f2), T.El.z - L2 * Math.sin(f2));      // 발목
+    T.To.set(T.S.x, T.Hd.y - 0.05 * Math.cos(f2) - 0.17 * Math.sin(f2), T.Hd.z - 0.05 * Math.sin(f2) + 0.17 * Math.cos(f2));   // 발끝
+    povSeg(lg.thigh, T.S, T.El, T.dir, T.Y); povSeg(lg.shin, T.El, T.Hd, T.dir, T.Y); povSeg(lg.foot, T.Hd, T.To, T.dir, T.Y);
+  }
+}
+
+// ══════════ 1인칭 하드 웹스윙: 시선 방향 앵커 탐색 ══════════
+// 자동 부채꼴 탐색 대신 카메라가 바라보는 방향(십자선)으로 레이를 쏘고, 못 맞히면 3° / 6.5° 허용 링을 순서대로 시도(중앙에 가까운 히트 우선)
+function povLookScan() {
+  const S = SWING, ex = player.pos.x, ey = player.pos.y + 1.48, ez = player.pos.z;
+  const cp = Math.cos(povPitch), sp = Math.sin(povPitch), sy = Math.sin(cameraYaw), cy = Math.cos(cameraYaw);
+  const fx = sy * cp, fy = sp, fz = cy * cp, rx = -cy, rz = sy, ux = -sy * sp, uy = cp, uz = -cy * sp;
+  const cols = nearbyColliders(ex, ez), toRad = Math.PI / 180, offs = [[0, 0]];
+  for (const ring of [S.povHardTol1, S.povHardTol2]) for (let k = 0; k < 8; k++) { const ang = k * Math.PI / 4; offs.push([Math.cos(ang) * ring, Math.sin(ang) * ring * 0.8]); }
+  let found = false;
+  for (let n = 0; n < offs.length; n++) {
+    const oa = offs[n][0], ob = offs[n][1], sa = Math.sin(oa * toRad), sb = Math.sin(ob * toRad);
+    let dx = fx + rx * sa + ux * sb, dy = fy + uy * sb, dz = fz + rz * sa + uz * sb;
+    const dn = Math.hypot(dx, dy, dz) || 1; dx /= dn; dy /= dn; dz /= dn;
+    if (!swingRayVsBuildings(ex, ey, ez, dx, dy, dz, S.povHardRange, cols, _rayHit)) continue;
+    const col = _rayHit.col, tt = _rayHit.t, hy = Math.min(ey + dy * tt, col.maxY - 0.4);
+    const ax = ex + dx * tt + _rayHit.nx * 0.05, az = ez + dz * tt + _rayHit.nz * 0.05;
+    const ddx = ax - ex, ddy = hy - (player.pos.y + SW_HAND_H), ddz = az - ez, dist = Math.hypot(ddx, ddy, ddz), hd = Math.hypot(ddx, ddz);
+    if (dist < S.povHardMinDist || ddy < S.povHardMinRise || hd < 1.5) continue;
+    swingAnchor.point.set(ax, hy, az); swingAnchor.normal.set(_rayHit.nx, 0, _rayHit.nz);
+    swingAnchor.col = col; swingAnchor.dist = dist; swingAnchor.elevDeg = Math.atan2(ddy, hd) / toRad; swingAnchor.score = 100 - Math.hypot(oa, ob);
+    found = true; break;
+  }
+  swingAnchor.valid = found;
+  if (found) { swingSpot.copy(swingAnchor.point); swingSpot.userData.name = (swingAnchor.col && swingAnchor.col.name) ? swingAnchor.col.name : 'Building'; currentBestSpot = swingSpot; }
+  else { swingAnchor.col = null; currentBestSpot = null; }
+}
+
+// ── 설정창: 하드 웹스윙 토글 / 흔들림 강도 / 수평 유지 ──
+function wirePovCamUI() {
+  const sens = document.getElementById('pov-sens'); if (!sens || document.getElementById('btn-pov-hard')) return;
+  const sec = sens.closest('.settings-section') || sens.parentElement; if (!sec) return;
+  const mk = (tag, cls, txt, id) => { const e = document.createElement(tag); if (cls) e.className = cls; if (txt) e.innerHTML = txt; if (id) e.id = id; return e; };
+  const hb = mk('button', 'assist-toggle-btn', '', 'btn-pov-hard'); hb.style.marginTop = '10px';
+  const hbText = () => { hb.innerText = '1인칭 하드 웹스윙: ' + (SWING.povHardSwing ? 'ON (시선 방향 · 줄 길이 고정)' : 'OFF (자동 조준)'); hb.classList.toggle('off', !SWING.povHardSwing); };
+  hb.addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); SWING.povHardSwing = !SWING.povHardSwing; hbText(); }); hbText();
+  const hd = mk('div', 'assist-desc', 'ON: 1인칭에서 십자선이 바라보는 건물에 웹을 쏘고, 부착한 순간의 줄 길이를 끝까지 유지합니다(자동 줄 감기·피벗 보정 없음). 건물 위쪽을 보고 발사하세요.');
+  const sl = (label, id, min, max, val, fmt, on) => {
+    const l = mk('span', 'settings-label', label + ' <span id="' + id + '-val">' + fmt(val) + '</span>'); l.style.marginTop = '10px';
+    const r = document.createElement('input'); r.type = 'range'; r.id = id; r.min = min; r.max = max; r.value = val; r.style.cssText = 'width:100%;touch-action:none;';
+    r.addEventListener('input', () => { on(+r.value); const v = document.getElementById(id + '-val'); if (v) v.textContent = fmt(+r.value); });
+    sec.appendChild(l); sec.appendChild(r);
+  };
+  sec.appendChild(hb); sec.appendChild(hd);
+  sl('1인칭 흔들림 강도', 'pov-shake', 0, 200, Math.round(POV_CAM.masterShakeIntensity * 100), (v) => v + '%', (v) => { POV_CAM.masterShakeIntensity = v / 100; });
+  sl('1인칭 수평 유지 (VOR)', 'pov-horizon', 0, 100, Math.round(POV_CAM.horizonLockRatio * 100), (v) => v + '%', (v) => { POV_CAM.horizonLockRatio = v / 100; });
+  sec.appendChild(mk('div', 'assist-desc', '흔들림 강도: 풍압·로프 떨림·G포스·반동 전체 배율(멀미가 심하면 30~60%). 수평 유지: 높을수록 스윙 중 시야가 덜 기웁니다.'));
+}
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', wirePovCamUI); else wirePovCamUI();
 
 function physDragAccel(speed, diving) {
   const cd = diving ? PHYS.cdDiving : PHYS.cdNormal, area = diving ? PHYS.areaDiving : PHYS.areaNormal;
@@ -6000,6 +6399,7 @@ function evaluateWebTargets(force) {
   const now = performance.now();
   if (!force && now - swingScanClock < SWING.scanInterval * 1000) { updateAnchorHUD(); return; }
   swingScanClock = now;
+  if (isPOVMode && SWING.povHardSwing) { povLookScan(); updateAnchorHUD(); return; }   // 1인칭 하드: 바라보는 쪽으로 조준
   const S = SWING, px = player.pos.x, py = player.pos.y + SW_HAND_H, pz = player.pos.z;
   const aimHasInput = getSwingAimDir(_swAim);
   const vh = Math.hypot(player.vel.x, player.vel.z);
@@ -6055,8 +6455,12 @@ function shootWeb() {
   if (!isGameStarted || isSwinging) return;
   stopGlide('web');
   evaluateWebTargets(true);
-  if (!swingAnchor.valid) return;
+  if (!swingAnchor.valid) {
+    if (isPOVMode && SWING.povHardSwing) { msm2ApexStatusText = '🕸️ 시선 방향에 붙을 건물이 없음 — 건물 위쪽을 바라보세요'; msm2ApexTimer = 1.1; }
+    return;
+  }
   const S = SWING, alpha = swingAlpha();
+  swingHardRope = !!(isPOVMode && S.povHardSwing);
   webAnchor.copy(swingAnchor.point);                       // visualAnchor: 실제 건물 벽면 (로프 렌더링 / 손 IK 전용)
   swingWallNormal.copy(swingAnchor.normal);
   _swHand.set(player.pos.x, player.pos.y + SW_HAND_H, player.pos.z);
@@ -6071,16 +6475,17 @@ function shootWeb() {
   const gap = (_swHand.x - webAnchor.x) * nx + (_swHand.z - webAnchor.z) * nz;
   const off = Math.min(S.maxPivotOffset * alpha, Math.max(0, gap * S.pivotWallGapRatio));
   // initialPhysicsPivot = visualAnchor + wallNormal·maxOffset·alpha (+ 진행축 오프셋)
-  physicsPivotPoint.set(webAnchor.x + nx * off + fx * S.pivotForwardOffset * alpha, webAnchor.y, webAnchor.z + nz * off + fz * S.pivotForwardOffset * alpha);
+  if (swingHardRope) physicsPivotPoint.copy(webAnchor);   // 하드: 물리 피벗 = 실제 부착점 (오프셋 없음)
+  else physicsPivotPoint.set(webAnchor.x + nx * off + fx * S.pivotForwardOffset * alpha, webAnchor.y, webAnchor.z + nz * off + fz * S.pivotForwardOffset * alpha);
   let d0 = _swHand.distanceTo(physicsPivotPoint);
-  if (d0 < S.minRope) {                                    // 너무 짧은 줄은 피벗을 바깥으로 밀어 최소 길이 확보
+  if (d0 < S.minRope && !swingHardRope) {                                    // 너무 짧은 줄은 피벗을 바깥으로 밀어 최소 길이 확보
     _swTmp.subVectors(physicsPivotPoint, _swHand); if (_swTmp.lengthSq() < 1e-6) _swTmp.set(0, 1, 0);
     physicsPivotPoint.copy(_swHand).addScaledVector(_swTmp.normalize(), S.minRope); d0 = S.minRope;
   }
   swingBasePivot.copy(physicsPivotPoint);
   ropeLength = d0;
   // 부착 시 진행 방향 최소 속도 보장
-  { const hs0 = Math.hypot(player.vel.x, player.vel.z), tgt = Math.max(hs0, S.attachMinSpeed);
+  if (!swingHardRope) { const hs0 = Math.hypot(player.vel.x, player.vel.z), tgt = Math.max(hs0, S.attachMinSpeed);
     let dx0 = hs0 > 1.0 ? player.vel.x / hs0 : _swAim.x, dz0 = hs0 > 1.0 ? player.vel.z / hs0 : _swAim.z;
     dx0 += (_swAim.x - dx0) * 0.5; dz0 += (_swAim.z - dz0) * 0.5;
     const dn0 = Math.hypot(dx0, dz0) || 1; player.vel.x = dx0 / dn0 * tgt; player.vel.z = dz0 / dn0 * tgt; }
@@ -6097,6 +6502,7 @@ function shootWeb() {
   msm2SwingTime = 0; msm2EntrySpeed = player.vel.length(); PHYS_TEL.entry = msm2EntrySpeed; msm2PeakSwingSpeed = msm2EntrySpeed;
   msm2PassedNadir = false; msm2IsDiving = false; msm2TrickSpin = 0;
   isSwinging = true; webMesh.visible = true; targetMarker.visible = false;
+  try { if (isPOVMode) povOnShoot(); } catch (_) {}
 }
 
 // 줄 단축(PULL / 바닥 회피): 줄이 팽팽하면 각운동량 보존(접선 속도 × L0/L)
@@ -6128,7 +6534,7 @@ function updateSwingPhysics(dt, inputDir, inputMag) {
 
   // 스윙 평면 조향 보조: 속도·피벗을 플레이어 수직축 기준으로 같은 각만큼 회전(에너지 보존, 줄 구속 유지)
   { let turn = 0;
-    if (Math.abs(swingSteerSm) > 0.15 && vh0 > 3.0) {
+    if (!swingHardRope && Math.abs(swingSteerSm) > 0.15 && vh0 > 3.0) {
       const sp = THREE.MathUtils.clamp((vh0 - S.turnSpeedLo) / (S.turnSpeedHi - S.turnSpeedLo), 0, 1);
       turn = -swingSteerSm * THREE.MathUtils.degToRad(THREE.MathUtils.lerp(S.turnRateSlow, S.turnRateFast, sp)) * dt;   // 오른쪽 입력 = ψ 감소
     }
@@ -6142,7 +6548,10 @@ function updateSwingPhysics(dt, inputDir, inputMag) {
   }
 
   // ── ③ 물리 피벗 동적 복귀: physicsPivot → visualAnchor 보간. 앵커 쪽으로 강하게 조향하면 수렴 2~3배(모서리를 축으로 급선회) ──
-  { const corner = (swingSteerSm * anchorSide) > S.cornerSteerThreshold ? S.cornerBoost : 1.0;
+  if (swingHardRope) {   // 하드: 피벗 고정 · 줄 길이 불변. 공중 조향만 약하게 허용
+    swingPivotBlend = 1;
+    if (inputMag > S.steerDeadzone) { vel.x += inputDir.x * inputMag * S.hardAirSteer * dt; vel.z += inputDir.z * inputMag * S.hardAirSteer * dt; }
+  } else { const corner = (swingSteerSm * anchorSide) > S.cornerSteerThreshold ? S.cornerBoost : 1.0;
     swingCornerMul += (corner - swingCornerMul) * (1 - Math.exp(-S.cornerResponse * dt));
     const k = 1 - Math.exp(-(swingCornerMul / Math.max(0.1, S.pivotConvergeTime)) * dt);
     const d0 = Math.hypot(pos.x - pv.x, pos.y + H - pv.y, pos.z - pv.z);
@@ -6154,7 +6563,7 @@ function updateSwingPhysics(dt, inputDir, inputMag) {
   }
 
   // ── 슬랙 제거: 플레이어가 피벗 쪽으로 접근하며 줄이 느슨해지면 줄 길이를 따라 줄임 (진자가 항상 팽팽한 호를 그리게) ──
-  { const dNow = Math.hypot(pos.x - pv.x, pos.y + H - pv.y, pos.z - pv.z);
+  if (!swingHardRope) { const dNow = Math.hypot(pos.x - pv.x, pos.y + H - pv.y, pos.z - pv.z);
     if (ropeLength > dNow + S.autoSlack) ropeLength = Math.max(S.reelMinRope, dNow + S.autoSlack); }
 
   // ── ⑤ 단계별 접선 추진 (하강/최저점에서 속도가 붙는 느낌) ──
@@ -6164,10 +6573,10 @@ function updateSwingPhysics(dt, inputDir, inputMag) {
 
   // ── PULL(E) 줄 감기 ──
   swingReel += ((pullHeld ? 1 : 0) - swingReel) * (1 - Math.exp(-S.reelRamp * dt));
-  if (swingReel > 0.02) swingShortenRope(Math.max(S.reelMinRope, ropeLength - S.reelSpeed * swingReel * dt));
+  if (swingReel > 0.02 && !swingHardRope) swingShortenRope(Math.max(S.reelMinRope, ropeLength - S.reelSpeed * swingReel * dt));
 
   // ── ④-3 하단 지면 충돌 방지 (alpha 비례): 최저점에서 지면에 닿을 위험이 있으면 줄을 자동 단축, 줄이 한계면 상방 보조 ──
-  if (alpha > 0.001 && pos.y + H - pv.y < 0) {
+  if (alpha > 0.001 && !swingHardRope && pos.y + H - pv.y < 0) {
     const targetFeet = GROUND_Y + S.floorClearance;
     const lowestFeet = pv.y - ropeLength - H;
     if (lowestFeet < targetFeet) {
@@ -6198,7 +6607,7 @@ function updateSwingPhysics(dt, inputDir, inputMag) {
     if (pos.y < GROUND_Y) { pos.y = GROUND_Y; if (vel.y < 0) vel.y = 0; }
   }
   const tension = dt > 0 ? PHYS.mass * sumVr / dt : 0;
-  PHYS_TEL.tension = tension; PHYS_TEL.centripetal = aC; PHYS_TEL.gForce = tension > 0 ? (tension / PHYS.mass) / PHYS.gravity : 1.0;
+  PHYS_TEL.vr = sumVr; PHYS_TEL.tension = tension; PHYS_TEL.centripetal = aC; PHYS_TEL.gForce = tension > 0 ? (tension / PHYS.mass) / PHYS.gravity : 1.0;
 
   // ── ⑤ 스윙 아크 단계: DOWNSWING → APEX(최저점) → UPSWING → (RELEASE) ──
   { const ry = pos.y + H - pv.y;
@@ -6224,7 +6633,7 @@ function updateSwingPhysics(dt, inputDir, inputMag) {
 function releaseWeb(giveBoost) {
   if (!isSwinging) return;
   const S = SWING, phaseAtRelease = swingPhase;
-  isSwinging = false; pullHeld = false;
+  isSwinging = false; pullHeld = false; swingHardRope = false;
   wallState.noWall = Math.max(wallState.noWall, 0.8);
   webMesh.visible = false;
   swingPhase = SWING_PHASE.NONE; swingKick.q = 0;
@@ -6255,6 +6664,7 @@ function releaseWeb(giveBoost) {
   const shown = player.vel.length();
   msm2ApexStatusText = q > 0.6 ? `⚡ KICK-OFF! (${Math.round(shown * 3.6)} km/h) · Space = 웹 윙` : apex ? `⚡ APEX RELEASE (${Math.round(shown * 3.6)} km/h) · Space = 웹 윙` : `🕸️ WEB RELEASE (${Math.round(shown * 3.6)} km/h) · Space = 웹 윙`;
   msm2ApexTimer = (apex || q > 0.6) ? 1.6 : 1.1;
+  try { if (isPOVMode) povOnKick(q); } catch (_) {}
 }
 
 // 킥 임펄스 후반부 분산 적용 (공중 프레임마다 호출)
@@ -9074,7 +9484,11 @@ function updateCameraAndHUD(dt) {
   if (msm2SmoothLook.lengthSq() === 0) msm2SmoothLook.copy(rawTarget);
   msm2SmoothLook.lerp(rawTarget, Math.min(1.0, (isSwinging ? 18.0 : 24.0) * dt));
 
-  if (isPOVMode) {
+  const _povDone = isPOVMode && !isSpectator && !isBirdEyeMode && POV_CAM.enabled && povCamSafe(dt, speed);
+  povSetVisible(_povDone);
+  if (_povDone) {
+    povYawSm = cameraYaw;   // 1인칭 리얼 카메라 리그가 처리함 (povCamUpdate)
+  } else if (isPOVMode) {
     // 1인칭 시점: 플레이어 눈높이에서 카메라 회전 방향을 그대로 바라봄
     const eyeY = player.pos.y + (player.onGround ? 1.58 : 1.48);
     camera.position.set(player.pos.x, Math.max(0.35, eyeY), player.pos.z);
@@ -9123,8 +9537,8 @@ function updateCameraAndHUD(dt) {
     }
   }
   camera.near = (isBirdEyeMode || camera.position.y > 45) ? 2.0 : camera.position.y > 18 ? 0.6 : isPOVMode ? 0.12 : 0.3;
-  camera.fov = SpeedCamera.stepFov(camera.fov, dt);   // 속도 비례 FOV
-  { const shk = THREE.MathUtils.clamp((speed - 28) / 40, 0, 1) * (isPOVMode ? 0.6 : 1);   // 고속 카메라 셰이크
+  camera.fov -= _povFovLast; camera.fov = SpeedCamera.stepFov(camera.fov, dt); _povFovLast = _povDone ? povFovOffset : 0; camera.fov += _povFovLast;   // 속도 비례 FOV (+ 1인칭 FOV 킥)
+  { const shk = THREE.MathUtils.clamp((speed - 28) / 40, 0, 1) * (_povDone ? 0 : isPOVMode ? 0.6 : 1);   // 고속 카메라 셰이크 (1인칭 리그는 자체 풍압 흔들림 사용)
     if (shk > 0 && !isBirdEyeMode && !isSpectator) { const tt = performance.now() * 0.001;
       camera.position.x += Math.sin(tt * 47.0) * 0.018 * shk; camera.position.y += Math.sin(tt * 61.0 + 1.3) * 0.014 * shk; camera.rotateZ(Math.sin(tt * 37.0) * 0.0016 * shk); } }
   camera.updateProjectionMatrix();
