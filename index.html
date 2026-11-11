@@ -5474,8 +5474,9 @@ float lcWave(vec2 w) { return lcF(w * 0.45 + vec2(uLcT * 0.06, uLcT * 0.045)) + 
   nycLoadStatus('가로수·신호등·거리 시설물 배치 중…', 0.97); await nmYield(); nrProps(P);
   const tg = nrTreeGeo(), tm = new THREE.Matrix4(), tq = new THREE.Quaternion(), tp = new THREE.Vector3(), ts = new THREE.Vector3(), tc = new THREE.Color(), up = new THREE.Vector3(0, 1, 0);
   let nT = 0, nV = 0;
+  let _ci = 0; const _cn = NR.chunks.size;
   for (const [key, C] of NR.chunks) {
-    const mk = (B, mat, ro, nm, r) => { if (!B.v) return; const m = new THREE.Mesh(nrGeo(B), mat); m.name = nm; m.position.set(C.x0, 0, C.z0); m.renderOrder = ro; m.receiveShadow = true; scene.add(m); NM.cellMeshes.push({ mesh: m, x: C.x0 + NR_CH / 2, z: C.z0 + NR_CH / 2, r }); nV += B.v; };
+    const mk = (B, mat, ro, nm, r) => { if (!B.v) return; const m = new THREE.Mesh(nrGeo(B), mat); m.name = nm; m.position.set(C.x0, 0, C.z0); m.renderOrder = ro; m.receiveShadow = true; scene.add(m); NM.cellMeshes.push({ mesh: m, x: C.x0 + NR_CH / 2, z: C.z0 + NR_CH / 2, r }); nV += B.v; B.p = B.u = B.c = B.n = B.i = null; };
     const sq = (NR._seq = (NR._seq || 0) + 1) * 1e-5; mk(C.lc, NR.mLc, 1 + sq, 'NR_Land', 0); mk(C.g0, NR.mG[0], 2 + sq, 'NR_Road', 0); mk(C.g1, NR.mG[1], 2.1 + sq, 'NR_Road1', 0); mk(C.g2, NR.mG[2], 2.2 + sq, 'NR_Cross', 0); mk(C.g3, NR.mG[3], 2.3 + sq, 'NR_Walk', 0); mk(C.dk, NR.mDk, 3, 'NR_Deck', 0); mk(C.pr, NR.mPr, 0, 'NR_Props', 1300); mk(C.pl, NR.mPl, 0, 'NR_Lights', 1300);
     if (C.tr.length) {
       const im = new THREE.InstancedMesh(tg, NR.mTr, C.tr.length); im.name = 'NR_Trees'; im.frustumCulled = false;
@@ -5487,6 +5488,7 @@ float lcWave(vec2 w) { return lcF(w * 0.45 + vec2(uLcT * 0.06, uLcT * 0.045)) + 
       im.instanceMatrix.needsUpdate = true; if (im.instanceColor) im.instanceColor.needsUpdate = true; scene.add(im); NM.cellMeshes.push({ mesh: im, x: C.x0 + NR_CH / 2, z: C.z0 + NR_CH / 2, r: 1500 }); nT += C.tr.length;
     }
     C.g0 = C.g1 = C.g2 = C.g3 = C.dk = C.lc = C.pr = C.pl = null; C.tr = null;
+    if ((++_ci % 2) === 0) { nycLoadStatus('도로 메시 업로드 중… ' + Math.round(_ci / _cn * 100) + '%', 0.97 + 0.02 * _ci / _cn); await nmYield(); }
   }
   NR.preD = null; NR.roadGrid = null; NR.ready = true; NR.stats = { verts: nV, trees: nT, decks: NR.decks.size };
   console.log('[NR] roads built', NR.stats);
