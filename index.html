@@ -6047,7 +6047,7 @@ const SWING = {
   cornerBoost: 2.5,           // 코너링 시 수렴 속도 배율 (2~3배)
   cornerSteerThreshold: 0.55, // 앵커 쪽으로 이 이상 조향하면 코너링 판정
   cornerResponse: 8.0,        // 1/s 배율 변화 스무딩
-  steerSmooth: 11.0,          // 1/s 조향 입력 관성
+  steerSmooth: 3.2,          // 1/s 조향 입력 관성
   turnRateSlow: 70.0, turnRateFast: 40.0, turnSpeedLo: 10.0, turnSpeedHi: 45.0,   // deg/s 스윙 평면 조향 보조
   // ── ④ 진자 제약 솔버 ──
   gravityMul: 1.45, gravityFall: 1.6, gravityRise: 1.3, nadirBeta: 0.05, nadirCone: 0.6, lenOutRate: 3.0, lenOutMax: 2.5, lenInRate: 5.0, lenInMax: 3.0, wallRepulse: 18.0, wallLookT: 0.7, wallLookMin: 8.0, kickPitchMinDeg: 0.0, kickPitchMaxDeg: 18.0, releaseDragFreeT: 0.0, kickHighSpeed: 34.0,           // 스윙 중 중력 배율
@@ -6069,6 +6069,9 @@ const SWING = {
   povHardSwing: true,         // 1인칭에서만 적용 (설정창 토글)
   povHardRange: 130.0, povHardMinDist: 8.0, povHardMinRise: 3.0,   // m  최대 사거리 / 최소 거리 / 손보다 최소 이만큼 높아야 함
   povHardTol1: 3.0, povHardTol2: 6.5,                              // deg 시선 중심 레이가 빗나갔을 때 시도하는 허용 링
+  noWallAssist: true,         // 벽 접근 보정 전부 끔(자동 벽 달리기/킥, 스윙 중 벽 잡기)
+  steerAccel: 6.0,            // m/s² 스틱 방향 가속(묵직하게)
+  steerTurnSlow: 46.0, steerTurnFast: 24.0,   // deg/s 스틱 방향으로 속도 벡터를 돌리는 최대 선회율(저속/고속)
   hardAirSteer: 7.0           // m/s² 하드 스윙 중 WASD 공중 조향 (줄 길이는 그대로)
 };
 const GROUND = { accel: 95.0, brake: 150.0, decel: 90.0 };   // 지상 이동 가속/제동/무입력 감속 (m/s²)
@@ -6739,7 +6742,22 @@ function updateSwingPhysics(dt, inputDir, inputMag) {
   const S = SWING, H = SW_HAND_H, vel = player.vel, pos = player.pos, pv = physicsPivotPoint;
   msm2SwingTime += dt; swingElapsedTime = msm2SwingTime; msm2IsDiving = false;
   swingPivotBlend = 1; swingCornerMul = 1; swingTurnRateDeg = 0;
-  if (inputMag > S.steerDeadzone) { vel.x += inputDir.x * inputMag * S.hardAirSteer * dt; vel.z += inputDir.z * inputMag * S.hardAirSteer * dt; }
+  {   // 조이스틱 조향: 입력은 관성(steerSmooth)으로 천천히 따라가고, 속도 벡터를 스틱 방향으로 제한된 선회율만큼 돌린다(속력 보존) → 묵직한 조향. 줄 제약이 나머지를 처리.
+    const tx = inputMag > S.steerDeadzone ? inputDir.x * inputMag : 0, tz = inputMag > S.steerDeadzone ? inputDir.z * inputMag : 0, k = 1 - Math.exp(-S.steerSmooth * dt);
+    swingInX += (tx - swingInX) * k; swingInZ += (tz - swingInZ) * k;
+    const im = Math.min(1, Math.hypot(swingInX, swingInZ));
+    if (im > 0.04) {
+      vel.x += swingInX * S.steerAccel * dt; vel.z += swingInZ * S.steerAccel * dt;
+      const hs = Math.hypot(vel.x, vel.z);
+      if (hs > 3.0) {
+        const cur = Math.atan2(vel.x, vel.z), tg = Math.atan2(swingInX, swingInZ); let d = tg - cur; while (d > Math.PI) d -= 2 * Math.PI; while (d < -Math.PI) d += 2 * Math.PI;
+        if (Math.abs(d) < 2.4) {
+          const rate = THREE.MathUtils.degToRad(THREE.MathUtils.lerp(S.steerTurnSlow, S.steerTurnFast, THREE.MathUtils.clamp((hs - S.turnSpeedLo) / (S.turnSpeedHi - S.turnSpeedLo), 0, 1))) * im * dt;
+          const nc = cur + THREE.MathUtils.clamp(d, -rate, rate); vel.x = Math.sin(nc) * hs; vel.z = Math.cos(nc) * hs;
+        }
+      }
+    }
+  }
   swingReel += ((pullHeld ? 1 : 0) - swingReel) * (1 - Math.exp(-S.reelRamp * dt));
   if (swingReel > 0.02) swingShortenRope(Math.max(S.reelMinRope, ropeLength - S.reelSpeed * swingReel * dt));
   if (pos.y + H - pv.y < 0) {
@@ -7560,6 +7578,7 @@ function wallEnterMomentum(c, s, vy, label) {
   msm2ApexStatusText = label; msm2ApexTimer = 1.0;
 }
 function wallPredictEntry() {
+  if (SWING.noWallAssist) return;   // 벽 접근 자동 보정(벽 달리기·킥 자동 진입) 제거
   if (isSwinging || player.onGround || slingState.charging || slingState.glideT > 0 || glide.active || wallState.noWall > 0) return;
   const v = player.vel, sp = v.length(); if (sp < WALLP.minSpeed) return;
   const c = findWallContact(sp * WALLP.lookT + 0.42); if (!c) return;
@@ -7596,7 +7615,7 @@ function wallCornerWrap(dt) {                              // 외각 모서리: 
 }
 function updateWallMechanic(dt, inputDir, inputMag) {
   wallState.noWall = Math.max(0, wallState.noWall - dt);
-  if (isSwinging && swingHardRope && isGameStarted && !wallState.active && wallState.noWall <= 0) {   // 하드 스윙 중 벽에 닿아 앞으로 밀면 줄을 놓고 벽 잡기
+  if (!SWING.noWallAssist && isSwinging && swingHardRope && isGameStarted && !wallState.active && wallState.noWall <= 0) {   // 하드 스윙 중 벽에 닿아 앞으로 밀면 줄을 놓고 벽 잡기
     const cs = findWallContact(0.82);
     if (cs && inputMag > 0.25 && -(inputDir.x*cs.nx + inputDir.z*cs.nz) > 0.85 && -(player.vel.x*cs.nx + player.vel.z*cs.nz) > 4.0) { releaseWeb(false); wallState.noWall = 0; wallState.attachT = 0.5; }
   }
