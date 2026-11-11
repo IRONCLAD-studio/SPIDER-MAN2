@@ -5580,7 +5580,7 @@ const joyInput = { x: 0, y: 0 };
 let walkCycle = 0;
 let zipCooldown = 0;
 let pullHeld = false;   // [v9] 웹 부착 중 PULL 버튼/E키를 누르고 있는 동안 true → 줄 감기
-const AIR = { fallGravityMul: 1.7, riseGravityMul: 1.0, slingGravityMul: 1.0, chargeGravityMul: 0.6, steerAccel: 14.0, steerMaxSpeed: 14.0 };   // [REAL-G] 슬링샷 비행 중 약중력(0.28) 제거 → 실제 중력 1.0 / 공중 조향 약화   // [v9] 낙하 가속 배율 / 공중 조향 가속도 / 조향으로 얻을 수 있는 수평속도 하한 상한
+const AIR = { fallGravityMul: 1.5, riseGravityMul: 1.5, slingGravityMul: 1.0, chargeGravityMul: 0.6, steerAccel: 14.0, steerMaxSpeed: 14.0 };   // [REAL-G] 슬링샷 비행 중 약중력(0.28) 제거 → 실제 중력 1.0 / 공중 조향 약화   // [v9] 낙하 가속 배율 / 공중 조향 가속도 / 조향으로 얻을 수 있는 수평속도 하한 상한
 
 // =============================================================================
 // 5. 플랫아이언 빌딩 (175 5th Ave, New York, NY 10010) 정밀 3D 모델 및 주변 광장 시공
@@ -6024,7 +6024,7 @@ const PHYS = {
 const PHYS_TEL = { tension: 0, centripetal: 0, gForce: 1, entry: 0 };   // 실시간 텔레메트리
 
 const SWING = {
-  swingAssistLevel: 10.0,      // 0.0 ~ 10.0  (alpha = level / 10). 설정창에서 0~10 조절
+  swingAssistLevel: 10.0, refGravity: 14.7, refBoost: 1.15, refDrag: 0.005,      // 0.0 ~ 10.0  (alpha = level / 10). 설정창에서 0~10 조절
   // ── ① 최적 부착점 탐색 (전방 상단 부채꼴 다중 레이캐스트) ──
   range: 95.0, minRange: 6.0, minAnchorAboveHand: 4.0,   // m
   scanInterval: 0.05,                                    // s  탐색 주기(레이 수가 많아 20Hz로 제한)
@@ -6041,7 +6041,7 @@ const SWING = {
   pivotForwardOffset: 6.0,    // m  진행 방향 축(벽면 접선)으로 앞서는 거리
   pivotWallGapRatio: 0.9,     // 피벗이 플레이어를 넘어 반대편으로 가지 않도록 벽-플레이어 간격의 이 비율까지만 이동
   minRope: 12.0,              // m  최소 물리 로프 길이
-  attachMinSpeed: 18.0,       // m/s 부착 시 진행 방향 최소 수평 속도(정지 상태 출발 보조)
+  attachMinSpeed: 11.5,       // m/s 부착 시 진행 방향 최소 수평 속도(정지 상태 출발 보조)
   // ── ③ 피벗 동적 복귀 / 코너링 ──
   pivotConvergeTime: 2.2,     // s  physicsPivot → visualAnchor 수렴 시간 상수
   cornerBoost: 2.5,           // 코너링 시 수렴 속도 배율 (2~3배)
@@ -6050,7 +6050,7 @@ const SWING = {
   steerSmooth: 11.0,          // 1/s 조향 입력 관성
   turnRateSlow: 70.0, turnRateFast: 40.0, turnSpeedLo: 10.0, turnSpeedHi: 45.0,   // deg/s 스윙 평면 조향 보조
   // ── ④ 진자 제약 솔버 ──
-  gravityMul: 1.45, gravityFall: 1.6, gravityRise: 1.3, nadirBeta: 0.05, nadirCone: 0.6, lenOutRate: 3.0, lenOutMax: 2.5, lenInRate: 5.0, lenInMax: 3.0, wallRepulse: 28.0, wallLookT: 0.7, wallLookMin: 8.0, kickPitchMinDeg: 0.0, kickPitchMaxDeg: 18.0, releaseDragFreeT: 0.0, kickHighSpeed: 34.0,           // 스윙 중 중력 배율
+  gravityMul: 1.45, gravityFall: 1.6, gravityRise: 1.3, nadirBeta: 0.05, nadirCone: 0.6, lenOutRate: 3.0, lenOutMax: 2.5, lenInRate: 5.0, lenInMax: 3.0, wallRepulse: 18.0, wallLookT: 0.7, wallLookMin: 8.0, kickPitchMinDeg: 0.0, kickPitchMaxDeg: 18.0, releaseDragFreeT: 0.0, kickHighSpeed: 34.0,           // 스윙 중 중력 배율
   ropeTensionDamping: 0.03,   // 1/s 줄이 팽팽할 때 접선 속도 감쇠
   subSteps: 6,
   autoSlack: 1.5,             // m  줄이 이보다 느슨해지면 자동으로 감아 항상 팽팽하게 유지(속도 변화 없음)
@@ -6060,7 +6060,7 @@ const SWING = {
   // ── ⑤ 단계별 추진 / 킥오프 ──
   apexWindow: 0.22,           // s  최저점 판정 유지 시간
   downswingThrust: 7.0, apexThrust: 4.0, thrustMaxSpeed: 46.0,   // m/s² 접선 추진 / 이 속도 이상이면 중단
-  releaseBoostForce: 7.0,    // m/s 상승 구간 릴리즈 임펄스 크기
+  releaseBoostForce: 0.0,    // m/s 상승 구간 릴리즈 임펄스 크기
   boostUpRatio: 0.2,          // 임펄스 = 정규화(속도방향 + Up × 이 값)
   kickAngleCenter: 45.0, kickAngleRange: 32.0, apexBoostScale: 0.5,
   kickWindow: 0.14, kickImmediate: 0.55,   // 임펄스를 다리 차는 시간에 분산(즉시 비율)
@@ -6691,10 +6691,10 @@ function shootWeb() {
   const gap = (_swHand.x - webAnchor.x) * nx + (_swHand.z - webAnchor.z) * nz;
   const off = Math.min(S.maxPivotOffset * alpha, Math.max(0, gap * S.pivotWallGapRatio));
   // initialPhysicsPivot = visualAnchor + wallNormal·maxOffset·alpha (+ 진행축 오프셋)
-  if (swingHardRope) physicsPivotPoint.copy(webAnchor);   // 하드: 물리 피벗 = 실제 부착점 (오프셋 없음)
+  if (true) physicsPivotPoint.copy(webAnchor);   // 하드: 물리 피벗 = 실제 부착점 (오프셋 없음)
   else physicsPivotPoint.set(webAnchor.x + nx * off + fx * S.pivotForwardOffset * alpha, webAnchor.y, webAnchor.z + nz * off + fz * S.pivotForwardOffset * alpha);
   let d0 = _swHand.distanceTo(physicsPivotPoint);
-  if (d0 < S.minRope && !swingHardRope) {                                    // 너무 짧은 줄은 피벗을 바깥으로 밀어 최소 길이 확보
+  if (false) {                                    // 너무 짧은 줄은 피벗을 바깥으로 밀어 최소 길이 확보
     _swTmp.subVectors(physicsPivotPoint, _swHand); if (_swTmp.lengthSq() < 1e-6) _swTmp.set(0, 1, 0);
     physicsPivotPoint.copy(_swHand).addScaledVector(_swTmp.normalize(), S.minRope); d0 = S.minRope;
   }
@@ -6735,124 +6735,48 @@ function swingShortenRope(newL) {
 
 // ══════════ ③④⑤ 스윙 한 프레임: 피벗 복귀 · 진자 제약 · 단계 추진 ══════════
 function updateSwingPhysics(dt, inputDir, inputMag) {
-  const S = SWING, H = SW_HAND_H, alpha = swingAlpha(), vel = player.vel, pos = player.pos, pv = physicsPivotPoint;
+  // [REF PENDULUM] 참조 시뮬레이터 이식: 고정 중력 · 항력 · 단방향 거리 제약 · 접선 속도 투영 · 최저점 부스트 · 하단 펌프
+  const S = SWING, H = SW_HAND_H, vel = player.vel, pos = player.pos, pv = physicsPivotPoint;
   msm2SwingTime += dt; swingElapsedTime = msm2SwingTime; msm2IsDiving = false;
-
-  // ── 조향 입력(진행 방향 기준 좌/우) ──
-  const vh0 = Math.hypot(vel.x, vel.z);
-  let steerLat = 0, anchorSide = 0;
-  if (vh0 > 3.0) {
-    const tx = vel.x / vh0, tz = vel.z / vh0, rx = -tz, rz = tx;                  // right = (-tz, tx)
-    if (inputMag > S.steerDeadzone) steerLat = (inputDir.x * rx + inputDir.z * rz) * inputMag;
-    anchorSide = Math.sign((webAnchor.x - pos.x) * rx + (webAnchor.z - pos.z) * rz);   // 앵커(건물 모서리)가 있는 쪽
-  }
-  swingSteerSm += (steerLat - swingSteerSm) * (1 - Math.exp(-S.steerSmooth * dt));
-
-  // 스윙 평면 조향 보조: 속도·피벗을 플레이어 수직축 기준으로 같은 각만큼 회전(에너지 보존, 줄 구속 유지)
-  { let turn = 0;
-    if (!swingHardRope && Math.abs(swingSteerSm) > 0.15 && vh0 > 3.0) {
-      const sp = THREE.MathUtils.clamp((vh0 - S.turnSpeedLo) / (S.turnSpeedHi - S.turnSpeedLo), 0, 1);
-      turn = -swingSteerSm * THREE.MathUtils.degToRad(THREE.MathUtils.lerp(S.turnRateSlow, S.turnRateFast, sp)) * alpha * dt;   // 오른쪽 입력 = ψ 감소
-    }
-    swingTurnRateDeg = dt > 0 ? THREE.MathUtils.radToDeg(turn / dt) : 0;
-    if (turn !== 0) {
-      const c = Math.cos(turn), s = Math.sin(turn), vx = vel.x, vz = vel.z;
-      vel.x = vx * c + vz * s; vel.z = -vx * s + vz * c;
-      const ox = pv.x - pos.x, oz = pv.z - pos.z;
-      pv.x = pos.x + ox * c + oz * s; pv.z = pos.z - ox * s + oz * c;
-    }
-  }
-
-  if (alpha > 0.001 && !swingHardRope && vh0 > 6.0) {   // 외벽 회피 레이: 진행 방향 앞 벽이 가까우면 벽 법선 방향 척력
-    const look = Math.max(S.wallLookMin, vh0 * S.wallLookT), wc = nearbyColliders(pos.x, pos.z);
-    if (swingRayVsBuildings(pos.x, pos.y + H, pos.z, vel.x / vh0, 0, vel.z / vh0, look, wc, _rayHit)) {
-      const k = 1 - _rayHit.t / look, a = S.wallRepulse * alpha * k * k * dt;
-      vel.x += _rayHit.nx * a; vel.z += _rayHit.nz * a;
-    }
-  }
-  // ── ③ 물리 피벗 동적 복귀: physicsPivot → visualAnchor 보간. 앵커 쪽으로 강하게 조향하면 수렴 2~3배(모서리를 축으로 급선회) ──
-  if (swingHardRope) {   // 하드: 피벗 고정 · 줄 길이 불변. 공중 조향만 약하게 허용
-    swingPivotBlend = 1;
-    if (inputMag > S.steerDeadzone) { vel.x += inputDir.x * inputMag * S.hardAirSteer * dt; vel.z += inputDir.z * inputMag * S.hardAirSteer * dt; }
-  } else { const corner = (swingSteerSm * anchorSide) > S.cornerSteerThreshold ? S.cornerBoost : 1.0;
-    swingCornerMul += (corner - swingCornerMul) * (1 - Math.exp(-S.cornerResponse * dt));
-    const k = 1 - Math.exp(-(swingCornerMul / Math.max(0.1, S.pivotConvergeTime)) * dt);
-    const d0 = Math.hypot(pos.x - pv.x, pos.y + H - pv.y, pos.z - pv.z);
-    pv.lerp(webAnchor, k);
-    const d1 = Math.hypot(pos.x - pv.x, pos.y + H - pv.y, pos.z - pv.z);
-    ropeLength = Math.max(3.0, ropeLength + (d1 - d0));      // 피벗 이동만으로 줄이 튕기거나 늘어지지 않도록 줄 길이가 기하 변화를 따라감
-    const total = swingBasePivot.distanceTo(webAnchor);
-    swingPivotBlend = total > 0.01 ? 1 - THREE.MathUtils.clamp(pv.distanceTo(webAnchor) / total, 0, 1) : 1;
-  }
-
-  // ── 슬랙 제거: 플레이어가 피벗 쪽으로 접근하며 줄이 느슨해지면 줄 길이를 따라 줄임 (진자가 항상 팽팽한 호를 그리게) ──
-  if (!swingHardRope) { const dNow = Math.hypot(pos.x - pv.x, pos.y + H - pv.y, pos.z - pv.z);
-    if (ropeLength > dNow + S.autoSlack) ropeLength = Math.max(S.reelMinRope, dNow + S.autoSlack); }
-
-  // ── ⑤ 단계별 접선 추진 (하강/최저점에서 속도가 붙는 느낌) ──
-  { const sp3 = vel.length();
-    const a = swingPhase === SWING_PHASE.DOWNSWING ? S.downswingThrust : swingPhase === SWING_PHASE.APEX ? S.apexThrust : 0;
-    if (a > 0 && sp3 > 2.0 && sp3 < S.thrustMaxSpeed) vel.multiplyScalar(1 + a * dt / sp3); }
-
-  { const ry0 = pos.y + H - pv.y, nd = -ry0 / Math.max(1, Math.hypot(pos.x - pv.x, ry0, pos.z - pv.z)), sp4 = vel.length();   // 최저점 근처 장력 탄성 보너스 β
-    if (nd > S.nadirCone && sp4 > 2.0 && sp4 < S.thrustMaxSpeed) vel.multiplyScalar(1 + S.nadirBeta * (nd - S.nadirCone) / (1 - S.nadirCone) * dt); }
-  if (!swingHardRope) {   // 줄 릴아웃(하강: +ΔL) / 릴인(상승: -ΔL, 각운동량 보존으로 선속도 증가)
-    if (swingPhase === SWING_PHASE.DOWNSWING && swingLenMod < S.lenOutMax) { const d = Math.min(S.lenOutRate * dt, S.lenOutMax - swingLenMod); ropeLength += d; swingLenMod += d; }
-    else if (swingPhase === SWING_PHASE.UPSWING && !pullHeld && swingLenMod > -S.lenInMax) { const d = Math.min(S.lenInRate * dt, swingLenMod + S.lenInMax); swingShortenRope(Math.max(S.reelMinRope, ropeLength - d)); swingLenMod -= d; }
-  }
-  // ── PULL(E) 줄 감기 ──
+  swingPivotBlend = 1; swingCornerMul = 1; swingTurnRateDeg = 0;
+  if (inputMag > S.steerDeadzone) { vel.x += inputDir.x * inputMag * S.hardAirSteer * dt; vel.z += inputDir.z * inputMag * S.hardAirSteer * dt; }
   swingReel += ((pullHeld ? 1 : 0) - swingReel) * (1 - Math.exp(-S.reelRamp * dt));
-  if (swingReel > 0.02 && !swingHardRope) swingShortenRope(Math.max(S.reelMinRope, ropeLength - S.reelSpeed * swingReel * dt));
-
-  // ── ④-3 하단 지면 충돌 방지 (alpha 비례): 최저점에서 지면에 닿을 위험이 있으면 줄을 자동 단축, 줄이 한계면 상방 보조 ──
-  if (alpha > 0.001 && !swingHardRope && pos.y + H - pv.y < 0) {
-    const targetFeet = GROUND_Y + S.floorClearance;
-    const lowestFeet = pv.y - ropeLength - H;
-    if (lowestFeet < targetFeet) {
-      const wantMax = pv.y - H - targetFeet;
-      if (wantMax >= S.reelMinRope) swingShortenRope(Math.max(wantMax, ropeLength - S.floorReelRate * alpha * dt));
-      else { const feetH = pos.y - GROUND_Y; if (feetH < S.floorSoftClearance) { const k = (S.floorSoftClearance - feetH) / S.floorSoftClearance; vel.y += S.floorLiftAccel * alpha * k * k * dt; } }
-    }
+  if (swingReel > 0.02) swingShortenRope(Math.max(S.reelMinRope, ropeLength - S.reelSpeed * swingReel * dt));
+  if (pos.y + H - pv.y < 0) {
+    const targetFeet = GROUND_Y + S.floorClearance, lowestFeet = pv.y - ropeLength - H;
+    if (lowestFeet < targetFeet) { const wantMax = pv.y - H - targetFeet; if (wantMax >= S.reelMinRope) swingShortenRope(Math.max(wantMax, ropeLength - S.floorReelRate * dt)); }
   }
-
-  // ── ④ 진자 제약 솔버: 중력 → 위치 투영 → 속도 접선 투영 ──
-  const SUB = S.subSteps, sd = dt / SUB;
+  const SUB = 4, sd = dt / SUB;
   let sumVr = 0, aC = 0;
   for (let step = 0; step < SUB; step++) {
-    vel.y -= PHYS.gravity * (vel.y < 0 ? S.gravityFall : S.gravityRise) * sd;
-    physApplyDrag(sd, false);
+    const prevVy = vel.y;
+    vel.y -= S.refGravity * sd;
+    vel.multiplyScalar(Math.max(0, 1 - S.refDrag * sd * 6));
     pos.addScaledVector(vel, sd);
     const hx = pos.x - pv.x, hy = pos.y + H - pv.y, hz = pos.z - pv.z;
     const dist = Math.max(0.001, Math.hypot(hx, hy, hz));
-    if (dist > ropeLength) {                                  // 줄이 팽팽해짐
+    if (dist >= ropeLength) {
       const nx = hx / dist, ny = hy / dist, nz = hz / dist, over = dist - ropeLength;
-      pos.x -= nx * over; pos.y -= ny * over; pos.z -= nz * over;           // 1) 위치 투영: 반경 ropeLength 구면 위로
-      const vr = vel.x * nx + vel.y * ny + vel.z * nz;                      // 2) 속도 접선 투영: v -= (v·n)n  (장력은 일을 하지 않음)
+      pos.x -= nx * over; pos.y -= ny * over; pos.z -= nz * over;
+      const vr = vel.x * nx + vel.y * ny + vel.z * nz;
       if (vr > 0) { vel.x -= nx * vr; vel.y -= ny * vr; vel.z -= nz * vr; sumVr += vr; }
+      const cosT = -ny;
+      if (vel.y < -1.0) swingLenMod = 0;
+      if (swingLenMod === 0 && prevVy < 0 && vel.y >= 0 && cosT > 0.5) { vel.multiplyScalar(1 + (S.refBoost - 1) * 0.65); swingLenMod = 1; }
+      if (cosT > 0.911) { const sp = vel.length(); if (sp > 0.5) vel.addScaledVector(vel, (S.refBoost - 1.0) * 18.0 * sd / sp); }
       aC = vel.lengthSq() / Math.max(ropeLength, 1.0);
-      const dmp = Math.max(0, 1 - S.ropeTensionDamping * sd); vel.multiplyScalar(dmp);   // 로프 장력 감쇠
     }
     const spd = vel.length(); if (spd > msm2PeakSwingSpeed) msm2PeakSwingSpeed = spd;
     if (pos.y < GROUND_Y) { pos.y = GROUND_Y; if (vel.y < 0) vel.y = 0; }
   }
   const tension = dt > 0 ? PHYS.mass * sumVr / dt : 0;
   PHYS_TEL.vr = sumVr; PHYS_TEL.tension = tension; PHYS_TEL.centripetal = aC; PHYS_TEL.gForce = tension > 0 ? (tension / PHYS.mass) / PHYS.gravity : 1.0;
-
-  // ── ⑤ 스윙 아크 단계: DOWNSWING → APEX(최저점) → UPSWING → (RELEASE) ──
-  { const ry = pos.y + H - pv.y;
-    const rLen = Math.max(1.0, Math.hypot(pos.x - pv.x, ry, pos.z - pv.z));
-    const angleDeg = THREE.MathUtils.radToDeg(Math.acos(THREE.MathUtils.clamp(-ry / rLen, -1, 1)));
-    const vy = vel.y;
+  { const ry = pos.y + H - pv.y, vy = vel.y;
     if (vy < -1.0) swingSawDescent = true;
     if (swingPhase === SWING_PHASE.DOWNSWING) {
-      const nadir = swingSawDescent && vy > -0.3 && ry < 0;
-      const fallback = swingElapsedTime > 1.5 && vy > 0.5 && ry < -2.0;
+      const nadir = swingSawDescent && vy > -0.3 && ry < 0, fallback = swingElapsedTime > 1.5 && vy > 0.5 && ry < -2.0;
       if (nadir || fallback) { swingPhase = SWING_PHASE.APEX; msm2PassedNadir = true; swingApexTimer = S.apexWindow; }
-    } else if (swingPhase === SWING_PHASE.APEX) {
-      swingApexTimer -= dt;
-      if (swingApexTimer <= 0) swingPhase = SWING_PHASE.UPSWING;
-    }
-    // 자동 릴리즈 제거: 줄은 버튼을 뗄 때만 풀림
+    } else if (swingPhase === SWING_PHASE.APEX) { swingApexTimer -= dt; if (swingApexTimer <= 0) swingPhase = SWING_PHASE.UPSWING; }
   }
   player.onGround = false;
   return true;
