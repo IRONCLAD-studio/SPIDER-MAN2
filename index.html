@@ -7636,7 +7636,7 @@ function wallEnterMomentum(c, s, vy, label) {
   msm2ApexStatusText = label; msm2ApexTimer = 1.0;
 }
 function wallPredictEntry() {
-  if (player.onGround || slingState.charging || slingState.glideT > 0 || glide.active || wallState.noWall > 0) return;
+  if (isSwinging || player.onGround || slingState.charging || slingState.glideT > 0 || glide.active || wallState.noWall > 0) return;
   const v = player.vel, sp = v.length(); if (sp < WALLP.minSpeed) return;
   const c = findWallContact(sp * WALLP.lookT + 0.42); if (!c) return;
   const cImp = -(v.x * c.nx + v.z * c.nz) / sp;            // sin(θ_graze)
