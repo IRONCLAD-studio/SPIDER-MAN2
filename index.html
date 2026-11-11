@@ -4564,15 +4564,24 @@ function nrAtlas() {
 }
 const nrU = (slot, t) => (slot * NR_W + NR_PAD + t * (NR_W - 2 * NR_PAD)) / NR_ATW;
 // ---------- 지오메트리 빌더 ----------
-const nrB = () => ({ p: [], u: [], c: [], n: [], i: [], v: 0 });
+// [iPad 메모리] JS 숫자 배열(8B/값) 대신 성장형 typed array(1~4B/값)로 지오메트리를 누적한다.
+function NrGB(T) { this.T = T; this.a = new T(256); this.length = 0; }
+NrGB.prototype.push = function () {
+  const n = arguments.length, L = this.length;
+  if (L + n > this.a.length) { let c = this.a.length * 2; while (c < L + n) c *= 2; const b = new this.T(c); b.set(this.a.subarray(0, L)); this.a = b; }
+  const a = this.a; for (let k = 0; k < n; k++) a[L + k] = arguments[k];
+  this.length = L + n; return this.length;
+};
+NrGB.prototype.out = function () { return this.a.slice(0, this.length); };
+const nrB = () => ({ p: new NrGB(Float32Array), u: new NrGB(Float32Array), c: new NrGB(Uint8Array), n: new NrGB(Int8Array), i: new NrGB(Uint32Array), v: 0 });
 function nrV(B, x, y, z, u, v, c, nx, ny, nz) {
   B.p.push(x, y, z); B.u.push(u, v); B.c.push(c[0], c[1], c[2]); B.n.push(Math.round(nx * 127), Math.round(ny * 127), Math.round(nz * 127)); return B.v++;
 }
 function nrGeo(B) {
   const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.Float32BufferAttribute(B.p, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(B.u, 2));
-  g.setAttribute('color', new THREE.BufferAttribute(new Uint8Array(B.c), 3, true)); g.setAttribute('normal', new THREE.BufferAttribute(new Int8Array(B.n), 3, true));
-  g.setIndex(new THREE.BufferAttribute(B.v > 65000 ? new Uint32Array(B.i) : new Uint16Array(B.i), 1)); g.computeBoundingSphere(); return g;
+  g.setAttribute('position', new THREE.BufferAttribute(B.p.out(), 3)); g.setAttribute('uv', new THREE.BufferAttribute(B.u.out(), 2));
+  g.setAttribute('color', new THREE.BufferAttribute(B.c.out(), 3, true)); g.setAttribute('normal', new THREE.BufferAttribute(B.n.out(), 3, true));
+  { const ix = B.i.out(); g.setIndex(new THREE.BufferAttribute(B.v > 65000 ? ix : new Uint16Array(ix), 1)); } g.computeBoundingSphere(); return g;
 }
 function nrChunk(key, x, z) {
   let C = NR.chunks.get(key);
