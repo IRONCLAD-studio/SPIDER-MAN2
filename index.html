@@ -5569,7 +5569,7 @@ const joyInput = { x: 0, y: 0 };
 let walkCycle = 0;
 let zipCooldown = 0;
 let pullHeld = false;   // [v9] 웹 부착 중 PULL 버튼/E키를 누르고 있는 동안 true → 줄 감기
-const AIR = { fallGravityMul: 1.3, steerAccel: 14.0, steerMaxSpeed: 14.0 };   // [v9] 낙하 가속 배율 / 공중 조향 가속도 / 조향으로 얻을 수 있는 수평속도 하한 상한
+const AIR = { fallGravityMul: 1.3, riseGravityMul: 1.0, slingGravityMul: 1.0, chargeGravityMul: 0.6, steerAccel: 14.0, steerMaxSpeed: 14.0 };   // [REAL-G] 슬링샷 비행 중 약중력(0.28) 제거 → 실제 중력 1.0 / 공중 조향 약화   // [v9] 낙하 가속 배율 / 공중 조향 가속도 / 조향으로 얻을 수 있는 수평속도 하한 상한
 
 // =============================================================================
 // 5. 플랫아이언 빌딩 (175 5th Ave, New York, NY 10010) 정밀 3D 모델 및 주변 광장 시공
@@ -6050,7 +6050,7 @@ const SWING = {
   apexWindow: 0.22,           // s  최저점 판정 유지 시간
   downswingThrust: 7.0, apexThrust: 4.0, thrustMaxSpeed: 46.0,   // m/s² 접선 추진 / 이 속도 이상이면 중단
   releaseBoostForce: 10.0,    // m/s 상승 구간 릴리즈 임펄스 크기
-  boostUpRatio: 0.7,          // 임펄스 = 정규화(속도방향 + Up × 이 값)
+  boostUpRatio: 0.2,          // 임펄스 = 정규화(속도방향 + Up × 이 값)
   kickAngleCenter: 45.0, kickAngleRange: 32.0, apexBoostScale: 0.5,
   kickWindow: 0.14, kickImmediate: 0.55,   // 임펄스를 다리 차는 시간에 분산(즉시 비율)
   autoReleaseAngle: 42.0,     // 버튼을 놓친 경우 상승 구간 자동 릴리즈 각도
@@ -6070,15 +6070,15 @@ const swingKick = { active: false, t: 0, remaining: 0, imp: new THREE.Vector3(),
 
 // ── ⑥ 웹 윙 (활공) 공기역학 파라미터 ──
 const WINGS = {
-  wingArea: 2.0,                      // m²  유효 날개 면적(팔-다리 웹)
-  clAlpha: 4.6, clMax: 1.25, clMin: -0.05,   // 양력계수 기울기(1/rad) / 최대 / 최소
+  wingArea: 1.4,                      // m²  유효 날개 면적(팔-다리 웹) [REAL-G] 2.0 → 1.4 (윙슈트급)
+  clAlpha: 3.2, clMax: 0.95, clMin: -0.05,   // 양력계수 기울기(1/rad) / 최대 / 최소
   stallAlphaDeg: 17.0, stallDrop: 0.55,     // 실속 받음각 / 실속 시 양력 감소 비율
-  cd0: 0.075, inducedK: 0.08,         // 항력계수 C_D = cd0 + k·C_L²
-  alphaTrimDeg: 7.0,                  // 입력이 없을 때 받음각(최대 양항비 근처)
+  cd0: 0.22, inducedK: 0.18,         // 항력계수 C_D = cd0 + k·C_L²
+  alphaTrimDeg: 10.0,                  // 입력이 없을 때 받음각(최대 양항비 근처)
   diveAlphaDeg: 28.0, climbAlphaDeg: 10.0,  // W(전진) = 피치 다운(받음각 감소) / S(후진) = 피치 업(받음각 증가)
   pitchResponse: 4.0,                 // 1/s 피치 반응
   maxBankDeg: 62.0, bankResponse: 3.2,// A/D 뱅크 각도 / 반응
-  liftAccelMaxG: 3.2,                 // 양력 가속도 상한 (G)
+  liftAccelMaxG: 2.0,                 // 양력 가속도 상한 (G)
   maxSpeed: 72.0, overspeedDrag: 0.5, // m/s 소프트 상한 / 초과분 감속 계수
   minGlideAltitude: 3.0,              // m 지면 위 최소 고도(이보다 낮으면 활공 불가)
   cameraFollow: 1.2,                  // 1/s 활공 중 카메라 요 자동 추종
@@ -6109,7 +6109,7 @@ const SpeedCamera = {
 };
 let cameraFollowDistance = SpeedCamera.distMin, cameraSpeedSm = 0;
 let swingHardRope = false;   // 이번 스윙이 1인칭 하드 웹스윙인지 (발사 시점에 고정)
-window.SPIDER_SWING = { SWING, WINGS, SpeedCamera, PHYS };   // 콘솔 튜닝용: SPIDER_SWING.SWING.swingAssistLevel = 10 …
+window.SPIDER_SWING = { SWING, WINGS, SpeedCamera, PHYS, AIR };   // 콘솔 튜닝용: SPIDER_SWING.SWING.swingAssistLevel = 10 …
 
 // ════════════════════════════════════════════════════════════════════════════════════════
 //  [POV v2] 1인칭 리얼 카메라 · 5단계 다중 레이어 흔들림 · VOR 수평유지/뱅크 · 절차적 팔/다리
@@ -7356,10 +7356,10 @@ function triggerJump(isRepeat) {
     player.pos.y += 0.12;
     if (isRooftopLaunch && isRunning) {
       const fwd = new THREE.Vector3(Math.sin(cameraYaw), 0, Math.cos(cameraYaw)).normalize();
-      const burst = Math.max(Math.hypot(player.vel.x, player.vel.z) * 1.35, 28.0);
+      const burst = Math.max(Math.hypot(player.vel.x, player.vel.z) * 1.2, 20.0);
       player.vel.x = fwd.x * burst;
       player.vel.z = fwd.z * burst;
-      player.vel.y = 11.0;
+      player.vel.y = 8.0;
       msm2TrickSpin = Math.PI * 2;
       msm2ApexStatusText = `🚀 POINT LAUNCH BOOST!`;
       msm2ApexTimer = 1.5;
@@ -7397,7 +7397,7 @@ function triggerWebZip() {
   if (horizontalPull.lengthSq() > 0.001) horizontalPull.normalize();
   player.vel.x = horizontalPull.x * pullSpeed;
   player.vel.z = horizontalPull.z * pullSpeed;
-  player.vel.y = Math.min(14.0, Math.max(9.0, player.vel.y * 0.25 + 9.0 + Math.max(0, pullDir.y) * 3.0));
+  player.vel.y = Math.min(11.0, Math.max(6.5, player.vel.y * 0.25 + 6.5 + Math.max(0, pullDir.y) * 3.0));
   msm2TrickSpin = Math.PI * 2;
   msm2ApexStatusText = `🕸️ WEB PULL LAUNCH (${Math.round(player.vel.length() * 3.6)} km/h)`;
   msm2ApexTimer = 1.4;
@@ -7448,10 +7448,11 @@ function updatePhysics(dt) {
   } else {
     // 공중 자유낙하 / 다이빙 (S/조이스틱 아래, 고도 16m 이상)
     // v7: 다이빙 중력 배율·전방 부스터·공중 조향 제거 → 중력 + 자세별 v² 항력만 적용
-    msm2IsDiving = (player.pos.y > 16.0 && player.vel.y < 2.0 && rawForwardInput < -0.35);
+    const lookingDown = isPOVMode ? (povPitch < -0.35) : (cameraPitch > 0.6);   // [DIVE] 조이스틱 뒤 대신 '아래를 바라보면' 다이빙 (1인칭: 시선 약 20° 아래 / 3인칭: 카메라 피치 약 34° 이상)
+    msm2IsDiving = (player.pos.y > 16.0 && player.vel.y < 2.0 && lookingDown);
     applySwingKick(dt);   // [v8] 다리 킥 임펄스 후반부
     // [v9] 낙하 중에만 중력 ×1.3 (상승·글라이드는 그대로) → 더 빠르고 묵직한 낙하
-    player.vel.y -= PHYS.gravity * (slingState.glideT > 0 ? 0.28 : (player.vel.y < 0 ? AIR.fallGravityMul : 1.0)) * dt;
+    player.vel.y -= PHYS.gravity * (slingState.glideT > 0 ? AIR.slingGravityMul : (player.vel.y < 0 ? AIR.fallGravityMul : AIR.riseGravityMul)) * dt;   // [REAL-G] 실제 중력 9.81
     // [v9] 공중 조향: 조이스틱/WASD 방향으로 수평 가속. 이미 빠르면 속도를 늘리지 않고 방향만 틀어줌
     if (inputMag > 0.05) {
       const sx = msm2IsDiving ? right.x * rawSideInput : inputDir.x * inputMag;   // 다이빙 중엔 좌우만
@@ -7713,15 +7714,15 @@ function releaseSling() {
   player.vel.copy(aim).multiplyScalar(speed);
   slingState.carryT = 8; slingState.carryExtra = Math.max(0, speed - MSM2_MAX_SPEED_MS);
   wallState.active = false; wallState.noWall = Math.max(wallState.noWall, 1.0);
-  slingState.glideT = 0.5 + 0.9 * g;     // 충전할수록 오래 중력이 약해져 길게 날아감
+  slingState.glideT = 0.5 + 0.9 * g;     // [REAL-G] 상태 표시용(비행 중 판정). 중력 배율은 AIR.slingGravityMul(=1.0)
   msm2TrickSpin = g > 0.85 ? Math.PI * 2 : 0;
   msm2ApexStatusText = '🚀 SLINGSHOT ' + Math.round(g*100) + '% (' + Math.round(speed*3.6) + ' km/h)'; msm2ApexTimer = 1.6;
 }
 function updateSling(dt, prevPos) {
   slingState.t += dt; slingState.g = Math.min(1, slingState.t / SLING_FULL_T);
   const g = slingState.g;
-  player.vel.multiplyScalar(Math.exp(-5*dt));
-  if (!player.onGround) player.vel.y -= 3.0*dt;
+  { const dmp = Math.exp(-5*dt); player.vel.x *= dmp; player.vel.z *= dmp; if (player.vel.y > 0) player.vel.y *= dmp; }   // [REAL-G] 수평·상승만 감쇠 (낙하는 감쇠하지 않음)
+  if (!player.onGround) player.vel.y -= PHYS.gravity * AIR.chargeGravityMul * dt;   // 조준 중에도 실제 중력의 60%로 떨어짐 (기존 3.0 → 호버링처럼 보였음)
   player.pos.addScaledVector(player.vel, dt);
   if (player.pos.y <= GROUND_Y && player.vel.y <= 0) { player.pos.y = GROUND_Y; player.vel.y = 0; player.onGround = true; }
   resolvePolygonBuildingCollisions(prevPos); hardCollisionPass(prevPos);
@@ -8557,7 +8558,7 @@ function gfxInit() {
   sunLight.target.position.set(0, 0, 0); scene.add(sunLight.target);
   try { wglInit(); } catch (e) { console.warn("windowGlow", e); }
   gfxCreateSky(); gfxShadowInit(); gfxBloomInit();
-  let q = window.__LITE ? 'medium' : (GFX_MOBILE ? 'ultra' : 'realistic'); try { const sv = localStorage.getItem('gfxQuality'); if (sv) q = sv; if (!GFX_MOBILE && !window.__LITE && !localStorage.getItem('rgsMig1')) { localStorage.setItem('rgsMig1', '1'); if (!sv || sv === 'cinema' || sv === 'ultra') q = 'realistic'; } } catch (e) {}
+  let q = window.__LITE ? 'medium' : (window.__IPAD ? 'medium' : (GFX_MOBILE ? 'ultra' : 'realistic'));   // [DEVICE] iPad 모드 기본 '보통' (저장된 설정이 있으면 그쪽 우선) try { const sv = localStorage.getItem('gfxQuality'); if (sv) q = sv; if (!GFX_MOBILE && !window.__LITE && !localStorage.getItem('rgsMig1')) { localStorage.setItem('rgsMig1', '1'); if (!sv || sv === 'cinema' || sv === 'ultra') q = 'realistic'; } } catch (e) {}
   if (window.__LITE && (q === 'ultra' || q === 'cinema' || q === 'realistic')) q = 'high';
   gfxSetQuality(q);
   gfxAfterWeather(currentWeatherMode);
@@ -8966,12 +8967,16 @@ function propsUpdate(dt) {
 function animate() {
   requestAnimationFrame(animate);
   const now = performance.now();
-  const dt = Math.min(0.05, (now - lastTime) / 1000);
+  const dtRaw = Math.min(0.1, (now - lastTime) / 1000);   // [REAL-G] 저프레임에서도 물리 시간이 실시간과 일치하도록 0.1s까지 허용
+  const dt = Math.min(0.05, dtRaw);
   lastTime = now;
 
   GROUND_Y = nmGroundAt(player.pos.x, player.pos.z);
   if (!isSwinging) evaluateWebTargets(); // 스윙 중에는 새 타겟이 필요 없으므로 탐색 생략
-  if (isGameStarted && !mapOpen && !isSpectator) updatePhysics(dt);
+  if (isGameStarted && !mapOpen && !isSpectator) {   // [REAL-G] 물리 서브스텝: 한 스텝 ≤ 1/30s (프레임이 느려도 낙하가 슬로모션처럼 보이지 않음)
+    const nSteps = Math.max(1, Math.ceil(dtRaw / (1 / 30))), h = dtRaw / nSteps;
+    for (let si = 0; si < nSteps; si++) updatePhysics(h);
+  }
   updateSpiderManRig(dt);
   updateWebWings(dt);
   if (slingState.charging) applySlingPose(dt); else if (wallState.active) applyWallPose(dt);
@@ -10078,9 +10083,9 @@ function init() {
   scene.background = new THREE.Color(0x060b18);
   scene.fog = new THREE.FogExp2(0x060b18, 0.00045);
   camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.2, 2600);
-  renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+  renderer = new THREE.WebGLRenderer({ antialias: !window.__IPAD, powerPreference: "high-performance" });   // [DEVICE] iPad 모드: AA 끔
   renderer.setSize(window.innerWidth, window.innerHeight);
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, window.__IPAD ? 1.5 : 2));   // [DEVICE] iPad 모드: DPR 상한 1.5
   document.body.appendChild(renderer.domElement);
 
   const hemiLight = new THREE.HemisphereLight(0xe2e8f0, 0x1e293b, 1.0);
@@ -13405,5 +13410,88 @@ if (typeof module !== 'undefined' && module.exports) module.exports = RealisticC
 })();
 
 </script>
+<style id="device-choice-css">
+#device-choice{position:fixed;inset:0;z-index:2147483000;display:none;align-items:center;justify-content:center;flex-direction:column;gap:18px;padding:max(16px,env(safe-area-inset-top)) max(16px,env(safe-area-inset-right)) max(16px,env(safe-area-inset-bottom)) max(16px,env(safe-area-inset-left));background:radial-gradient(120% 90% at 50% 0%,#17223f 0%,#090d18 62%);color:#e8edf7;font-family:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Noto Sans KR",sans-serif;-webkit-user-select:none;user-select:none;touch-action:manipulation}
+#device-choice.show{display:flex}
+#device-choice h2{margin:0;font-size:clamp(20px,3.4vw,30px);font-weight:800;letter-spacing:-.01em;text-align:center}
+#device-choice .dc-sub{margin:-8px 0 0;font-size:clamp(12px,1.7vw,15px);color:#9fb0cf;text-align:center}
+#device-choice .dc-row{display:flex;gap:16px;width:min(900px,100%);justify-content:center;flex-wrap:wrap}
+#device-choice .dc-card{flex:1 1 300px;max-width:430px;min-height:150px;text-align:left;cursor:pointer;border-radius:18px;padding:20px 22px;border:1.5px solid rgba(255,255,255,.14);background:rgba(255,255,255,.05);color:inherit;font:inherit;-webkit-tap-highlight-color:transparent;transition:transform .12s,border-color .12s,background .12s}
+#device-choice .dc-card:active{transform:scale(.98);background:rgba(255,255,255,.1)}
+#device-choice .dc-card.rec{border-color:#fbbf24;background:rgba(251,191,36,.09)}
+#device-choice .dc-t{display:flex;align-items:center;gap:10px;font-size:clamp(17px,2.3vw,22px);font-weight:800}
+#device-choice .dc-badge{font-size:11px;font-weight:800;color:#1a1300;background:#fbbf24;border-radius:999px;padding:3px 9px}
+#device-choice .dc-d{margin-top:10px;font-size:clamp(12px,1.6vw,14px);line-height:1.55;color:#b9c6df}
+#device-choice .dc-rem{display:flex;align-items:center;gap:10px;font-size:14px;color:#c9d4ea;padding:8px 4px;cursor:pointer}
+#device-choice .dc-rem input{width:20px;height:20px;accent-color:#fbbf24}
+#device-change{position:absolute;left:14px;bottom:calc(10px + env(safe-area-inset-bottom));z-index:3;font-size:12px;font-weight:700;color:#9fb0cf;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.14);border-radius:999px;padding:7px 13px;cursor:pointer;-webkit-tap-highlight-color:transparent}
+html.ipad-mode,html.ipad-mode body{touch-action:manipulation;overscroll-behavior:none;-webkit-touch-callout:none}
+</style>
+<div id="device-choice" role="dialog" aria-modal="true" aria-label="실행 기기 선택">
+  <h2>어떤 기기에서 플레이하나요?</h2>
+  <p class="dc-sub">게임 월드를 불러오기 전에 기기에 맞는 설정을 고르세요.</p>
+  <div class="dc-row">
+    <button class="dc-card" id="dc-ipad" type="button">
+      <div class="dc-t">iPad 9세대 전용 <span class="dc-badge" id="dc-ipad-badge" hidden>이 기기로 감지됨</span></div>
+      <div class="dc-d">렌더링 해상도 상한 1.5배 · 안티앨리어싱 끔 · 그래픽 기본값 '보통' · 터치 확대/제스처 차단.<br>A13 · RAM 3GB 환경용 가벼운 설정입니다.</div>
+    </button>
+    <button class="dc-card" id="dc-normal" type="button">
+      <div class="dc-t">일반 (PC · 기타 기기)</div>
+      <div class="dc-d">기존 설정 그대로 실행합니다.<br>그래픽 옵션은 시작 화면의 설정에서 바꿀 수 있습니다.</div>
+    </button>
+  </div>
+  <label class="dc-rem"><input type="checkbox" id="dc-remember"> 이 선택을 기억하고 다음부터 묻지 않기</label>
+</div>
+<script>
+(function () {
+  'use strict';
+  var KEY = 'deviceProfile', orig = window.onload, started = false;
+  function lsGet() { try { return localStorage.getItem(KEY); } catch (e) { return null; } }
+  function lsSet(v) { try { if (v) localStorage.setItem(KEY, v); else localStorage.removeItem(KEY); } catch (e) {} }
+  function isIPad() { var ua = navigator.userAgent || ''; return /iPad/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1); }
+  function setStatus(t) { var el = document.getElementById('load-status'); if (el) el.textContent = t; }
+  function applyIPad() {
+    window.__IPAD = true;
+    document.documentElement.classList.add('ipad-mode');
+    try { for (var k in GFX_PRESETS) if (GFX_PRESETS[k] && GFX_PRESETS[k].maxPR > 1.5) GFX_PRESETS[k].maxPR = 1.5; } catch (e) { console.warn('[device] preset cap', e); }
+    var stop = function (e) { e.preventDefault(); };
+    document.addEventListener('gesturestart', stop, { passive: false });
+    document.addEventListener('gesturechange', stop, { passive: false });
+    document.addEventListener('gestureend', stop, { passive: false });
+  }
+  function addChangeLink(profile) {
+    var host = document.querySelector('#start-overlay .st-brand') || document.getElementById('start-overlay');
+    if (!host || document.getElementById('device-change')) return;
+    var b = document.createElement('button'); b.id = 'device-change'; b.type = 'button';
+    b.textContent = '기기: ' + (profile === 'ipad' ? 'iPad 9세대' : '일반') + ' · 변경';
+    b.addEventListener('click', function () { lsSet(null); location.reload(); });
+    host.appendChild(b);
+  }
+  function start(profile, remember) {
+    if (started) return; started = true;
+    if (remember) lsSet(profile);
+    window.__DEVICE_PROFILE = profile;
+    if (profile === 'ipad') applyIPad(); else window.__IPAD = false;
+    var ov = document.getElementById('device-choice'); if (ov) ov.classList.remove('show');
+    setStatus('3D 월드 스크립트 로딩 중…');
+    addChangeLink(profile);
+    if (typeof orig === 'function') { try { orig.call(window); } catch (e) { console.error('[device] init 실패', e); throw e; } }
+  }
+  window.onload = function () {
+    var q = (location.search.match(/[?&]device=(ipad|normal|ask)/) || [])[1];
+    var saved = q === 'ask' ? null : (q || lsGet());
+    if (saved === 'ipad' || saved === 'normal') { start(saved, !!q); return; }
+    var ov = document.getElementById('device-choice'), ip = isIPad();
+    var bi = document.getElementById('dc-ipad'), bn = document.getElementById('dc-normal'), rem = document.getElementById('dc-remember');
+    if (!ov || !bi || !bn) { start(ip ? 'ipad' : 'normal', false); return; }
+    if (ip) { bi.classList.add('rec'); var bd = document.getElementById('dc-ipad-badge'); if (bd) bd.hidden = false; }
+    bi.addEventListener('click', function () { start('ipad', rem.checked); });
+    bn.addEventListener('click', function () { start('normal', rem.checked); });
+    setStatus('기기 선택 대기 중…');
+    ov.classList.add('show');
+  };
+})();
+</script>
+
 </body>
 </html>
