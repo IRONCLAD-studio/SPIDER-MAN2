@@ -5580,7 +5580,7 @@ const joyInput = { x: 0, y: 0 };
 let walkCycle = 0;
 let zipCooldown = 0;
 let pullHeld = false;   // [v9] 웹 부착 중 PULL 버튼/E키를 누르고 있는 동안 true → 줄 감기
-const AIR = { fallGravityMul: 1.3, riseGravityMul: 1.0, slingGravityMul: 1.0, chargeGravityMul: 0.6, steerAccel: 14.0, steerMaxSpeed: 14.0 };   // [REAL-G] 슬링샷 비행 중 약중력(0.28) 제거 → 실제 중력 1.0 / 공중 조향 약화   // [v9] 낙하 가속 배율 / 공중 조향 가속도 / 조향으로 얻을 수 있는 수평속도 하한 상한
+const AIR = { fallGravityMul: 1.3, riseGravityMul: 0.9, slingGravityMul: 1.0, chargeGravityMul: 0.6, steerAccel: 14.0, steerMaxSpeed: 14.0 };   // [REAL-G] 슬링샷 비행 중 약중력(0.28) 제거 → 실제 중력 1.0 / 공중 조향 약화   // [v9] 낙하 가속 배율 / 공중 조향 가속도 / 조향으로 얻을 수 있는 수평속도 하한 상한
 
 // =============================================================================
 // 5. 플랫아이언 빌딩 (175 5th Ave, New York, NY 10010) 정밀 3D 모델 및 주변 광장 시공
@@ -6024,7 +6024,7 @@ const PHYS = {
 const PHYS_TEL = { tension: 0, centripetal: 0, gForce: 1, entry: 0 };   // 실시간 텔레메트리
 
 const SWING = {
-  swingAssistLevel: 6.0,      // 0.0 ~ 10.0  (alpha = level / 10). 설정창에서 0~10 조절
+  swingAssistLevel: 10.0,      // 0.0 ~ 10.0  (alpha = level / 10). 설정창에서 0~10 조절
   // ── ① 최적 부착점 탐색 (전방 상단 부채꼴 다중 레이캐스트) ──
   range: 95.0, minRange: 6.0, minAnchorAboveHand: 4.0,   // m
   scanInterval: 0.05,                                    // s  탐색 주기(레이 수가 많아 20Hz로 제한)
@@ -6050,7 +6050,7 @@ const SWING = {
   steerSmooth: 11.0,          // 1/s 조향 입력 관성
   turnRateSlow: 70.0, turnRateFast: 40.0, turnSpeedLo: 10.0, turnSpeedHi: 45.0,   // deg/s 스윙 평면 조향 보조
   // ── ④ 진자 제약 솔버 ──
-  gravityMul: 1.45,           // 스윙 중 중력 배율
+  gravityMul: 1.45, gravityFall: 1.45, gravityRise: 0.9, nadirBeta: 0.12, nadirCone: 0.6, lenOutRate: 3.0, lenOutMax: 2.5, lenInRate: 5.0, lenInMax: 3.0, wallRepulse: 28.0, wallLookT: 0.7, wallLookMin: 8.0, kickPitchMinDeg: 30.0, kickPitchMaxDeg: 45.0, releaseDragFreeT: 2.5,           // 스윙 중 중력 배율
   ropeTensionDamping: 0.03,   // 1/s 줄이 팽팽할 때 접선 속도 감쇠
   subSteps: 6,
   autoSlack: 1.5,             // m  줄이 이보다 느슨해지면 자동으로 감아 항상 팽팽하게 유지(속도 변화 없음)
@@ -6076,7 +6076,7 @@ const SWING_PHASE = { NONE: 0, DOWNSWING: 1, APEX: 2, UPSWING: 3, RELEASE: 4 };
 const SWING_PHASE_NAMES = ['-', 'DOWNSWING', 'APEX', 'UPSWING', 'RELEASE'];
 let swingPhase = SWING_PHASE.NONE, swingElapsedTime = 0, swingPivotBlend = 0, swingSteerSm = 0, swingCornerMul = 1;
 let swingInX = 0, swingInZ = 0, swingReel = 0, swingTurnRateDeg = 0;
-let swingSawDescent = false, swingApexTimer = 0;
+let swingSawDescent = false, swingApexTimer = 0, swingLenMod = 0, releaseDragFreeT = 0;
 const swingKick = { active: false, t: 0, remaining: 0, imp: new THREE.Vector3(), q: 0 };
 
 // ── ⑥ 웹 윙 (활공) 공기역학 파라미터 ──
@@ -6092,7 +6092,7 @@ const WINGS = {
   liftAccelMaxG: 2.0,                 // 양력 가속도 상한 (G)
   maxSpeed: 72.0, overspeedDrag: 0.5, // m/s 소프트 상한 / 초과분 감속 계수
   minGlideAltitude: 3.0,              // m 지면 위 최소 고도(이보다 낮으면 활공 불가)
-  cameraFollow: 1.2,                  // 1/s 활공 중 카메라 요 자동 추종
+  cameraFollow: 1.2, staminaGrace: 2.0, staminaDuration: 8.0, staminaMin: 0.45,                  // 1/s 활공 중 카메라 요 자동 추종
   subSteps: 2
 };
 const glide = { active: false, alpha: 0.12, bank: 0, speed: 0, liftG: 1, ld: 0, pitchDeg: 0, open: 0, preSpeed: 0, t: 0,
@@ -6101,7 +6101,7 @@ const glide = { active: false, alpha: 0.12, bank: 0, speed: 0, liftG: 1, ld: 0, 
 // ── ⑥ 속도 기반 카메라 컨트롤러 (플레이어 로직과 분리: 속력 → FOV / 추적 거리) ──
 const SpeedCamera = {
   speedMin: 12.0, speedMax: 62.0,        // m/s  이 구간에서 0→1 매핑
-  fovMin: 72.0, fovMax: 104.0,           // deg
+  fovMin: 70.0, fovMax: 95.0,           // deg
   distMin: 4.2, distMax: 8.8,            // m  cameraFollowDistance
   glideFovBonus: 4.0, glideDistBonus: 1.2, glideRollGain: 0.35,
   speedRise: 5.0, speedFall: 1.8,        // 1/s 측정 속도 스무딩(가속 빠르게, 감속 천천히)
@@ -6706,7 +6706,7 @@ function shootWeb() {
     dx0 += (_swAim.x - dx0) * 0.5; dz0 += (_swAim.z - dz0) * 0.5;
     const dn0 = Math.hypot(dx0, dz0) || 1; player.vel.x = dx0 / dn0 * tgt; player.vel.z = dz0 / dn0 * tgt; }
   swingInX = 0; swingInZ = 0; swingReel = 0; swingTurnRateDeg = 0; swingSteerSm = 0; swingCornerMul = 1; swingPivotBlend = 0;
-  swingPhase = SWING_PHASE.DOWNSWING; swingElapsedTime = 0; swingSawDescent = false; swingApexTimer = 0;
+  swingPhase = SWING_PHASE.DOWNSWING; swingElapsedTime = 0; swingSawDescent = false; swingApexTimer = 0; swingLenMod = 0; releaseDragFreeT = 0;
   swingKick.active = false; swingKick.q = 0;
   msm2QuickWhip = false;
   const speedBefore = player.vel.length();
@@ -6752,7 +6752,7 @@ function updateSwingPhysics(dt, inputDir, inputMag) {
   { let turn = 0;
     if (!swingHardRope && Math.abs(swingSteerSm) > 0.15 && vh0 > 3.0) {
       const sp = THREE.MathUtils.clamp((vh0 - S.turnSpeedLo) / (S.turnSpeedHi - S.turnSpeedLo), 0, 1);
-      turn = -swingSteerSm * THREE.MathUtils.degToRad(THREE.MathUtils.lerp(S.turnRateSlow, S.turnRateFast, sp)) * dt;   // 오른쪽 입력 = ψ 감소
+      turn = -swingSteerSm * THREE.MathUtils.degToRad(THREE.MathUtils.lerp(S.turnRateSlow, S.turnRateFast, sp)) * alpha * dt;   // 오른쪽 입력 = ψ 감소
     }
     swingTurnRateDeg = dt > 0 ? THREE.MathUtils.radToDeg(turn / dt) : 0;
     if (turn !== 0) {
@@ -6763,6 +6763,13 @@ function updateSwingPhysics(dt, inputDir, inputMag) {
     }
   }
 
+  if (alpha > 0.001 && !swingHardRope && vh0 > 6.0) {   // 외벽 회피 레이: 진행 방향 앞 벽이 가까우면 벽 법선 방향 척력
+    const look = Math.max(S.wallLookMin, vh0 * S.wallLookT), wc = nearbyColliders(pos.x, pos.z);
+    if (swingRayVsBuildings(pos.x, pos.y + H, pos.z, vel.x / vh0, 0, vel.z / vh0, look, wc, _rayHit)) {
+      const k = 1 - _rayHit.t / look, a = S.wallRepulse * alpha * k * k * dt;
+      vel.x += _rayHit.nx * a; vel.z += _rayHit.nz * a;
+    }
+  }
   // ── ③ 물리 피벗 동적 복귀: physicsPivot → visualAnchor 보간. 앵커 쪽으로 강하게 조향하면 수렴 2~3배(모서리를 축으로 급선회) ──
   if (swingHardRope) {   // 하드: 피벗 고정 · 줄 길이 불변. 공중 조향만 약하게 허용
     swingPivotBlend = 1;
@@ -6787,6 +6794,12 @@ function updateSwingPhysics(dt, inputDir, inputMag) {
     const a = swingPhase === SWING_PHASE.DOWNSWING ? S.downswingThrust : swingPhase === SWING_PHASE.APEX ? S.apexThrust : 0;
     if (a > 0 && sp3 > 2.0 && sp3 < S.thrustMaxSpeed) vel.multiplyScalar(1 + a * dt / sp3); }
 
+  { const ry0 = pos.y + H - pv.y, nd = -ry0 / Math.max(1, Math.hypot(pos.x - pv.x, ry0, pos.z - pv.z)), sp4 = vel.length();   // 최저점 근처 장력 탄성 보너스 β
+    if (nd > S.nadirCone && sp4 > 2.0 && sp4 < S.thrustMaxSpeed) vel.multiplyScalar(1 + S.nadirBeta * (nd - S.nadirCone) / (1 - S.nadirCone) * dt); }
+  if (!swingHardRope) {   // 줄 릴아웃(하강: +ΔL) / 릴인(상승: -ΔL, 각운동량 보존으로 선속도 증가)
+    if (swingPhase === SWING_PHASE.DOWNSWING && swingLenMod < S.lenOutMax) { const d = Math.min(S.lenOutRate * dt, S.lenOutMax - swingLenMod); ropeLength += d; swingLenMod += d; }
+    else if (swingPhase === SWING_PHASE.UPSWING && !pullHeld && swingLenMod > -S.lenInMax) { const d = Math.min(S.lenInRate * dt, swingLenMod + S.lenInMax); swingShortenRope(Math.max(S.reelMinRope, ropeLength - d)); swingLenMod -= d; }
+  }
   // ── PULL(E) 줄 감기 ──
   swingReel += ((pullHeld ? 1 : 0) - swingReel) * (1 - Math.exp(-S.reelRamp * dt));
   if (swingReel > 0.02 && !swingHardRope) swingShortenRope(Math.max(S.reelMinRope, ropeLength - S.reelSpeed * swingReel * dt));
@@ -6806,7 +6819,7 @@ function updateSwingPhysics(dt, inputDir, inputMag) {
   const SUB = S.subSteps, sd = dt / SUB;
   let sumVr = 0, aC = 0;
   for (let step = 0; step < SUB; step++) {
-    vel.y -= PHYS.gravity * S.gravityMul * sd;
+    vel.y -= PHYS.gravity * (vel.y < 0 ? S.gravityFall : S.gravityRise) * sd;
     physApplyDrag(sd, false);
     pos.addScaledVector(vel, sd);
     const hx = pos.x - pv.x, hy = pos.y + H - pv.y, hz = pos.z - pv.z;
@@ -6854,6 +6867,7 @@ function releaseWeb(giveBoost) {
   webMesh.visible = false;
   swingPhase = SWING_PHASE.NONE; swingKick.q = 0;
   if (!giveBoost) return;
+  releaseDragFreeT = S.releaseDragFreeT;   // 릴리즈 후 수평 공기저항 ≈ 0
   _swHand.set(player.pos.x, player.pos.y + SW_HAND_H, player.pos.z);
   _swTmp.subVectors(_swHand, physicsPivotPoint);
   const dist = Math.max(1.0, _swTmp.length());
@@ -6870,7 +6884,8 @@ function releaseWeb(giveBoost) {
   }
   if (q > 0.01) {
     if (relSpd > 1.0) _swTmp.copy(player.vel).multiplyScalar(1 / relSpd); else _swTmp.set(Math.sin(cameraYaw), 0, Math.cos(cameraYaw));
-    swingKick.imp.copy(_swTmp); swingKick.imp.y += S.boostUpRatio;                     // 속도 방향 + 상방(Up)
+    { const hh = Math.hypot(_swTmp.x, _swTmp.z) || 1, pit = THREE.MathUtils.clamp(Math.asin(THREE.MathUtils.clamp(_swTmp.y, -1, 1)), THREE.MathUtils.degToRad(S.kickPitchMinDeg), THREE.MathUtils.degToRad(S.kickPitchMaxDeg));
+      swingKick.imp.set(_swTmp.x / hh * Math.cos(pit), Math.sin(pit), _swTmp.z / hh * Math.cos(pit)); }                     // 속도 방향 + 상방(Up)
     swingKick.imp.normalize().multiplyScalar(S.releaseBoostForce * q);                // releaseBoostForce
     player.vel.addScaledVector(swingKick.imp, S.kickImmediate);                        // 발차기 순간 즉시 임펄스
     swingKick.remaining = 1.0 - S.kickImmediate; swingKick.t = 0; swingKick.active = true; swingKick.q = q;
@@ -6921,6 +6936,7 @@ function updateGlidePhysics(dt, fwdIn, sideIn) {
   const SUB = W.subSteps, sd = dt / SUB;
   const aDeg = THREE.MathUtils.radToDeg(glide.alpha), cb = Math.cos(glide.bank), sb = Math.sin(glide.bank);
   let liftA = 0, CL = 0, CD = 0;
+  const stam = THREE.MathUtils.clamp(1 - (glide.t - W.staminaGrace) / W.staminaDuration, W.staminaMin, 1);
   for (let s = 0; s < SUB; s++) {
     const sp = vel.length();
     if (sp < 0.5) { vel.y -= G * sd; pos.addScaledVector(vel, sd); continue; }
@@ -6929,7 +6945,7 @@ function updateGlidePhysics(dt, fwdIn, sideIn) {
     CL = W.clAlpha * glide.alpha; let stallK = 0;
     if (aDeg > W.stallAlphaDeg) { stallK = Math.min(1, (aDeg - W.stallAlphaDeg) / 10.0); CL = W.clMax * (1 - W.stallDrop * stallK); }
     else CL = Math.min(CL, W.clMax);
-    CL = Math.max(CL, W.clMin);
+    CL = Math.max(CL, W.clMin) * stam;
     CD = W.cd0 + W.inducedK * CL * CL + 0.25 * stallK;                       // 유도항력 + 실속 항력
     const q = 0.5 * PHYS.airDensity * sp * sp * W.wingArea;                  // 동압 × 날개 면적
     const maxL = W.liftAccelMaxG * G;
@@ -7419,6 +7435,7 @@ function updatePhysics(dt) {
   const prevPos = { x: player.pos.x, y: player.pos.y, z: player.pos.z };
   if (slingState.glideT > 0) slingState.glideT = Math.max(0, slingState.glideT - dt);
   if (slingState.carryT > 0) slingState.carryT = Math.max(0, slingState.carryT - dt);
+  if (releaseDragFreeT > 0) releaseDragFreeT = Math.max(0, releaseDragFreeT - dt);
   if (slingState.charging) { updateSling(dt, prevPos); return; }
   const forward = new THREE.Vector3(Math.sin(cameraYaw), 0, Math.cos(cameraYaw)).normalize();
   const right = new THREE.Vector3(-forward.z, 0, forward.x).normalize();
@@ -7473,7 +7490,7 @@ function updatePhysics(dt) {
       const h1 = Math.hypot(player.vel.x, player.vel.z), cap = Math.max(h0, AIR.steerMaxSpeed);
       if (h1 > cap) { const k = cap / h1; player.vel.x *= k; player.vel.z *= k; }
     }
-    physApplyDrag(dt, msm2IsDiving);
+    if (releaseDragFreeT <= 0) physApplyDrag(dt, msm2IsDiving);
     player.pos.addScaledVector(player.vel, dt);
     PHYS_TEL.tension = 0; PHYS_TEL.centripetal = 0; PHYS_TEL.gForce = 1.0;
     if (player.pos.y <= GROUND_Y && player.vel.y <= 0) {
@@ -7598,7 +7615,7 @@ function findWallContact(reach) {
   }
   return best;
 }
-function detachWall(cool) { wallState.active = false; wallState.noWall = cool || 0.3; wallState.awayT = 0; wallState.attachT = 0; }
+function detachWall(cool) { wallState.active = false; wallState.mom = false; wallState.noWall = cool || 0.3; wallState.awayT = 0; wallState.attachT = 0; }
 function wallJump(upward) {
   const nx=wallState.nx, nz=wallState.nz;
   detachWall(0.35);
@@ -7608,12 +7625,56 @@ function wallJump(upward) {
   msm2TrickSpin = Math.PI * 2;
   msm2ApexStatusText = upward ? '🚀 WALL LAUNCH!' : '🕷 WALL JUMP'; msm2ApexTimer = 1.2;
 }
+// ══════ [WALL v2] 사전 예측 진입 · 에너지 보존 투영 · 모서리 회전 ══════
+const WALLP = { lookT: 0.15, minSpeed: 12.0, kappa: 0.86, minRun: 14.0, grazeSplit: 0.866, gWallMul: 0.25, momMax: 2.4, reboundKeep: 0.9, cornerLookT: 0.12 };
+function wallEnterMomentum(c, s, vy, label) {
+  stopGlide(); wallState.active = true; wallState.col = c.col; wallState.nx = c.nx; wallState.nz = c.nz;
+  wallState.t = 0; wallState.awayT = 0; wallState.attachT = 0; wallState.cornerCD = 0.1;
+  wallState.mom = true; wallState.s = s; wallState.vy = vy; wallState.runSpeed = Math.hypot(s, vy); wallState.carry = wallState.runSpeed;
+  player.onGround = false; player.vel.set(-c.nz * s, vy, c.nx * s);
+  msm2ApexStatusText = label; msm2ApexTimer = 1.0;
+}
+function wallPredictEntry() {
+  if (player.onGround || slingState.charging || slingState.glideT > 0 || glide.active || wallState.noWall > 0) return;
+  const v = player.vel, sp = v.length(); if (sp < WALLP.minSpeed) return;
+  const c = findWallContact(sp * WALLP.lookT + 0.42); if (!c) return;
+  const cImp = -(v.x * c.nx + v.z * c.nz) / sp;            // sin(θ_graze)
+  if (cImp < 0.12) return;
+  const R2 = webHeld, tx = -c.nz, tz = c.nx, vt = v.x * tx + v.z * tz;
+  if (isSwinging) releaseWeb(false);
+  if (cImp < WALLP.grazeSplit) {                           // 완만한 사선: 무손실 벽 달리기 (v_y 하한 0.15|v|)
+    const vy = Math.max(0.15 * sp, v.y), par = Math.hypot(vt, vy) || 1;
+    const tgt = Math.max(WALLP.minRun, par + (sp - par) * WALLP.kappa), k = tgt / par;
+    wallEnterMomentum(c, vt * k, vy * k, '🕷 WALL RUN (' + Math.round(tgt * 3.6) + ' km/h)');
+  } else if (R2) {                                         // 정면 + R2: 운동량을 벽 위쪽으로 회전 투영
+    wallEnterMomentum(c, vt * 0.5, Math.max(WALLP.minRun, sp * WALLP.kappa), '🕷 VERTICAL WALL RUN');
+  } else {                                                 // 정면 + R2 없음: 월 리바운드
+    const vn = v.x * c.nx + v.z * c.nz, keep = WALLP.reboundKeep;
+    v.x = (v.x - 2 * vn * c.nx) * keep; v.z = (v.z - 2 * vn * c.nz) * keep; v.y = Math.max(v.y * keep, 8.0);
+    wallState.noWall = 0.4; msm2TrickSpin = Math.PI * 2; msm2ApexStatusText = '🕷 WALL KICK'; msm2ApexTimer = 1.0;
+  }
+}
+function wallCornerWrap(dt) {                              // 외각 모서리: 전방 안쪽 프로브가 허공이면 옆면 법선으로 90° 회전 (속력 보존)
+  wallState.cornerCD = Math.max(0, (wallState.cornerCD || 0) - dt);
+  const s = wallState.s; if (Math.abs(s) < 4.0 || wallState.cornerCD > 0) return;
+  const nx = wallState.nx, nz = wallState.nz, dir = Math.sign(s), ds = Math.abs(s) * WALLP.cornerLookT + 0.3;
+  const ax = player.pos.x - nz * dir * ds, az = player.pos.z + nx * dir * ds;
+  if (!nearestEdge(wallState.col, ax - nx * 0.6, az - nz * 0.6).inside) {
+    const e2 = nearestEdge(wallState.col, ax - nx * 0.6, az - nz * 0.6);
+    if (e2.d < 3.0 && Math.abs(e2.nx * nx + e2.nz * nz) < 0.5) {
+      const sg = ((-e2.nz) * (-nx) + e2.nx * (-nz)) > 0 ? 1 : -1;
+      wallState.nx = e2.nx; wallState.nz = e2.nz; wallState.s = Math.abs(s) * sg; wallState.cornerCD = 0.25;
+      player.pos.x = e2.cx + e2.nx * WALL_R; player.pos.z = e2.cz + e2.nz * WALL_R;
+    }
+  }
+}
 function updateWallMechanic(dt, inputDir, inputMag) {
   wallState.noWall = Math.max(0, wallState.noWall - dt);
   if (isSwinging && swingHardRope && isGameStarted && !wallState.active && wallState.noWall <= 0) {   // 하드 스윙 중 벽에 닿아 앞으로 밀면 줄을 놓고 벽 잡기
     const cs = findWallContact(0.82);
     if (cs && inputMag > 0.25 && -(inputDir.x*cs.nx + inputDir.z*cs.nz) > 0.85 && -(player.vel.x*cs.nx + player.vel.z*cs.nz) > 4.0) { releaseWeb(false); wallState.noWall = 0; wallState.attachT = 0.5; }
   }
+  if (!wallState.active && isGameStarted) wallPredictEntry();
   if (isSwinging || !isGameStarted) { wallState.active = false; wallState.attachT = 0; return false; }
   const c = findWallContact(wallState.active ? 1.8 : 0.42+0.4);
   if (!wallState.active) {
@@ -7628,7 +7689,7 @@ function updateWallMechanic(dt, inputDir, inputMag) {
     // 부착: 벽 방향 운동량을 상승 속도로 전환
     const carry = Math.min(24, Math.max(isRunning ? 13 : 7, vInto*0.9, Math.max(0, player.vel.y)*0.8));
     stopGlide(); wallState.active = true; wallState.col = c.col; wallState.nx = c.nx; wallState.nz = c.nz; wallState.t = 0; wallState.awayT = 0;
-    wallState.carry = carry; player.onGround = false; player.vel.set(0, carry*0.6, 0);
+    wallState.carry = carry; wallState.mom = false; wallState.runSpeed = 0; player.onGround = false; player.vel.set(0, carry*0.6, 0);
     msm2ApexStatusText = '🕷 WALL RUN'; msm2ApexTimer = 1.0;
   }
   if (!c) { detachWall(0.25); return false; }
@@ -7636,19 +7697,31 @@ function updateWallMechanic(dt, inputDir, inputMag) {
   const nx=c.nx, nz=c.nz, tx=-nz, tz=nx;
   const ia = inputDir.x*tx + inputDir.z*tz;          // 벽면을 따라 좌우
   const ib = -(inputDir.x*nx + inputDir.z*nz);       // 벽 방향(앞) = 위, 뒤 = 아래
-  const mag = inputMag > 0.12 ? 1 : 0;
-  const spd = (isRunning ? 15.5 : 7.5) * (1 + Math.min(0.45, wallState.t*0.1)) * (inputMag>0.12 ? Math.min(1,inputMag) : 0);
-  let vUp = mag ? ib*spd*1.0 : 0, vSide = mag ? ia*spd : 0;
-  if (mag && Math.abs(ib) < 0.2 && Math.abs(ia) < 0.2) { vUp = 0; vSide = 0; }
-  player.vel.x = THREE.MathUtils.lerp(player.vel.x, tx*vSide, Math.min(1, 12*dt));
-  player.vel.z = THREE.MathUtils.lerp(player.vel.z, tz*vSide, Math.min(1, 12*dt));
-  player.vel.y = THREE.MathUtils.lerp(player.vel.y, vUp, Math.min(1, 12*dt));
-  player.pos.addScaledVector(player.vel, dt);
+  let vUp = 0;
+  if (wallState.mom) {   // 모멘텀 보존 벽 달리기: 중력 25% + 벽면 흡착(아래 위치 고정) + 모서리 회전
+    wallState.s *= Math.max(0, 1 - 0.10 * dt); wallState.vy -= PHYS.gravity * WALLP.gWallMul * dt;
+    if (wallState.t > WALLP.momMax || (wallState.t > 1.2 && inputMag > 0.5) || wallState.vy < -3.0) wallState.mom = false;
+    else {
+      wallCornerWrap(dt);
+      player.vel.set(-wallState.nz * wallState.s, wallState.vy, wallState.nx * wallState.s);
+      vUp = wallState.vy; player.pos.addScaledVector(player.vel, dt);
+    }
+  }
+  if (!wallState.mom) {
+    const mag = inputMag > 0.12 ? 1 : 0;
+    const spd = (isRunning ? 15.5 : 7.5) * (1 + Math.min(0.45, wallState.t*0.1)) * (inputMag>0.12 ? Math.min(1,inputMag) : 0);
+    let vSide = mag ? ia*spd : 0; vUp = mag ? ib*spd*1.0 : 0;
+    if (mag && Math.abs(ib) < 0.2 && Math.abs(ia) < 0.2) { vUp = 0; vSide = 0; }
+    player.vel.x = THREE.MathUtils.lerp(player.vel.x, tx*vSide, Math.min(1, 12*dt));
+    player.vel.z = THREE.MathUtils.lerp(player.vel.z, tz*vSide, Math.min(1, 12*dt));
+    player.vel.y = THREE.MathUtils.lerp(player.vel.y, vUp, Math.min(1, 12*dt));
+    player.pos.addScaledVector(player.vel, dt);
+  }
   // 꼭대기 도달 → 자동 볼트(옥상으로 올라서기)
   const col = wallState.col;
   if (player.pos.y >= col.maxY - 0.9 && vUp > 0.5) {
     player.pos.y = col.maxY; player.pos.x -= wallState.nx*1.0; player.pos.z -= wallState.nz*1.0;
-    player.vel.set(-wallState.nx*(isRunning?9:3), 0, -wallState.nz*(isRunning?9:3)); player.onGround = true;
+    { const vr = Math.max(isRunning ? 9 : 3, (wallState.runSpeed || 0) * 0.92); player.vel.set(-wallState.nx*vr, wallState.mom ? 3.5 : 0, -wallState.nz*vr); player.onGround = !wallState.mom; }
     detachWall(0.4); msm2ApexStatusText = '🕷 VAULT'; msm2ApexTimer = 0.9; return true;
   }
   // 벽 표면에 위치 고정
@@ -7723,6 +7796,7 @@ function releaseSling() {
   const speed = THREE.MathUtils.lerp(SLING_MIN, SLING_MAX, Math.pow(g, 0.85));
   player.onGround = false; player.pos.y += 0.15;
   player.vel.copy(aim).multiplyScalar(speed);
+  releaseDragFreeT = Math.max(releaseDragFreeT, 0.8);   // 슬링샷 발사 후 0.8초 항력 0
   slingState.carryT = 8; slingState.carryExtra = Math.max(0, speed - MSM2_MAX_SPEED_MS);
   wallState.active = false; wallState.noWall = Math.max(wallState.noWall, 1.0);
   slingState.glideT = 0.5 + 0.9 * g;     // [REAL-G] 상태 표시용(비행 중 판정). 중력 배율은 AIR.slingGravityMul(=1.0)
