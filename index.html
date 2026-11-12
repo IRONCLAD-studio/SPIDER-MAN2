@@ -2552,7 +2552,7 @@ canvas { display: block; width: 100%; height: 100%; }
     <header class="st-brand">
       <h1 class="st-title"><span>Manhattan 1:1</span><span>Web-Swing</span></h1>
       <p class="st-sub">실제 크기의 맨해튼 위를 거미줄로 날아다니세요.</p>
-      <span id="game-version" class="st-ver">v12 · 기기선택</span>
+      <span id="game-version" class="st-ver">v14 · 기기선택</span>
     </header>
 
     <nav class="st-menu" aria-label="메인 메뉴">
@@ -6509,7 +6509,7 @@ function povArmsUpdate(P, dt, t, M, tN, windK, sw, onG, hsp, speed) {
     A.step(dt);
     T.S.set(sgn * 0.21 * ex, -0.25, 0.10);
     // 기본 포즈: 대기 → 활공(양팔 펼침) → 다이브(양팔 앞으로)
-    let bx = sgn * 0.19 * ex, by = -0.29 + Math.sin(P.bobPhase * 2 + i * 1.7) * 0.012 * P.bobK + Math.sin(t * 1.3 + i) * 0.003, bz = -0.42;   // [v11] 대기 자세 손을 위로·앞으로: 팔뚝이 화면 아래에서 뻗어 나옴
+    let bx = sgn * 0.19 * ex, by = -0.29 + Math.sin(P.bobPhase * 2 + i * 1.7) * 0.012 * P.bobK + Math.sin(t * 1.3 + i) * 0.003, bz = -0.34;   // [v11] 대기 자세 손을 위로·앞으로: 팔뚝이 화면 아래에서 뻗어 나옴
     bx += (sgn * 0.42 * ex - bx) * P.wGlide; by += (-0.14 - by) * P.wGlide; bz += (-0.46 - bz) * P.wGlide;
     bx += (sgn * 0.08 - bx) * P.wDive; by += (-0.10 - by) * P.wDive; bz += (-0.62 - bz) * P.wDive;
     if (P.wWall > 0.001) { const cyc = Math.sin((wallState.phase || 0) * 0.9 + i * Math.PI); bx += (sgn * 0.20 * ex - bx) * P.wWall; by += (0.02 + 0.17 * cyc - by) * P.wWall; bz += (-0.48 - bz) * P.wWall; }   // 벽타기: 양손 번갈아 벽 짚기
@@ -6541,10 +6541,14 @@ function povArmsUpdate(P, dt, t, M, tN, windK, sw, onG, hsp, speed) {
         // ── [CINE] 영화 프레이밍: 목표를 '실제 팔 길이(어깨~손목 0.455m)' 단위의 카메라 로컬 좌표로 변환 ──
         //  어깨 = 카메라 기준 (±0.20, -0.25, +0.05) → 올려다봐도 팔이 화면 아래에서 뻗어 나온다(몸이 서 있어 실제 어깨는 카메라 뒤로 빠지므로)
         const lf = P.liftS * (C.gripLift === undefined ? 1 : C.gripLift);   // 장력으로 팔이 올라갈 때 어깨도 같이 으쓱 올라간다(자연스러운 당김)
-        const Sx = sgn * 0.20, Sy = -0.25 + 0.10 * lf, Sz = -0.06;   // 어깨를 카메라 앞쪽으로(+0.05→-0.06): 팔 전체가 near 평면 안쪽에서 잘리지 않고 화면 아래에서 뻗어 나옴
+        const Sx = sgn * 0.20, Sy = -0.25 + 0.10 * lf, Sz = -0.12;   // 어깨를 카메라 앞쪽으로(+0.05→-0.06): 팔 전체가 near 평면 안쪽에서 잘리지 않고 화면 아래에서 뻗어 나옴
         Ri.s.set(Sx, Sy, Sz);
         let hx = Sx + (T.Tg.x - T.S.x) * 0.81, hy = Sy + (T.Tg.y - T.S.y) * 0.81, hz = Sz + (T.Tg.z - T.S.z) * 0.81;   // 기존 자세(대기/활공/다이브/벽타기)는 그대로, 단위만 변환
-        const wc = P.wRope;   // [GRIP] 웹스윙 중에는 양손 모두 줄을 쥔다
+        const wc = P.wRope;   // [GRIP] 웹스윙 중에는 양손 모두 줄을 쥔다 (단, 발사 직후엔 쏘는 손만 → 잠시 뒤 반대손이 합류)
+        //  [JOIN] 발사 → 한 손(웹슈터 손)만 앵커 쪽으로 쭉 뻗음 → joinDelay 초 뒤부터 joinDur 초 동안 반대손이 줄 쪽으로 모여 양손 파지.  콘솔: POV_CAM.joinDelay / joinDur / reach (joinDelay=0 이면 즉시 양손)
+        const jD = C.joinDelay === undefined ? 0.40 : C.joinDelay, jU = Math.max(0.05, C.joinDur === undefined ? 0.45 : C.joinDur);
+        const jt = MU.clamp((P.shotT - jD) / jU, 0, 1), jn = jt * jt * (3 - 2 * jt);        // 0 = 한 손 / 1 = 양손 합류
+        const wcH = isRope ? wc : wc * jn;                                                   // 이 손의 파지 가중치
         if (wc > 0.001) {
           // 양손이 화면 아래 중앙에 모여 줄을 쥐는 영화 컷 구도. 앵커 방향으로는 아주 조금만 기울여 팔이 항상 시야 안에 머문다.
           const e0 = MU.clamp(P.shotT / 0.20, 0, 1), arc = isRope ? Math.sin(Math.PI * e0) : 0;   // 발사 직후 0.2초: 웹슈터 손이 아래-바깥에서 위로 휘두르는 호
@@ -6558,7 +6562,13 @@ function povArmsUpdate(P, dt, t, M, tN, windK, sw, onG, hsp, speed) {
           gx += ox * M * 0.81; gy += oy * M * 0.81; gz += oz * M * 0.81;
           let vx = gx - Sx, vy = gy - Sy, vz = gz - Sz; const vl = Math.hypot(vx, vy, vz) || 1, kr = Math.min(1, 0.452 / vl);   // 실제 팔 길이(0.452)를 넘지 않게
           const cx = Sx + vx * kr, cy = Sy + vy * kr, cz = Sz + vz * kr;
-          hx += (cx - hx) * wc; hy += (cy - hy) * wc; hz += (cz - hz) * wc;
+          let ccx = cx, ccy = cy, ccz = cz;
+          if (isRope && jn < 0.999) {   // 쏘는 손: 합류 전에는 앵커 방향으로 팔을 뻗은 자세 (발사 직후 0.12초 만에 쭉 뻗음 → 합류하며 가운데로 복귀)
+            const rch = (C.reach === undefined ? 0.44 : C.reach), pe = MU.clamp(P.shotT / 0.12, 0, 1), ps = pe * pe * (3 - 2 * pe), mx = (1 - jn) * ps;
+            const exx = Sx + dx * rch * 0.9, eyy = Math.min(0.22, Sy + dy * rch), ezz = Sz + dz * rch;
+            ccx += (exx - ccx) * mx; ccy += (eyy - ccy) * mx; ccz += (ezz - ccz) * mx;
+          }
+          hx += (ccx - hx) * wcH; hy += (ccy - hy) * wcH; hz += (ccz - hz) * wcH;
           if (isRope) {
             Ri.palm.set(-sgn * 0.40, -0.30, 0.86).normalize();                                    // 손바닥 법선(웹슈터면)이 카메라 쪽을 향함
             const sn = MU.clamp(P.shotT / 0.16, 0, 1); Ri.hsw = wc * sn * sn * (3 - 2 * sn);      // 발사 순간 손목 스냅
@@ -10210,7 +10220,7 @@ function updateCameraAndHUD(dt) {
       camera.rotateZ(msm2CamRoll);
     }
   }
-  camera.near = isBirdEyeMode ? 2.0 : (isPOVMode && !isSpectator) ? (POV_CAM.nearPlane || 0.07) : camera.position.y > 45 ? 2.0 : camera.position.y > 18 ? 0.6 : 0.3;   // [FIX v11] 1인칭은 고도와 무관하게 near 를 작게 유지 — 고도 18m↑에서 near 가 0.6~2m 가 되어 팔·몸통이 잘리던 문제   // 1인칭: 카메라 코앞의 팔이 near 평면에 잘려 안 보이던 문제 완화(0.12→0.07)
+  camera.near = isBirdEyeMode ? 2.0 : (isPOVMode && !isSpectator) ? (POV_CAM.nearPlane || 0.2) : camera.position.y > 45 ? 2.0 : camera.position.y > 18 ? 0.6 : 0.3;   // [FIX v11] 1인칭은 고도와 무관하게 near 를 작게 유지 — 고도 18m↑에서 near 가 0.6~2m 가 되어 팔·몸통이 잘리던 문제   // 1인칭: 카메라 코앞의 팔이 near 평면에 잘려 안 보이던 문제 완화(0.12→0.07)
   camera.fov -= _povFovLast; camera.fov = SpeedCamera.stepFov(camera.fov, dt); _povFovLast = _povDone ? povFovOffset : 0; camera.fov += _povFovLast;   // 속도 비례 FOV (+ 1인칭 FOV 킥)
   { const shk = THREE.MathUtils.clamp((speed - 28) / 40, 0, 1) * (_povDone ? 0 : isPOVMode ? 0.6 : 1);   // 고속 카메라 셰이크 (1인칭 리그는 자체 풍압 흔들림 사용)
     if (shk > 0 && !isBirdEyeMode && !isSpectator) { const tt = performance.now() * 0.001;
