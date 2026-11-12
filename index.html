@@ -6142,7 +6142,7 @@ var POV_CAM = {
   gforce: { intensity: 1.0, neckFreq: 2.2, damping: 0.42, accPitch: 0.0035, accDown: 0.0032, accYaw: 0.0016, accPosY: 0.0014, swayFreq: 1.4, swayRot: 0.0045, maxPitch: 0.15 },   // ④ 목 관성 + 저주파 스웨이 (1~3Hz)
   action: { intensity: 1.0, recoil: 1.0, kick: 1.0, landing: 1.0 },                                                                // ⑤ 발사 반동 / 킥오프 / 착지 압축
   hand:   { vibScale: 1.8, phase: 0.37, lagTime: 0.045, lagMax: 0.12, inertia: 1.0 },                                              // 손 비동기: 장력 떨림 1.8배 · 위상차 · 회전 지연
-  arms: true, legs: true
+  arms: false, legs: false, film: true   // film: 원본 스킨 모델(GLB)을 1인칭에서도 그대로 사용 + 영화식 팔/손
 };
 window.POV_CAM = POV_CAM;
 
@@ -6183,6 +6183,59 @@ function pcState() {
 }
 
 // ── 절차적 팔/다리 메쉬 (카메라 자식 / 월드 자식) ──
+// ── [POV FILM] 1인칭: 원본 스킨(GLB) 모델을 숨기지 않고, 눈=카메라로 맞춘 뒤 팔·손을 영화 장면처럼 카메라 앞에 배치 ──
+//  ① 모델 몸통은 SPA 애니메이션(달리기/스윙/착지 자세)을 그대로 사용, 머리 본만 숨겨 시야 가림 방지
+//  ② 머리 본의 '눈' 위치가 카메라와 일치하도록 모델을 평행이동(지상: 수평만, 공중/스윙: 수직도)
+//  ③ 팔: 기존 절차식 1인칭 손 목표(관성·흔들림·스윙 조준)를 실제 어깨 기준으로 옮겨 2관절 IK 로 DEF_ARM/FOREARM/HAND 본 구동
+//  ④ 손가락: 평소엔 주먹, 웹 발사 순간엔 검지·소지만 편 '스파이더맨 사인'(중지·약지 접음)
+//  ⑤ 웹줄 시작점 = 실제 웹슈터 끝 본(DEF_WEBSHOOTERS_TWEAK_03)
+const _pfP = new THREE.Vector3(), _pfS = new THREE.Vector3(), _pfQ = new THREE.Quaternion(), _pfE = new THREE.Vector3(), _pfH = new THREE.Vector3(), _pfT = new THREE.Vector3(), _pfPole = new THREE.Vector3(), _pfInv = new THREE.Matrix4();
+function povFingerTargets(P, i, dt) {
+  const g = P.fg[i], shot = P.real[i].rope && P.shotT < 0.45;
+  const tg = shot ? { gA: 0.0, gB: 1.1, gC: 1.1, gD: 0.0, gT: 0.8 } : { gA: 0.80, gB: 1.0, gC: 1.0, gD: 0.88, gT: 0.55 };
+  const k = 1 - Math.exp(-16 * dt);
+  for (const key in tg) g[key] += (tg[key] - g[key]) * k;
+  return g;
+}
+function povFilm(P, dt, t, sw, onG) {
+  const C = POV_CAM, rig = window.__bndRig;
+  if (!C.film || !rig || !rig.ready || !rig.ready2 || !rig.model || !spideyGroup || !SPA.ready() || !P.real) return false;
+  const hb = rig.bones && rig.bones['DEF_HEAD']; if (!hb) return false;
+  if (P.eyeFor !== rig.model) {   // 모델(스킨)이 바뀌면 눈 위치 다시 계산
+    P.eyeLocal = SPA.povEyeLocal(); P.eyeFor = rig.model; P.eyeWY = 0;
+    P.fg = [{ gA: 0.8, gB: 1, gC: 1, gD: 0.88, gT: 0.55 }, { gA: 0.8, gB: 1, gC: 1, gD: 0.88, gT: 0.55 }];
+  }
+  if (!P.eyeLocal) return false;
+  // ② 눈 ↔ 카메라 정렬
+  spideyGroup.updateMatrixWorld(true);
+  hb.matrixWorld.decompose(_pfP, _pfQ, _pfS);
+  _pfE.set(P.eyeLocal.x, P.eyeLocal.y, P.eyeLocal.z).multiplyScalar(rig.ms || 1).applyQuaternion(_pfQ).add(_pfP);
+  P.eyeWY += ((sw || !onG ? 1 : 0) - P.eyeWY) * (1 - Math.exp(-8 * dt));
+  spideyGroup.position.x += camera.position.x - _pfE.x;
+  spideyGroup.position.z += camera.position.z - _pfE.z;
+  spideyGroup.position.y += (camera.position.y - _pfE.y) * P.eyeWY;
+  spideyGroup.updateMatrixWorld(true);
+  // ③ 팔 IK
+  camera.updateMatrixWorld(true);
+  _pfInv.copy(rig.model.matrixWorld).invert();
+  for (let i = 0; i < 2; i++) {
+    const s = i ? 'R' : 'L', D = P.real[i], an = rig.bones['DEF_ARM_01.' + s]; if (!an) continue;
+    an.getWorldPosition(_pfH);                                         // 실제 어깨(위팔 시작) 월드 위치
+    _pfT.copy(D.tg); camera.localToWorld(_pfT);                        // 절차식 손 목표(월드)
+    _pfS.copy(D.s); camera.localToWorld(_pfS);                         // 절차식 어깨(월드)
+    _pfT.sub(_pfS).multiplyScalar(0.81).add(_pfH);                     // 실제 팔 길이(0.47m)에 맞춰 0.58→0.47 비율로 축소 후 실제 어깨에 부착
+    _pfT.applyMatrix4(_pfInv); _pfH.applyMatrix4(_pfInv);              // → 모델 로컬 좌표
+    _pfPole.copy(D.pole).transformDirection(camera.matrixWorld).transformDirection(_pfInv);
+    SPA.povArm(s, _pfH, _pfT, _pfPole, D.hrz);
+    SPA.povFingers(s, povFingerTargets(P, i, dt));                     // ④ 손가락
+  }
+  spideyGroup.updateMatrixWorld(true);
+  // ⑤ 웹줄 시작점 = 실제 웹슈터 끝
+  const rs = P.side ? 'R' : 'L', tip = rig.bones['DEF_WEBSHOOTERS_TWEAK_03.' + rs] || rig.bones['DEF_HAND.' + rs];
+  if (tip) { tip.getWorldPosition(_pfP); camera.worldToLocal(_pfP); P.ropeLocal.copy(_pfP); }
+  return true;
+}
+
 function povRigEnsure(P) {
   if (P.rig) return;
   const mat = (c, e) => new THREE.MeshStandardMaterial({ color: c, roughness: 0.62, metalness: 0.05, emissive: e, emissiveIntensity: 1 });
@@ -6368,6 +6421,7 @@ function povCamUpdate(dt, speed) {
   // ── 팔/다리/로프 ──
   povArmsUpdate(P, dt, t, M, tN, windK, sw, onG, hsp, speed);
   povLegsUpdate(P, dt, t, M, sw, onG, hsp, speed, windK);
+  try { povFilm(P, dt, t, sw, onG); } catch (e) { console.error("[POV_CAM] 영화식 팔 오류 → 임시 팔다리로 복귀", e); POV_CAM.film = false; POV_CAM.arms = true; POV_CAM.legs = true; }
   P.prevVy = vel.y;
   if (sw && webMesh) {   // 로프는 1인칭 손끝에서 시작해 앵커까지 뻗어 나감
     camera.updateMatrixWorld(true);
@@ -6383,7 +6437,7 @@ function povCamUpdate(dt, speed) {
 function povArmsUpdate(P, dt, t, M, tN, windK, sw, onG, hsp, speed) {
   const C = POV_CAM, H = C.hand, MU = THREE.MathUtils, T = P.T, rig = P.rig, ex = MU.clamp(camera.aspect * 0.9, 0.55, 1.25);
   rig.group.visible = C.arms;
-  if (!C.arms) return;
+  if (!C.arms && !C.film) return;
   P.wRope += ((sw ? 1 : 0) - P.wRope) * (1 - Math.exp(-(sw ? 16 : 6) * dt));
   P.wOff += ((sw ? 0.5 : 0) - P.wOff) * (1 - Math.exp(-8 * dt));
   P.wGlide += ((glide.active && !sw ? 1 : 0) - P.wGlide) * (1 - Math.exp(-6 * dt));
@@ -6428,6 +6482,10 @@ function povArmsUpdate(P, dt, t, M, tN, windK, sw, onG, hsp, speed) {
     }
     T.Tg.x += ox * M; T.Tg.y += oy * M; T.Tg.z += oz * M;
     T.Pole.set(sgn * 0.7, -1.0, 0.35);
+    if (C.film) {   // [POV FILM] 카메라 로컬 좌표의 손 목표/어깨/폴을 저장 → povFilm()이 실제 GLB 팔 본에 적용
+      const RL = P.real || (P.real = [{ tg: new THREE.Vector3(), s: new THREE.Vector3(), pole: new THREE.Vector3(), hrz: 0, rope: false }, { tg: new THREE.Vector3(), s: new THREE.Vector3(), pole: new THREE.Vector3(), hrz: 0, rope: false }]);
+      RL[i].tg.copy(T.Tg); RL[i].s.copy(T.S); RL[i].pole.copy(T.Pole); RL[i].hrz = hrz * M; RL[i].rope = isRope;
+    }
     povSolveArm(P, 0.30, 0.28);
     const ar = rig.arms[i];
     povSeg(ar.upper, T.S, T.El, T.dir, T.Y);
@@ -6515,6 +6573,10 @@ function wirePovCamUI() {
     sec.appendChild(l); sec.appendChild(r);
   };
   sec.appendChild(hb); sec.appendChild(hd);
+  const fb = mk('button', 'assist-toggle-btn', '', 'btn-pov-film'); fb.style.marginTop = '10px';
+  const fbText = () => { fb.innerText = '1인칭 원본 스킨 팔·몸통(영화식): ' + (POV_CAM.film ? 'ON' : 'OFF (임시 팔다리)'); fb.classList.toggle('off', !POV_CAM.film); };
+  fb.addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); POV_CAM.film = !POV_CAM.film; POV_CAM.arms = POV_CAM.legs = !POV_CAM.film; fbText(); }); fbText();
+  sec.appendChild(fb);
   sl('1인칭 흔들림 강도', 'pov-shake', 0, 200, Math.round(POV_CAM.masterShakeIntensity * 100), (v) => v + '%', (v) => { POV_CAM.masterShakeIntensity = v / 100; });
   sl('1인칭 수평 유지 (VOR)', 'pov-horizon', 0, 100, Math.round(POV_CAM.horizonLockRatio * 100), (v) => v + '%', (v) => { POV_CAM.horizonLockRatio = v / 100; });
   sec.appendChild(mk('div', 'assist-desc', '흔들림 강도: 풍압·로프 떨림·G포스·반동 전체 배율(멀미가 심하면 30~60%). 수평 유지: 높을수록 스윙 중 시야가 덜 기웁니다.'));
@@ -7167,7 +7229,7 @@ function setupControls() {
       povModeBtn.innerText = isPOVMode ? 'POV 1인칭 시점: ON' : 'POV 1인칭 시점: OFF';
       povModeBtn.classList.toggle('off', !isPOVMode);
       if (camModeBtn) camModeBtn.innerText = isBirdEyeMode ? '🦅 항공 조감도 뷰 (ON)' : '🦅 항공 조감도 뷰 (OFF)';
-      if (spideyGroup) spideyGroup.visible = !isPOVMode;
+      if (spideyGroup) spideyGroup.visible = !isPOVMode || (POV_CAM.film && POV_CAM.enabled && !isSpectator && !isBirdEyeMode);
     });
   }
 
@@ -9246,6 +9308,32 @@ const SPA = (function () {
   }
 
   // ---------- 몸/사지/손가락을 리그에 적용 ----------
+  // ===== [POV FILM] 1인칭 영화식 팔: SPA 포즈 이후 실제 DEF 팔 본을 카메라 기준 목표로 재구동 =====
+  // 모델 공간(= rig.model 로컬) 좌표: H=어깨(ARM_01) 위치, A=손목 목표, polem=팔꿈치 방향, wr=손목 비틀기
+  function povArm(s, Hm, Am, polem, wr) {
+    const L = LIMB['arm' + s]; if (!L) return null;
+    for (const pre of ['DEF_ARM_02.', 'DEF_ARM_03.', 'DEF_ARM_04.', 'DEF_FOREARM_02.', 'DEF_FOREARM_03.', 'DEF_FOREARM_04.']) { const r = R[pre + s]; if (r) r.stamp = -1; }   // apply()에서 캐시된 이전 값 무효화
+    const ik = ikDirs(L, Hm, Am, polem), qs = limbQuats(L, ik.e1, ik.e2, ik.n);
+    setWorld(L.b0, qs[0]); setWorld(L.b1, qs[1]);
+    const hand = L.b2, rel = qmul(qinv(rq(L.b1)), rq(hand));
+    setWorld(hand, qmul(qax(ik.n, wr || 0), qmul(qs[1], rel)));
+    return ik;
+  }
+  function povFingers(s, g) {   // g: {gA,gB,gC,gD,gT} (A=검지 B=중지 C=약지 D=소지 T=엄지, 0=펴짐 ~1.2=완전히 말림)
+    for (const f of FING[s]) {
+      const c = clamp(g[f.key], -0.3, 1.2), ang = c * f.max * SPA.fingerSign, b = f.r.base;
+      const qq = qmul(Q(b.x, b.y, b.z, b.w), qax(V(f.ax.x, f.ax.y, f.ax.z), ang));
+      f.r.node.quaternion.set(qq.x, qq.y, qq.z, qq.w);
+    }
+  }
+  function povEyeLocal() {      // DEF_HEAD 본 로컬 좌표계에서 본 '눈' 위치 (휴지 자세의 렌즈 중점)
+    if (!R['DEF_HEAD']) return null;
+    const q = rq('DEF_HEAD'), p = rp('DEF_HEAD'), a = R['Lens_CTRL.L'], b = R['Lens_CTRL.R'];
+    const w = a && b ? { x: (a.p.x + b.p.x) / 2, y: (a.p.y + b.p.y) / 2, z: (a.p.z + b.p.z) / 2 + 0.01 } : { x: p.x, y: p.y + 0.075, z: p.z + 0.08 };
+    const e = qrot(qinv(q), V(w.x - p.x, w.y - p.y, w.z - p.z));
+    return { x: e.x, y: e.y, z: e.z };
+  }
+
   function apply(O, rig, ms) {
     frame++;
     const kin = torso(O), D = kin.D, pos = kin.pos;
@@ -9377,7 +9465,7 @@ const SPA = (function () {
   }
 
   return { setup, apply, clipApply, limbQuats, handRest: CHV, clipSample, clipLerp: clipLerpPose, clipDur: CLIP.dur, clipSL: CSL, K, PN, NP, DEF_ANK_Y: ANK_Y, M: { V, Q, poolReset, vadd, vsub, vsc, vdot, vcross, vlen, vnorm, vlerp, vmad, qmul, qinv, qrot, qax, qX, qY, qZ, qEul, qfromTo, qnlerp, basisQ, clamp, lerp, sst, s5, wrap, PI, TAU },
-    ready: () => ok, rest: null, handFk: { L: { x: 0, y: 1, z: 0 }, R: { x: 0, y: 1, z: 0 } }, cogBase: { x: 0, y: 0, z: 0 }, fingerSign: 1, R, LIMB, torso, worldOf, ikDirs, SIDE, SPN, NKN, rq, rp };
+    ready: () => ok, rest: null, handFk: { L: { x: 0, y: 1, z: 0 }, R: { x: 0, y: 1, z: 0 } }, cogBase: { x: 0, y: 0, z: 0 }, fingerSign: 1, R, LIMB, torso, worldOf, ikDirs, SIDE, SPN, NKN, rq, rp, povArm, povFingers, povEyeLocal };
 })();
 
 // ===================== SPA part 2: 상태 머신 · 포즈 생성기 · 전환(관성화) · 2차 모션 =====================
@@ -9877,15 +9965,19 @@ window.bndSetSkinModel = bndSetSkinModel;
 const _uaHand = new THREE.Vector3(), _uaTo = new THREE.Vector3(), _uaRight = new THREE.Vector3(), _uaTmp = new THREE.Vector3();
 function updateSpiderManRig(dt) {
   if (!spideyGroup) return;
-  spideyGroup.visible = !isPOVMode;
+  spideyGroup.visible = !isPOVMode || (POV_CAM.film && POV_CAM.enabled && !isSpectator && !isBirdEyeMode);
   spideyGroup.position.copy(player.pos);
   const rig = window.__bndRig;
   if (!rig || !rig.ready) return;
   if (rig.mixer) rig.mixer.update(dt);
+  { const hb = rig.bones && rig.bones['DEF_HEAD']; if (hb) hb.scale.setScalar(isPOVMode && POV_CAM.film && POV_CAM.enabled && !isSpectator && !isBirdEyeMode ? 0.001 : 1); }   // 1인칭: 머리만 숨김(카메라가 머리 안에 있으므로)
 
   const L = THREE.MathUtils.lerp;
   const hSpeed = Math.hypot(player.vel.x, player.vel.z);
-  if (hSpeed > 0.35) {
+  if (isPOVMode && POV_CAM.film && POV_CAM.enabled && !isSpectator) {   // 1인칭: 몸이 시선(yaw)을 따라감
+    let dY = cameraYaw - spideyGroup.rotation.y; while (dY > Math.PI) dY -= Math.PI * 2; while (dY < -Math.PI) dY += Math.PI * 2;
+    spideyGroup.rotation.y += dY * Math.min(1, 20 * dt);
+  } else if (hSpeed > 0.35) {
     const moveAngle = Math.atan2(player.vel.x, player.vel.z);
     let diff = moveAngle - spideyGroup.rotation.y;
     while (diff > Math.PI) diff -= Math.PI * 2;
