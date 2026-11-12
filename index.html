@@ -6248,6 +6248,7 @@ function povFilm(P, dt, t, sw, onG) {
       _pfT.sub(_pfS).multiplyScalar(0.81).add(_pfH);                   // 실제 팔 길이(0.47m)에 맞춰 0.58→0.47 비율로 축소 후 실제 어깨에 부착
     }
     _pfT.applyMatrix4(_pfInv); _pfH.applyMatrix4(_pfInv);              // → 모델 로컬 좌표
+    if (!isFinite(_pfT.x + _pfT.y + _pfT.z + _pfH.x + _pfH.y + _pfH.z)) continue;   // [NaN 방어] 깨진 목표는 건너뜀(본이 NaN 되면 메시가 통째로 사라짐)
     (D.cine ? armD(_pfPole.copy(D.pole)) : _pfPole.copy(D.pole).transformDirection(camera.matrixWorld)).transformDirection(_pfInv);
     SPA.povArm(s, _pfH, _pfT, _pfPole, D.hrz, hs);
     SPA.povFingers(s, povFingerTargets(P, i, dt));                     // ④ 손가락
@@ -6369,7 +6370,8 @@ function povCamUpdate(dt, speed) {
     else if (P.prevVr < 0.7 && vr > C.snap.minVr && P.snapCool <= 0) povOnSnap(vr);   // 느슨했다가 팽팽해지는 프레임
   }
   P.prevVr = vr;
-  P.tenSm += ((sw ? PHYS_TEL.tension : 0) - P.tenSm) * (1 - Math.exp(-14 * dt));
+  if (!isFinite(P.tenSm)) P.tenSm = 0;   // [NaN 방어] 스윙 첫 순간 장력이 비정상 값이면 팔 전체가 사라지는 것을 막는다
+  P.tenSm += (((sw && isFinite(PHYS_TEL.tension)) ? PHYS_TEL.tension : 0) - P.tenSm) * (1 - Math.exp(-14 * dt));
   const tN = sw ? MU.clamp(P.tenSm / (PHYS.mass * PHYS.gravity * 2.2), 0, 1.6) : 0;
   let hang = 0;   // 1 = 스윙 최저점(Apex), 장력 최대
   if (sw) { const ry0 = player.pos.y + 1.45 - physicsPivotPoint.y, rl = Math.max(1, Math.hypot(player.pos.x - physicsPivotPoint.x, ry0, player.pos.z - physicsPivotPoint.z)); hang = MU.clamp(-ry0 / rl, 0, 1); }
@@ -6535,6 +6537,8 @@ function povArmsUpdate(P, dt, t, M, tN, windK, sw, onG, hsp, speed) {
             Ri.flex = (-0.30 + 0.55 * Math.exp(-P.shotT * 9)) * wc;
           }
         }
+        if (!isFinite(hx + hy + hz)) { hx = Sx + sgn * -0.16; hy = -0.13; hz = -0.36; }   // [NaN 방어] 기본 쥐기 위치로 복귀
+        if (!isFinite(Ri.hrz)) Ri.hrz = 0;
         Ri.tg.set(hx, hy, hz); Ri.cine = true;
       }
     }
