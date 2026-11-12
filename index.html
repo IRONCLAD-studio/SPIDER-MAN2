@@ -6192,7 +6192,7 @@ function pcState() {
 //  ③ 팔: 기존 절차식 1인칭 손 목표(관성·흔들림·스윙 조준)를 실제 어깨 기준으로 옮겨 2관절 IK 로 DEF_ARM/FOREARM/HAND 본 구동
 //  ④ 손가락: 평소엔 주먹, 웹 발사 순간엔 검지·소지만 편 '스파이더맨 사인'(중지·약지 접음)
 //  ⑤ 웹줄 시작점 = 실제 웹슈터 끝 본(DEF_WEBSHOOTERS_TWEAK_03)
-const _pfP = new THREE.Vector3(), _pfS = new THREE.Vector3(), _pfQ = new THREE.Quaternion(), _pfE = new THREE.Vector3(), _pfH = new THREE.Vector3(), _pfT = new THREE.Vector3(), _pfPole = new THREE.Vector3(), _pfPalm = new THREE.Vector3(), _pfInv = new THREE.Matrix4();
+const _pfQ2 = new THREE.Quaternion(), _pfP = new THREE.Vector3(), _pfS = new THREE.Vector3(), _pfQ = new THREE.Quaternion(), _pfE = new THREE.Vector3(), _pfH = new THREE.Vector3(), _pfT = new THREE.Vector3(), _pfPole = new THREE.Vector3(), _pfPalm = new THREE.Vector3(), _pfInv = new THREE.Matrix4();
 function povFingerTargets(P, i, dt) {
   const g = P.fg[i], shot = P.real[i].rope && P.shotT < 0.45;
   const tg = shot ? { gA: 0.0, gB: 1.1, gC: 1.1, gD: 0.0, gT: 0.8 } : { gA: 0.80, gB: 1.0, gC: 1.0, gD: 0.88, gT: 0.55 };
@@ -6221,17 +6221,26 @@ function povFilm(P, dt, t, sw, onG) {
   // ③ 팔 IK
   camera.updateMatrixWorld(true);
   _pfInv.copy(rig.model.matrixWorld).invert();
+  // [LOOSE] 어깨·손 목표 기준 프레임을 카메라에 '느슨하게' 따라가게: 지연(armFollow, 클수록 빨리 따라옴) + 최대 이탈각 제한(armMaxLag, rad)
+  //  → 시선을 빠르게 돌리면 팔이 한 박자 늦게 따라오고, 너무 멀어지면 시야 가장자리에 걸려 계속 보인다. 콘솔: POV_CAM.armFollow / POV_CAM.armMaxLag
+  if (!P.armQ) { P.armQ = new THREE.Quaternion(); P.armQ.copy(camera.getWorldQuaternion(_pfQ2)); }
+  { const cq = camera.getWorldQuaternion(_pfQ2), kf = 1 - Math.exp(-(C.armFollow === undefined ? 7 : C.armFollow) * dt);
+    P.armQ.slerp(cq, kf);
+    const ang = 2 * Math.acos(Math.min(1, Math.abs(P.armQ.dot(cq)))), mx = C.armMaxLag === undefined ? 0.55 : C.armMaxLag;
+    if (ang > mx) { P.armQ.copy(cq).slerp(P.armQ, mx / ang); }
+    P.armQ.normalize(); }
+  const armW = (v) => v.applyQuaternion(P.armQ).add(camera.position), armD = (v) => v.applyQuaternion(P.armQ);
   for (let i = 0; i < 2; i++) {
     const s = i ? 'R' : 'L', D = P.real[i], an = rig.bones['DEF_ARM_01.' + s], sh = rig.bones['DEF_SHOULDER.' + s]; if (!an) continue;
     let hs = null;
     if (D.cine && sh && sh.parent) {
       // [CINE] 몸은 서 있고 카메라만 위/아래를 보므로, 어깨(쇄골 본)를 '카메라 기준 어깨 위치'로 옮겨 팔이 항상 시야 아래쪽에서 뻗어 나오게 한다 (SPA.apply 가 다음 프레임에 원위치)
-      _pfS.copy(D.s); camera.localToWorld(_pfS);
+      _pfS.copy(D.s); armW(_pfS);
       an.getWorldPosition(_pfH); sh.getWorldPosition(_pfP); _pfP.add(_pfS).sub(_pfH);
       sh.parent.worldToLocal(_pfP); sh.position.copy(_pfP); sh.updateMatrixWorld(true);
       an.getWorldPosition(_pfH);                                       // 옮긴 뒤의 어깨(위팔 시작) 월드 위치
-      _pfT.copy(D.tg); camera.localToWorld(_pfT);                      // 손목 목표(월드) — 이미 실제 팔 길이 기준
-      if (D.hsw > 0.001) { _pfPalm.copy(D.palm).transformDirection(camera.matrixWorld).transformDirection(_pfInv); hs = { palm: _pfPalm, w: D.hsw, flex: D.flex }; }
+      _pfT.copy(D.tg); armW(_pfT);                                     // 손목 목표(월드) — 이미 실제 팔 길이 기준
+      if (D.hsw > 0.001) { armD(_pfPalm.copy(D.palm)).transformDirection(_pfInv); hs = { palm: _pfPalm, w: D.hsw, flex: D.flex }; }
     } else {
       an.getWorldPosition(_pfH);                                       // 실제 어깨(위팔 시작) 월드 위치
       _pfT.copy(D.tg); camera.localToWorld(_pfT);                      // 절차식 손 목표(월드)
@@ -6239,7 +6248,7 @@ function povFilm(P, dt, t, sw, onG) {
       _pfT.sub(_pfS).multiplyScalar(0.81).add(_pfH);                   // 실제 팔 길이(0.47m)에 맞춰 0.58→0.47 비율로 축소 후 실제 어깨에 부착
     }
     _pfT.applyMatrix4(_pfInv); _pfH.applyMatrix4(_pfInv);              // → 모델 로컬 좌표
-    _pfPole.copy(D.pole).transformDirection(camera.matrixWorld).transformDirection(_pfInv);
+    (D.cine ? armD(_pfPole.copy(D.pole)) : _pfPole.copy(D.pole).transformDirection(camera.matrixWorld)).transformDirection(_pfInv);
     SPA.povArm(s, _pfH, _pfT, _pfPole, D.hrz, hs);
     SPA.povFingers(s, povFingerTargets(P, i, dt));                     // ④ 손가락
   }
