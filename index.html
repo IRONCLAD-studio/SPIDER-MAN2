@@ -3712,7 +3712,7 @@ void shopCell(float u, float y, float w, float gH, float SW, out float h, out ve
     glassC = mix(glassC * 0.82, skyG, fres * (pFam < 0.5 ? 1.0 : 0.8) * (0.6 + 0.4 * gAA));
     // 하이라이트 번쩍임 대신 넓은 면 반사: 창 한 장마다 위쪽이 살짝 더 밝은 그라데이션
     glassC += skyG * 0.06 * uvW.y * gAA;
-    col = mix(col, glassC, gls * 0.94 * uWinQ);
+    col = mix(col, glassC, gls * (pFam < 0.5 ? 0.78 : 0.94) * uWinQ);   // 통유리 커튼월(pFam 0)만 유리 불투명도 0.94 → 0.78 (다른 양식은 그대로)
     rough = mix(rough, mix(0.10, 0.24, smoothstep(0.03, 0.30, w)), gls * uWinQ); metal = mix(metal, 0.35, gls * uWinQ);
     gDN *= 1.0 - gls * uWinQ;
     float lightK = ground ? shopG : uWinGlow;
@@ -5652,6 +5652,8 @@ function nycBldProfile(cx, cz, h, btype) {
   else if (h >= 60) f = 0.28 + 0.40 * v;
   else if (h >= 25) f = 0.16 + 0.34 * v;
   else f = resid ? (0.10 + 0.34 * v) : (0.08 + 0.30 * v);
+  // 건물 간 점등률 편차 완화: 평균(0.42)쪽으로 65% 끌어당긴다 (K=1 이면 원래 편차, 0 이면 모든 건물 동일)
+  const LIT_MEAN = 0.42, LIT_K = 0.35; f = LIT_MEAN + (f - LIT_MEAN) * LIT_K;
   return [Math.max(0.02, Math.min(0.9, f)), Math.floor(w * 64) + 1];
 }
 // 층마다 점등 편차(층 단위로 켜졌다 꺼짐) — 셰이더의 pl 계산과 동일
