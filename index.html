@@ -5964,7 +5964,7 @@ function createRealScaleSpiderMan() {
         rig.list.push([k, o]);
       }
       // 보존된 재질/텍스처를 덮어쓰지 않는다.
-      if (o.isMesh) { o.frustumCulled = true; }
+      if (o.isMesh) { o.frustumCulled = false; }
     });
     if (gltf.animations && gltf.animations.length) {
       rig.mixer = new THREE.AnimationMixer(model);
@@ -6506,19 +6506,25 @@ function povArmsUpdate(P, dt, t, M, tN, windK, sw, onG, hsp, speed) {
         const Sx = sgn * 0.20, Sy = -0.25, Sz = 0.05;
         Ri.s.set(Sx, Sy, Sz);
         let hx = Sx + (T.Tg.x - T.S.x) * 0.81, hy = Sy + (T.Tg.y - T.S.y) * 0.81, hz = Sz + (T.Tg.z - T.S.z) * 0.81;   // 기존 자세(대기/활공/다이브/벽타기)는 그대로, 단위만 변환
-        const wc = isRope ? P.wRope : 0;
+        const wc = P.wRope;   // [GRIP] 웹스윙 중에는 양손 모두 줄을 쥔다
         if (wc > 0.001) {
-          // 웹슈터 팔: 앵커 방향과 '프레임 방향 Fc(위 약 25°·안쪽 약 25°)'을 섞어 팔을 뻗는다 → 손·웹슈터가 항상 화면 아래쪽 중앙~바깥에 크게 들어오고, 거기서 웹줄이 앵커로 뻗어 올라간다 (영화 컷 구도)
-          const fl = Math.hypot(0.38, 0.42, 0.82), fx = -sgn * 0.38 / fl, fy = 0.42 / fl, fz = -0.82 / fl;
-          const dd = dx * fx + dy * fy + dz * fz, kk = 0.9 * MU.clamp((dd + 0.2) / 0.4, 0, 1);   // 앵커가 시야 반대편이면 Fc 쪽으로 더 끌려옴
-          let ux = fx + dx * kk, uy = fy + dy * kk, uz = fz + dz * kk; const ul = Math.hypot(ux, uy, uz) || 1; ux /= ul; uy /= ul; uz /= ul;
-          const Lr = MU.clamp(len * 0.81, 0.16, 0.452);                                         // 발사 순간 쭉 뻗었다가(0.452=완전 신전) 팽팽한 줄을 쥔 길이로 정착
-          const e = MU.clamp(P.shotT / 0.20, 0, 1), arc = Math.sin(Math.PI * e);                // 발사 직후 0.2초: 아래-바깥에서 위로 휘둘러 올라가는 호
-          const cx = Sx + ux * Lr + ox * M * 0.81 + sgn * 0.05 * arc, cy = Sy + uy * Lr + oy * M * 0.81 - 0.06 * arc, cz = Sz + uz * Lr + oz * M * 0.81;
+          // 양손이 화면 아래 중앙에 모여 줄을 쥐는 영화 컷 구도. 앵커 방향으로는 아주 조금만 기울여 팔이 항상 시야 안에 머문다.
+          const e0 = MU.clamp(P.shotT / 0.20, 0, 1), arc = isRope ? Math.sin(Math.PI * e0) : 0;   // 발사 직후 0.2초: 웹슈터 손이 아래-바깥에서 위로 휘두르는 호
+          const punch = isRope ? 0.07 * Math.exp(-P.shotT * 9) : 0;                              // 발사 순간 앞으로 쭉 뻗는 펀치
+          let gx = sgn * (isRope ? 0.035 : 0.045) + dx * 0.05 + sgn * 0.05 * arc;
+          // 장력이 커질수록(스윙 최저점·고속) 팔이 화면 위쪽으로 당겨 올라가 윗부분만 살짝 보인다. 줄이 느슨하면 아래 중앙으로 복귀. 세기: POV_CAM.gripLift (0=끔)
+          const lk = MU.clamp((tN - 0.45) / 0.75, 0, 1), lift = lk * lk * (3 - 2 * lk) * (C.gripLift === undefined ? 1 : C.gripLift);
+          let gy = (isRope ? -0.13 : -0.17) + dy * 0.05 - 0.06 * arc + 0.42 * lift;
+          let gz = (isRope ? -0.36 : -0.34) - punch + 0.12 * lift;
+          gx += ox * M * 0.81; gy += oy * M * 0.81; gz += oz * M * 0.81;
+          let vx = gx - Sx, vy = gy - Sy, vz = gz - Sz; const vl = Math.hypot(vx, vy, vz) || 1, kr = Math.min(1, 0.452 / vl);   // 실제 팔 길이(0.452)를 넘지 않게
+          const cx = Sx + vx * kr, cy = Sy + vy * kr, cz = Sz + vz * kr;
           hx += (cx - hx) * wc; hy += (cy - hy) * wc; hz += (cz - hz) * wc;
-          Ri.palm.set(-sgn * 0.40, -0.30, 0.86).normalize();                                    // 손바닥 법선(웹슈터면)이 카메라 쪽(+아래·안쪽)을 향함 — 영화처럼 웹슈터가 눈에 보임
-          const sn = MU.clamp(P.shotT / 0.16, 0, 1); Ri.hsw = wc * sn * sn * (3 - 2 * sn);      // 발사 순간 손목이 비틀리며 손바닥이 카메라를 향하는 스냅
-          Ri.flex = (-0.30 + 0.55 * Math.exp(-P.shotT * 9)) * wc;                               // 발사 순간 손목 앞으로 탁 튕긴 뒤(+) 손등쪽으로 젖혀 정착(-0.30)
+          if (isRope) {
+            Ri.palm.set(-sgn * 0.40, -0.30, 0.86).normalize();                                    // 손바닥 법선(웹슈터면)이 카메라 쪽을 향함
+            const sn = MU.clamp(P.shotT / 0.16, 0, 1); Ri.hsw = wc * sn * sn * (3 - 2 * sn);      // 발사 순간 손목 스냅
+            Ri.flex = (-0.30 + 0.55 * Math.exp(-P.shotT * 9)) * wc;
+          }
         }
         Ri.tg.set(hx, hy, hz); Ri.cine = true;
       }
@@ -10009,7 +10015,7 @@ function bndSetSkinModel(id) {
     const qm = new THREE.Quaternion(); model.getWorldQuaternion(qm);
     model.traverse((o) => {
       if (o.isBone) { const k = (o.userData && o.userData.name) || o.name; rig.bones[k] = o; if (o.name !== k) rig.bones[o.name] = o; rig.base[k] = o.quaternion.clone(); const qb = new THREE.Quaternion(); o.getWorldQuaternion(qb); rig.restW[k] = qm.clone().invert().multiply(qb); rig.list.push([k, o]); }
-      if (o.isMesh) o.frustumCulled = true;
+      if (o.isMesh) o.frustumCulled = false;
     });
     spaBind(rig, model);
     if (typeof gfxMarkCasters === 'function') gfxMarkCasters();
