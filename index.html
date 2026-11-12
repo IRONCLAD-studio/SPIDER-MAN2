@@ -6254,6 +6254,14 @@ function povFilm(P, dt, t, sw, onG) {
     SPA.povFingers(s, povFingerTargets(P, i, dt));                     // ④ 손가락
   }
   spideyGroup.updateMatrixWorld(true);
+  // [FB] 실제 손목 위치 측정 (armQ 기준 프레임, 미터)
+  { const ia = _pfQ2.copy(P.armQ).invert();
+    for (let i = 0; i < 2; i++) {
+      const D = P.real[i], hb2 = rig.bones['DEF_HAND.' + (i ? 'R' : 'L')]; if (!D || !hb2) continue;
+      hb2.getWorldPosition(_pfP); _pfP.sub(camera.position).applyQuaternion(ia);
+      if (!D.hp) D.hp = new THREE.Vector3(); D.hp.copy(_pfP);
+    }
+    if (C.debug) { P.dbgT = (P.dbgT || 0) + dt; if (P.dbgT > 0.5) { P.dbgT = 0; const f = (v) => v ? v.toArray().map((n) => +n.toFixed(2)) : null; console.log('[POV dbg] wRope', +P.wRope.toFixed(2), 'side', P.side, 'L tg', f(P.real[0].tg), 'hp', f(P.real[0].hp), 'comp', f(P.real[0].comp), '| R tg', f(P.real[1].tg), 'hp', f(P.real[1].hp), 'comp', f(P.real[1].comp)); } } }
   // ⑤ 웹줄 시작점 = 실제 웹슈터 끝
   const rs = P.side ? 'R' : 'L', tip = rig.bones['DEF_WEBSHOOTERS_TWEAK_03.' + rs] || rig.bones['DEF_HAND.' + rs];
   if (tip) { tip.getWorldPosition(_pfP); camera.worldToLocal(_pfP); P.ropeLocal.copy(_pfP); }
@@ -6468,6 +6476,8 @@ function povArmsUpdate(P, dt, t, M, tN, windK, sw, onG, hsp, speed) {
   P.wGlide += ((glide.active && !sw ? 1 : 0) - P.wGlide) * (1 - Math.exp(-6 * dt));
   P.wDive += ((msm2IsDiving && !sw ? 1 : 0) - P.wDive) * (1 - Math.exp(-7 * dt));
   P.wWall += ((wallState.active && !sw ? 1 : 0) - P.wWall) * (1 - Math.exp(-10 * dt));
+  // [LIFT] 줄 장력 → 팔 들어올림(0~1). 장력 노이즈를 걸러 부드럽게: 올라갈 땐 빠르게(7/s), 내려올 땐 천천히(3.5/s)
+  { const lkT = MU.clamp((tN - 0.45) / 0.75, 0, 1), lgT = lkT * lkT * (3 - 2 * lkT); if (!isFinite(P.liftS)) P.liftS = 0; P.liftS += (lgT - P.liftS) * (1 - Math.exp(-(lgT > P.liftS ? 7 : 3.5) * dt)); }
   // 카메라 회전 지연(Rotational Lag): 시선을 빠르게 돌리면 팔이 한 박자 늦게 따라옴
   let dY = cameraYaw - P.prevYaw; while (dY > Math.PI) dY -= 2 * Math.PI; while (dY < -Math.PI) dY += 2 * Math.PI;
   const wy = MU.clamp(dY / dt, -10, 10), wp = MU.clamp((povPitch - P.prevPitch) / dt, -10, 10);
@@ -6514,7 +6524,8 @@ function povArmsUpdate(P, dt, t, M, tN, windK, sw, onG, hsp, speed) {
       if (C.cine) {
         // ── [CINE] 영화 프레이밍: 목표를 '실제 팔 길이(어깨~손목 0.455m)' 단위의 카메라 로컬 좌표로 변환 ──
         //  어깨 = 카메라 기준 (±0.20, -0.25, +0.05) → 올려다봐도 팔이 화면 아래에서 뻗어 나온다(몸이 서 있어 실제 어깨는 카메라 뒤로 빠지므로)
-        const Sx = sgn * 0.20, Sy = -0.25, Sz = 0.05;
+        const lf = P.liftS * (C.gripLift === undefined ? 1 : C.gripLift);   // 장력으로 팔이 올라갈 때 어깨도 같이 으쓱 올라간다(자연스러운 당김)
+        const Sx = sgn * 0.20, Sy = -0.25 + 0.10 * lf, Sz = -0.06;   // 어깨를 카메라 앞쪽으로(+0.05→-0.06): 팔 전체가 near 평면 안쪽에서 잘리지 않고 화면 아래에서 뻗어 나옴
         Ri.s.set(Sx, Sy, Sz);
         let hx = Sx + (T.Tg.x - T.S.x) * 0.81, hy = Sy + (T.Tg.y - T.S.y) * 0.81, hz = Sz + (T.Tg.z - T.S.z) * 0.81;   // 기존 자세(대기/활공/다이브/벽타기)는 그대로, 단위만 변환
         const wc = P.wRope;   // [GRIP] 웹스윙 중에는 양손 모두 줄을 쥔다
@@ -6522,11 +6533,12 @@ function povArmsUpdate(P, dt, t, M, tN, windK, sw, onG, hsp, speed) {
           // 양손이 화면 아래 중앙에 모여 줄을 쥐는 영화 컷 구도. 앵커 방향으로는 아주 조금만 기울여 팔이 항상 시야 안에 머문다.
           const e0 = MU.clamp(P.shotT / 0.20, 0, 1), arc = isRope ? Math.sin(Math.PI * e0) : 0;   // 발사 직후 0.2초: 웹슈터 손이 아래-바깥에서 위로 휘두르는 호
           const punch = isRope ? 0.07 * Math.exp(-P.shotT * 9) : 0;                              // 발사 순간 앞으로 쭉 뻗는 펀치
-          let gx = sgn * (isRope ? 0.035 : 0.045) + dx * 0.05 + sgn * 0.05 * arc;
+          let gx = sgn * (isRope ? 0.035 : 0.045) + dx * 0.05 + sgn * 0.05 * arc + sgn * 0.05 * lift;   // 올라갈수록 양손이 조금 벌어짐
           // 장력이 커질수록(스윙 최저점·고속) 팔이 화면 위쪽으로 당겨 올라가 윗부분만 살짝 보인다. 줄이 느슨하면 아래 중앙으로 복귀. 세기: POV_CAM.gripLift (0=끔)
-          const lk = MU.clamp((tN - 0.45) / 0.75, 0, 1), lift = lk * lk * (3 - 2 * lk) * (C.gripLift === undefined ? 1 : C.gripLift);
-          let gy = (isRope ? -0.13 : -0.17) + dy * 0.05 - 0.06 * arc + 0.42 * lift;
-          let gz = (isRope ? -0.36 : -0.34) - punch + 0.12 * lift;
+          const lift = lf;
+          Ri.pole.set(sgn * (0.7 + 0.5 * lift), -1 + 0.6 * lift, 0.35);   // 팔이 올라가면 팔꿈치는 아래→바깥쪽으로
+          let gy = (isRope ? -0.13 : -0.17) + dy * 0.05 - 0.06 * arc + 0.50 * lift;
+          let gz = (isRope ? -0.36 : -0.34) - punch + 0.10 * lift;
           gx += ox * M * 0.81; gy += oy * M * 0.81; gz += oz * M * 0.81;
           let vx = gx - Sx, vy = gy - Sy, vz = gz - Sz; const vl = Math.hypot(vx, vy, vz) || 1, kr = Math.min(1, 0.452 / vl);   // 실제 팔 길이(0.452)를 넘지 않게
           const cx = Sx + vx * kr, cy = Sy + vy * kr, cz = Sz + vz * kr;
@@ -6539,6 +6551,14 @@ function povArmsUpdate(P, dt, t, M, tN, windK, sw, onG, hsp, speed) {
         }
         if (!isFinite(hx + hy + hz)) { hx = Sx + sgn * -0.16; hy = -0.13; hz = -0.36; }   // [NaN 방어] 기본 쥐기 위치로 복귀
         if (!isFinite(Ri.hrz)) Ri.hrz = 0;
+        // [FB] IK가 실제로 만든 손목 위치(Ri.hp, povFilm 에서 측정)와 목표의 오차를 누적 보정 → 팔 각도/도달 오차가 있어도 손이 목표(화면 안)에 닿는다
+        if (!Ri.comp) { Ri.comp = new THREE.Vector3(); Ri.nom = new THREE.Vector3(); }
+        Ri.nom.set(hx, hy, hz);
+        if (wc > 0.6 && Ri.hp && isFinite(Ri.hp.x + Ri.hp.y + Ri.hp.z)) {
+          Ri.comp.x += (hx - Ri.hp.x) * 0.25; Ri.comp.y += (hy - Ri.hp.y) * 0.25; Ri.comp.z += (hz - Ri.hp.z) * 0.25;
+          Ri.comp.x = MU.clamp(Ri.comp.x, -0.2, 0.2); Ri.comp.y = MU.clamp(Ri.comp.y, -0.2, 0.2); Ri.comp.z = MU.clamp(Ri.comp.z, -0.2, 0.2);
+        } else Ri.comp.multiplyScalar(0.9);
+        hx += Ri.comp.x; hy += Ri.comp.y; hz += Ri.comp.z;
         Ri.tg.set(hx, hy, hz); Ri.cine = true;
       }
     }
@@ -10173,7 +10193,7 @@ function updateCameraAndHUD(dt) {
       camera.rotateZ(msm2CamRoll);
     }
   }
-  camera.near = (isBirdEyeMode || camera.position.y > 45) ? 2.0 : camera.position.y > 18 ? 0.6 : isPOVMode ? 0.12 : 0.3;
+  camera.near = (isBirdEyeMode || camera.position.y > 45) ? 2.0 : camera.position.y > 18 ? 0.6 : isPOVMode ? (POV_CAM.nearPlane || 0.07) : 0.3;   // 1인칭: 카메라 코앞의 팔이 near 평면에 잘려 안 보이던 문제 완화(0.12→0.07)
   camera.fov -= _povFovLast; camera.fov = SpeedCamera.stepFov(camera.fov, dt); _povFovLast = _povDone ? povFovOffset : 0; camera.fov += _povFovLast;   // 속도 비례 FOV (+ 1인칭 FOV 킥)
   { const shk = THREE.MathUtils.clamp((speed - 28) / 40, 0, 1) * (_povDone ? 0 : isPOVMode ? 0.6 : 1);   // 고속 카메라 셰이크 (1인칭 리그는 자체 풍압 흔들림 사용)
     if (shk > 0 && !isBirdEyeMode && !isSpectator) { const tt = performance.now() * 0.001;
