@@ -5120,6 +5120,62 @@ function nrNearRoad(x, z) {
   return best !== null ? { dx: best_l[best] - x, dz: best_l[best + 1] - z, d: bd, hw: best_l[best + 4] } : null;
 }
 let best_l = null;
+// [DETAIL] 지면 디테일: 주차 차량(택시 포함) · 가로수 · 보행자 · 노점/파라솔 · 간판 기둥  (도로 샘플 NR.roadGrid 기반, 건물 위/물 위는 제외)
+function nrDetail() {
+  const lite = !!window.__LITE, K = lite ? 0.4 : 1, so = nrU(NR_S.SOLID, 0.5);
+  const CARS = [[196, 32, 36], [34, 62, 142], [206, 206, 210], [22, 22, 26], [122, 126, 132], [236, 236, 238], [40, 108, 72], [150, 152, 158], [92, 60, 40]], TAXI = [244, 188, 18], UNDER = [16, 16, 18];
+  const SHIRT = [[200, 60, 50], [50, 90, 170], [230, 230, 225], [60, 60, 66], [220, 170, 50], [70, 140, 90], [150, 70, 150]], PANT = [[40, 44, 60], [70, 64, 56], [30, 30, 34], [60, 80, 110]], SKIN = [[236, 190, 160], [198, 146, 110], [140, 98, 70], [96, 64, 44]];
+  const SIGN = [[255, 70, 60], [70, 170, 255], [255, 205, 50], [80, 235, 130], [240, 240, 250], [255, 130, 40]], UMB = [[200, 40, 40], [40, 110, 200], [230, 190, 40], [50, 150, 90], [220, 220, 224]];
+  const cap = { car: 6000 * K, ped: 3500 * K, tree: 7000 * K, sign: 2200 * K, cart: 600 * K }, cnt = { car: 0, ped: 0, tree: 0, sign: 0, cart: 0 }, taken = new Set();
+  const blk = (x, z) => !nrLand(x, z) || nrOcc(x, z);
+  const free = (x, z, s, tag) => !taken.has(tag + Math.floor(x / s) + ',' + Math.floor(z / s)), take = (x, z, s, tag) => taken.add(tag + Math.floor(x / s) + ',' + Math.floor(z / s));
+  const junction = (x, z, tx, tz, hw) => {   // 교차로 근처(다른 방향 도로가 가까움)에는 배치하지 않음
+    const cx = Math.floor(x / 8), cz = Math.floor(z / 8);
+    for (let a = -2; a <= 2; a++) for (let b = -2; b <= 2; b++) { const l = NR.roadGrid.get(nrRgKey(cx + a, cz + b)); if (!l) continue;
+      for (let q = 0; q < l.length; q += 5) { const dx = l[q] - x, dz = l[q + 1] - z, r = hw + l[q + 4] + 6; if (dx * dx + dz * dz > r * r) continue; if (Math.abs(l[q + 2] * tz - l[q + 3] * tx) > 0.5) return true; } }
+    return false;
+  };
+  for (const l of NR.roadGrid.values()) for (let q = 0; q < l.length; q += 5) {
+    const x = l[q], z = l[q + 1], tx = l[q + 2], tz = l[q + 3], hw = l[q + 4]; if (hw < 2.8) continue;
+    const h = nrH(x * 1.713 + 3.1, z * 0.917 + 5.7), h2 = nrH(z * 2.11 + 9.3, x * 1.37 + 1.9), nx = -tz, nz = tx, sd = h2 < 0.5 ? -1 : 1, hr = nrH(x * 3.1 + 1.7, z * 2.3 + 4.1);
+    if (h < 0.30) {   // 주차 차량
+      if (cnt.car >= cap.car || hw < 3.2) continue;
+      const o = hw - 1.15, px = x + nx * sd * o, pz = z + nz * sd * o; if (blk(px, pz) || !free(px, pz, 6, 'c' + sd) || junction(x, z, tx, tz, hw)) continue;
+      take(px, pz, 6, 'c' + sd); cnt.car++;
+      const y = nmGroundAt(px, pz), C = nrChunk(nrKeyC(px, pz), px, pz), B = C.pr, rot = Math.atan2(tx, tz), body = hr < 0.28 ? TAXI : CARS[Math.floor(hr * 97) % CARS.length], cab = body.map(v => Math.round(v * 0.45));
+      nrBox(B, C, px, y + 0.2, pz, 1.66, 0.3, 3.7, rot, UNDER, so, 0.5);
+      nrBox(B, C, px, y + 0.52, pz, 1.78, 0.62, 4.4, rot, body, so, 0.5);
+      nrBox(B, C, px - tx * 0.2, y + 1.07, pz - tz * 0.2, 1.58, 0.5, 2.2, rot, cab, so, 0.5);
+    } else if (h < 0.40) {   // 가로수 (인도 쪽)
+      if (cnt.tree >= cap.tree || hw < 3.0 || h > 0.345) { if (!(h >= 0.345 && h < 0.40)) continue; }
+      if (h < 0.345) {
+        const t = hw + 1.7, px = x + nx * sd * t, pz = z + nz * sd * t; if (cnt.tree >= cap.tree || blk(px, pz) || !free(px, pz, 11, 't') || junction(x, z, tx, tz, hw)) continue;
+        take(px, pz, 11, 't'); cnt.tree++; const C = nrChunk(nrKeyC(px, pz), px, pz); C.tr.push([px, nmGroundAt(px, pz), pz, 0.75 + 0.35 * hr, hr * 6.283, nrH(pz, px)]);
+      } else {   // 보행자
+        if (cnt.ped >= cap.ped) continue; const t = hw + 1.3 + h2 * 0.8, px = x + nx * sd * t, pz = z + nz * sd * t; if (blk(px, pz) || !free(px, pz, 7, 'p')) continue;
+        take(px, pz, 7, 'p'); cnt.ped++;
+        const y = nmGroundAt(px, pz), C = nrChunk(nrKeyC(px, pz), px, pz), B = C.pr, rot = Math.atan2(tx, tz) + (hr < 0.5 ? 0 : Math.PI);
+        nrBox(B, C, px, y + 0.43, pz, 0.24, 0.86, 0.3, rot, PANT[Math.floor(hr * 53) % PANT.length], so, 0.5);
+        nrBox(B, C, px, y + 1.17, pz, 0.42, 0.62, 0.25, rot, SHIRT[Math.floor(hr * 71) % SHIRT.length], so, 0.5);
+        nrBox(B, C, px, y + 1.62, pz, 0.19, 0.22, 0.19, rot, SKIN[Math.floor(hr * 89) % SKIN.length], so, 0.5);
+      }
+    } else if (h < 0.42) {   // 간판 기둥(발광 패널)
+      if (cnt.sign >= cap.sign || hw < 3.0) continue; const t = hw + 0.6, px = x + nx * sd * t, pz = z + nz * sd * t; if (blk(px, pz) || !free(px, pz, 14, 's') || junction(x, z, tx, tz, hw)) continue;
+      take(px, pz, 14, 's'); cnt.sign++;
+      const y = nmGroundAt(px, pz), C = nrChunk(nrKeyC(px, pz), px, pz), B = C.pr, L = C.pl, ang = Math.atan2(tx, tz), col = SIGN[Math.floor(hr * 61) % SIGN.length];
+      nrBox(B, C, px, y + 1.7, pz, 0.08, 3.4, 0.08, 0, [120, 120, 126], so, 0.5);
+      nrLq(L, C, px, y + 3.15, pz, 1.1, 0.7, ang, col); nrLq(L, C, px, y + 3.15, pz, 1.1, 0.7, ang + Math.PI, col);
+    } else if (h < 0.432) {   // 노점 + 파라솔
+      if (cnt.cart >= cap.cart || hw < 3.2) continue; const t = hw + 1.5, px = x + nx * sd * t, pz = z + nz * sd * t; if (blk(px, pz) || !free(px, pz, 24, 'k') || junction(x, z, tx, tz, hw)) continue;
+      take(px, pz, 24, 'k'); cnt.cart++;
+      const y = nmGroundAt(px, pz), C = nrChunk(nrKeyC(px, pz), px, pz), B = C.pr, rot = Math.atan2(tx, tz);
+      nrBox(B, C, px, y + 0.6, pz, 0.9, 1.0, 1.6, rot, [160, 160, 166], so, 0.5);
+      nrBox(B, C, px, y + 1.5, pz, 0.07, 2.0, 0.07, 0, [110, 110, 116], so, 0.5);
+      nrBox(B, C, px, y + 2.55, pz, 1.9, 0.1, 1.9, rot, UMB[Math.floor(hr * 43) % UMB.length], so, 0.5);
+    }
+  }
+  NR.stats3 = cnt; console.log('[DETAIL]', JSON.stringify(cnt));
+}
 function nrProps(P) {
   const DG = [44, 46, 50], RED = [255, 40, 30], GRN = [40, 255, 90], AMB = [255, 170, 30], so = nrU(NR_S.SOLID, 0.5), sig = [];
   for (let i = 0; i < P.n; i++) {
@@ -5481,7 +5537,7 @@ float lcWave(vec2 w) { return lcF(w * 0.45 + vec2(uLcT * 0.06, uLcT * 0.045)) + 
     if ((q % 700) === 699) { nycLoadStatus('도로·보도·철도·담장 생성 중… ' + Math.round(q / order.length * 100) + '%', 0.94 + 0.03 * q / order.length); await nmYield(); }
   }
   NR.avoid = null;
-  nycLoadStatus('가로수·신호등·거리 시설물 배치 중…', 0.97); await nmYield(); nrProps(P);
+  nycLoadStatus('가로수·신호등·거리 시설물 배치 중…', 0.97); await nmYield(); nrProps(P); try { nrDetail(); } catch (e) { console.warn('detail', e); }
   const tg = nrTreeGeo(), tm = new THREE.Matrix4(), tq = new THREE.Quaternion(), tp = new THREE.Vector3(), ts = new THREE.Vector3(), tc = new THREE.Color(), up = new THREE.Vector3(0, 1, 0);
   let nT = 0, nV = 0;
   let _ci = 0; const _cn = NR.chunks.size;
@@ -6525,7 +6581,7 @@ function povArmsUpdate(P, dt, t, M, tN, windK, sw, onG, hsp, speed) {
     // 기본 포즈: 대기 → 활공(양팔 펼침) → 다이브(양팔 앞으로)
     let bx = sgn * 0.19 * ex, by = -0.29 + Math.sin(P.bobPhase * 2 + i * 1.7) * 0.012 * P.bobK + Math.sin(t * 1.3 + i) * 0.003, bz = -0.34;   // [v11] 대기 자세 손을 위로·앞으로: 팔뚝이 화면 아래에서 뻗어 나옴
     bx += (sgn * 0.42 * ex - bx) * P.wGlide; by += (-0.14 - by) * P.wGlide; bz += (-0.46 - bz) * P.wGlide;
-    bx += (sgn * 0.08 - bx) * P.wDive; by += (-0.10 - by) * P.wDive; bz += (-0.62 - bz) * P.wDive;
+    bx += (sgn * 0.24 - bx) * P.wDive; by += (-0.31 + Math.sin(t * 9 + i * 2.1) * 0.006 - by) * P.wDive; bz += (0.52 - bz) * P.wDive;   // [FIX] 다이빙: 팔을 앞이 아니라 몸 옆으로 뒤로 보냄
     if (P.wWall > 0.001) { const cyc = Math.sin((wallState.phase || 0) * 0.9 + i * Math.PI); bx += (sgn * 0.20 * ex - bx) * P.wWall; by += (0.02 + 0.17 * cyc - by) * P.wWall; bz += (-0.48 - bz) * P.wWall; }   // 벽타기: 양손 번갈아 벽 짚기
     // 웹 슈터 포즈: 앵커 방향으로 팔 뻗기 (발사 순간 쭉 뻗었다가 팽팽한 줄을 쥔 자세로 정착)
     let len = 0.46 + 0.03 * tN;
@@ -9727,6 +9783,7 @@ const SPA = (function () {
   function genAir(c, T, dt) {
     T.set(DEF);
     const vy = S.vyS, rise = sst(-1, 5, vy), fast = sst(14, 24, -vy), ss = S.legSide;
+    const fw = sst(-0.5, -9, vy), at = S.airT || 0;   // [ANIM] 낙하 가중치(0~1) / 시계
     const rel = S.rel;                                                      // 스윙 릴리즈 직후 1→0
     const pick = (a, b, cc) => lerp(lerp(b, a, rise), cc, fast);
     const legs = { // [x, 힙 기준 dy, dz] 상승 / 낙하 / 고속
@@ -9735,12 +9792,16 @@ const SPA = (function () {
     for (const s of [L, Rr]) {
       const sg = SPA.SIDE[s], leadA = (s === L) === (ss > 0), set = leadA ? legs.A : legs.B;
       const rx = pick(set[0][0], set[1][0], set[2][0]), ry = pick(set[0][1], set[1][1], set[2][1]), rz = pick(set[0][2], set[1][2], set[2][2]);
-      T[K['fX' + s]] = sg * rx; T[K['fY' + s]] = hipY + ry; T[K['fZ' + s]] = rz; T[K['fP' + s]] = 0.45 + 0.2 * fast; T[K['fYw' + s]] = 0; T[K['kPole' + s]] = 0;
+      const lp = at * (4 + 3 * fw) + (s === L ? 0 : PI), kk = M.sin(lp);   // [ANIM] 낙하 중 다리를 번갈아 차며 무릎을 굽힘
+      T[K['fX' + s]] = sg * (rx + 0.05 * fw); T[K['fY' + s]] = hipY + ry + 0.12 * M.max(0, kk) * fw; T[K['fZ' + s]] = rz + 0.17 * kk * fw; T[K['fP' + s]] = 0.45 + 0.2 * fast + 0.3 * fw * kk; T[K['fYw' + s]] = 0; T[K['kPole' + s]] = 0;
       T[K['aAbd' + s]] = pick(0.7, 1.05, 0.25) + 0.5 * rel; T[K['aFlex' + s]] = pick(0.5, 0.15, -0.55) + 0.7 * rel;
       T[K['eFlex' + s]] = pick(0.5, 0.25, 0.1) + 0.3 * rel; T[K['wr' + s]] = 0.0;
+      if (fw > 0.002) { const ph = at * (5 + 4 * fw) + (s === L ? 0 : PI * 0.9), fl = M.sin(ph), fl2 = M.sin(ph * 1.7 + 1.3);   // [ANIM] 낙하 중 팔을 벌리고 퍼덕임
+        T[K['aAbd' + s]] = lerp(T[K['aAbd' + s]], 1.05 + 0.18 * fl, fw); T[K['aFlex' + s]] = lerp(T[K['aFlex' + s]], -0.15 + 0.35 * fl2, fw); T[K['eFlex' + s]] = lerp(T[K['eFlex' + s]], 0.55 + 0.35 * (0.5 + 0.5 * fl), fw); }
       for (const fn of ['gA', 'gB', 'gC', 'gD']) T[K[fn + s]] = 0.3; T[K['gT' + s]] = 0.3;
     }
-    T[K.hy] = 0; T[K.sP] = 0.12 * (1 - fast) + 0.05; T[K.pP] = 0.04; T[K.nP] = -0.12 - 0.35 * fast;
+    T[K.hy] = 0; T[K.sP] = 0.12 * (1 - fast) + 0.05 + 0.08 * fw * M.sin(at * 2.6); T[K.pP] = 0.04; T[K.nP] = -0.12 - 0.35 * fast;
+    T[K.sY] = 0.2 * fw * M.sin(at * 2.1); T[K.sR] = 0.12 * fw * M.sin(at * 1.6 + 0.7); T[K.pR] = -0.5 * T[K.sR];   // [ANIM] 몸통 비틀기/기울기
     if (S.flipOn) { tuckPose(S.H); const w = M.sin(PI * clamp(S.flipT / 0.9, 0, 1)) * 0.95; for (let i = 0; i < NP; i++) T[i] += (S.H[i] - T[i]) * w; }
   }
 
@@ -9981,12 +10042,14 @@ HLP[K.aIkL] = HLP[K.aIkR] = 0.2;
       qT = qmul(qX(-PI / 2), qmul(qY(S.wallRy), qZ(0))); Ctr = [0, 0, 0]; rate = 10;
     }
     if (!qT) qT = basisQ(U, F);
+    if (mode === 'air' && !S.flipOn) { const fwB = sst(-0.5, -9, S.vyS || 0); if (fwB > 0.002) qT = qmul(qT, qmul(qZ(0.16 * fwB * M.sin(S.airT * 1.4)), qX(0.14 * fwB * M.sin(S.airT * 1.9 + 1)))); }   // [ANIM] 낙하 중 몸이 좌우/앞뒤로 흔들림
     if (!wall && S.land && S.land.kind === 'roll' && mode === 'ground') {                 // 구르기 착지: 앞으로 한 바퀴
       const k = s5(S.land.t / 0.62); qT = qmul(qT, qX(TAU * k)); Ctr = [0, 0.55, 0]; rate = 30;
     }
     if (S.flipOn && mode === 'air') { qT = qmul(qT, qX(TAU * s5(S.flipT / 0.9))); rate = 20; }
     S.tension += (tens - S.tension) * (1 - M.exp(-8 * dt));
     S.tuck += (clamp((c.vy - 2) / 10, 0, 1) - S.tuck) * (1 - M.exp(-3 * dt));
+    S.airT = (S.airT || 0) + dt;   // [ANIM] 낙하 모션용 시계
     // ---- 피벗 쿼터니언 평활 ----
     const kq = 1 - M.exp(-rate * dt), cur = S.qb, sq = qnlerp(Q(cur.x, cur.y, cur.z, cur.w), qT, S.init ? kq : 1);
     cur.x = sq.x; cur.y = sq.y; cur.z = sq.z; cur.w = sq.w; S.C = Ctr; S.push = push;
