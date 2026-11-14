@@ -2552,7 +2552,7 @@ canvas { display: block; width: 100%; height: 100%; }
     <header class="st-brand">
       <h1 class="st-title"><span>Manhattan 1:1</span><span>Web-Swing</span></h1>
       <p class="st-sub">실제 크기의 맨해튼 위를 거미줄로 날아다니세요.</p>
-      <span id="game-version" class="st-ver">v17 · 기기선택</span>
+      <span id="game-version" class="st-ver">v18 · 기기선택</span>
     </header>
 
     <nav class="st-menu" aria-label="메인 메뉴">
@@ -3692,7 +3692,7 @@ void shopCell(float u, float y, float w, float gH, float SW, out float h, out ve
     float underCorn = (!ground) ? (1.0 - smoothstep(pCorn, pCorn + 2.0 + 4.0 * colN, dTop)) * step(pCorn, dTop) * (0.35 + 0.65 * stK) : 0.0;
     float splash = 1.0 - smoothstep(0.0, 1.4 + 0.8 * stK, y);
     float streaks = smoothstep(0.45, 0.8, vn(vec2(u * 4.0 + seed * 11.0, y * 0.07))) * (0.5 + 0.5 * (1.0 - smoothstep(0.0, 60.0, dTop)));
-    float soot = clamp(dirt + 0.55 * belowSill * age + 0.5 * underCorn * age + 0.45 * splash * age + 0.25 * streaks * age, 0.0, 0.85);
+    float soot = clamp(dirt + 0.55 * belowSill * age + 0.5 * underCorn * age + 0.45 * splash * age + 0.25 * streaks * age * (pFam < 0.5 ? 0.0 : 1.0), 0.0, 0.85);
     col *= 1.0 - soot * 0.62 * wallM * (pFam < 0.5 ? 0.35 : 1.0);
     rough = mix(rough, 1.0, soot * 0.4 * wallM * step(0.5, pFam));
     float cor = 99.0; vec2 cuv = (vWP.xz - uCorC.xy) / uCorC.z + 0.5;
@@ -3707,7 +3707,7 @@ void shopCell(float u, float y, float w, float gH, float SW, out float h, out ve
     float rWin = h21(vec2(cellId.x, cellId.y) + seed * 13.0), fbs = h21(vec2(cellId.y, seed * 37.0 + 3.1));
     float lit = ground ? step(shp.z, 0.9) : step(rWin, clamp(lf * (0.35 + 1.3 * fbs), 0.0, 0.92));
     vec3 glassC = mix(gGC, gGC * 1.5 + vec3(0.02), uvW.y * 0.8) * (0.92 + 0.16 * rWin);
-    glassC *= 1.0 - 0.2 * streaks;
+    glassC *= 1.0 - 0.2 * streaks * (pFam < 0.5 ? 0.0 : 1.0);   // v18: 통유리는 세로 주름(streaks) 제거
     float blind = step(0.78, h21(cellId + seed * 17.0)) * (1.0 - lit) * (pFam < 0.5 ? 0.0 : 1.0);
     glassC = mix(glassC, vec3(0.42, 0.38, 0.30) * (0.55 + 0.4 * uvW.y), blind * 0.8);
     float cool = step(pFam < 0.5 ? 0.45 : 0.82, h21(cellId + 3.7));
@@ -13869,7 +13869,7 @@ if (uRceOn > 0.5) {
   float mB = gBrick * bs, mS = (1.0 - mB) * gStone * bs, mC = 1.0 - mB - mS; vec3 mw = vec3(mC, mS, mB);
   float eT = 0.0016;
   vec4 dT = texture2D(tRceD, rp), rT = texture2D(tRceR, rp), h0v = texture2D(tRceH, rp), hxv = texture2D(tRceH, rp + vec2(eT, 0.0)), hyv = texture2D(tRceH, rp + vec2(0.0, eT));
-  float k = dK * sM * uRceDetail;
+  float k = dK * sM * uRceDetail * (pFam < 0.5 ? 0.25 : 1.0);   // v18: 통유리 멀리언의 검은 얼룩 완화
   float dv = dot(dT.rgb, mw), rv = dot(rT.rgb, mw), h0 = dot(h0v.rgb, mw), hx = dot(hxv.rgb, mw), hy = dot(hyv.rgb, mw);
   float wetW = uRceWet * sM;
   col *= mix(1.0, clamp(dv * 2.0, 0.40, 1.7), k);
@@ -13882,7 +13882,7 @@ if (uRceOn > 0.5) {
   // --- 유리: 먼지/물때 + 비 오는 날 흘러내리는 물줄기 + 빗방울 비드 + 환경 반사
   vec4 dTr = texture2D(tRceD, rp + vec2(0.0, uRceTime * 0.012 * uRceWet));
   float dirt = mix(dT.a, max(dT.a, dTr.a), uRceWet);
-  float dKg = glM * dK;
+  float dKg = glM * dK * (pFam < 0.5 ? 0.2 : 1.0);   // v18: 통유리 얼룩/물때 텍스처 완화
   col = mix(col, col * 0.55 + vec3(0.03, 0.03, 0.025), dKg * dirt * 0.5);
   rough = mix(rough, 0.55, dKg * dirt * 0.8);
   float ghx = texture2D(tRceH, rp + vec2(eT, 0.0)).a, ghy = texture2D(tRceH, rp + vec2(0.0, eT)).a, gh0 = h0v.a;
