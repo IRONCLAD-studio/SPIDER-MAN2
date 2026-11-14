@@ -2552,7 +2552,7 @@ canvas { display: block; width: 100%; height: 100%; }
     <header class="st-brand">
       <h1 class="st-title"><span>Manhattan 1:1</span><span>Web-Swing</span></h1>
       <p class="st-sub">실제 크기의 맨해튼 위를 거미줄로 날아다니세요.</p>
-      <span id="game-version" class="st-ver">v15 · 기기선택</span>
+      <span id="game-version" class="st-ver">v16 · 기기선택</span>
     </header>
 
     <nav class="st-menu" aria-label="메인 메뉴">
@@ -3377,10 +3377,11 @@ void facParams(float sid, float seed, float H, float cat){
   if (sid > 7.5) { lmP(sid - 8.0); gStone = pFam > 0.5 ? 1.0 : 0.0; return; }
   if (sid < 0.5) {                                   // ① 현대 청록/은색/흑청색 통유리 커튼월
     pFam = 0.0; pBW = r2 < 0.34 ? 1.35 : (r2 < 0.67 ? 1.5 : 1.8); pFH = 3.8 + 0.5 * r3; pSill = r1 > 0.72 ? 0.03 : 0.8 + 0.3 * r3; pCorn = 0.45; pDepth = 0.05;
-    if (v < 0.38) { gGC = vec3(0.09, 0.32, 0.36); gWC = vec3(0.16, 0.27, 0.29); gAC = vec3(0.62, 0.66, 0.68); }
-    else if (v < 0.72) { gGC = vec3(0.40, 0.48, 0.54); gWC = vec3(0.54, 0.57, 0.60); gAC = vec3(0.80, 0.82, 0.84); }
-    else if (v < 0.86) { gGC = vec3(0.05, 0.09, 0.18); gWC = vec3(0.09, 0.11, 0.15); gAC = vec3(0.22, 0.24, 0.27); }
-    else { gGC = vec3(0.20, 0.30, 0.34); gWC = vec3(0.30, 0.33, 0.35); gAC = vec3(0.70, 0.72, 0.73); }
+    // v16: 사진 같은 통유리 — 파란 거울 유리 / 청록 / 거의 검은 남색 / 밝은 은청색, 멀리언은 은빛, 스팬드럴은 짙은 남색 유리
+    if (v < 0.50) { gGC = vec3(0.05, 0.17, 0.34); gWC = vec3(0.035, 0.09, 0.19); gAC = vec3(0.72, 0.82, 0.92); }
+    else if (v < 0.72) { gGC = vec3(0.06, 0.24, 0.32); gWC = vec3(0.04, 0.13, 0.18); gAC = vec3(0.70, 0.79, 0.82); }
+    else if (v < 0.88) { gGC = vec3(0.03, 0.07, 0.15); gWC = vec3(0.025, 0.05, 0.10); gAC = vec3(0.42, 0.48, 0.56); }
+    else { gGC = vec3(0.17, 0.33, 0.50); gWC = vec3(0.09, 0.17, 0.28); gAC = vec3(0.80, 0.86, 0.92); }
   } else if (sid < 1.5) {                            // ② 아르데코 석조/콘크리트
     pFam = 1.0; pBW = 2.7 + 0.8 * r2; pFH = 3.7 + 0.4 * r3; pWW = 0.95 + 0.35 * r4; pWH = 1.7 + 0.3 * r1; pSill = 0.85; pCorn = 0.9 + 0.8 * r3; gStone = 1.0;
     if (v < 0.30) gWC = vec3(0.68, 0.67, 0.63);
@@ -3437,8 +3438,8 @@ void fcell(float u, float y, float w, out float h, out vec4 m){
   h = 0.0; m = vec4(0.0);
   if (pFam < 0.5) {
     float dm = BW * 0.5 - abs(fx);
-    float mull = 1.0 - smoothstep(0.055 - w, 0.055 + w, dm);
-    float tr = (1.0 - smoothstep(0.09 - w, 0.09 + w, fy)) + smoothstep(FH - 0.11 - w, FH - 0.11 + w, fy);
+    float mull = 1.0 - smoothstep(0.038 - w, 0.038 + w, dm);
+    float tr = (1.0 - smoothstep(0.06 - w, 0.06 + w, fy)) + smoothstep(FH - 0.08 - w, FH - 0.08 + w, fy);
     float sp = pSill > 0.05 ? (1.0 - smoothstep(pSill - w, pSill + w, fy)) : 0.0;
     float fr = clamp(mull + tr, 0.0, 1.0), gls = (1.0 - fr) * (1.0 - sp);
     h = 0.11 * mull + 0.07 * tr * (1.0 - mull) + 0.02 * sp * (1.0 - fr) - 0.035 * gls;
@@ -3634,7 +3635,7 @@ void shopCell(float u, float y, float w, float gH, float SW, out float h, out ve
     vec3 emi = vec3(0.0);
     float shopG = max(uWinGlow, 0.30);
     if (!ground) {
-      if (pFam < 0.5) { col = mix(gWC, gWC * 0.8, 0.5 * fbm(vec2(u * 0.4, y * 0.3))); col = mix(col, gAC, fr); metal = mix(0.55, 0.7, fr); rough = 0.3; }
+      if (pFam < 0.5) { col = mix(gWC, gWC * 0.8, 0.5 * fbm(vec2(u * 0.4, y * 0.3))); col = mix(col, gAC * (0.95 + 0.1 * ton), fr); metal = mix(0.55, 0.8, fr); rough = mix(0.3, 0.22, fr); }
       else if (pFam < 1.5) { col = mix(col, gAC * (0.85 + 0.3 * ton), spd * 0.92); col = mix(col, vec3(0.12, 0.11, 0.10), fr); rough = mix(rough, 0.4, spd); metal = mix(metal, 0.5, spd); }
       else if (pFam < 2.5) { col = mix(col, gAC * (0.92 + 0.2 * ton), spd); col = mix(col, sashC, fr); }
       else { col = mix(col, wallC * 1.18 + 0.03, spd); col = mix(col, vec3(0.10, 0.10, 0.11), fr); }
@@ -3688,7 +3689,7 @@ void shopCell(float u, float y, float w, float gH, float SW, out float h, out ve
     float lit = ground ? step(shp.z, 0.9) : step(rWin, clamp(lf * (0.35 + 1.3 * fbs), 0.0, 0.92));
     vec3 glassC = mix(gGC, gGC * 1.5 + vec3(0.02), uvW.y * 0.8) * (0.92 + 0.16 * rWin);
     glassC *= 1.0 - 0.2 * streaks;
-    float blind = step(0.78, h21(cellId + seed * 17.0)) * (1.0 - lit) * (pFam < 0.5 ? 0.4 : 1.0);
+    float blind = step(0.78, h21(cellId + seed * 17.0)) * (1.0 - lit) * (pFam < 0.5 ? 0.0 : 1.0);
     glassC = mix(glassC, vec3(0.42, 0.38, 0.30) * (0.55 + 0.4 * uvW.y), blind * 0.8);
     float cool = step(pFam < 0.5 ? 0.45 : 0.82, h21(cellId + 3.7));
     vec3 lc = mix(vec3(1.0, 0.78, 0.46), vec3(0.78, 0.9, 1.0), cool); if (ground) lc = vec3(1.0, 0.82, 0.55) * 1.25;
@@ -3701,7 +3702,7 @@ void shopCell(float u, float y, float w, float gH, float SW, out float h, out ve
         float imK = (1.0 - smoothstep(30.0, 70.0, cdist)) * (1.0 - smoothstep(0.025, 0.07, w));
         imC = mix(imAvg, im_, imK);
       }
-      glassC = mix(glassC, imC, 0.8 * (1.0 - blind));
+      glassC = mix(glassC, imC, (pFam < 0.5 ? 0.12 : 0.8) * (1.0 - blind));
     }
     // 유리 전용 BRDF: 벽과 분리된 재질. 평평한 법선 + 프레넬 하늘 반사 + 실내 깊이. 멀수록 부드럽게 평균 반사로 수렴(깜빡임 방지).
     float ndv = clamp(abs(dot(-vv, wn)), 0.0, 1.0);
@@ -3709,10 +3710,25 @@ void shopCell(float u, float y, float w, float gH, float SW, out float h, out ve
     vec3 rfl_ = reflect(vv, wn);
     vec3 skyG = mix(fogColor * 0.85 + vec3(0.02, 0.03, 0.05), fogColor * 1.35 + vec3(0.05, 0.09, 0.15), smoothstep(-0.15, 0.7, rfl_.y));
     float gAA = 1.0 - smoothstep(0.05, 0.25, w);
+    if (pFam < 0.5) {
+      // v16: 통유리 커튼월 — 건물 전체에 걸쳐 이어지는 하늘/주변 타워 반사(세로로 늘어진 어두운 남색 띠) + 패널마다 아주 약간 다른 톤
+      float lumF = dot(fogColor, vec3(0.3333)), dayK = smoothstep(0.12, 0.45, lumF);
+      float rf1 = fbm(vec2(u * 0.045 + seed * 53.0, y * 0.011 + seed * 7.0)), rf2 = fbm(vec2(u * 0.16 + seed * 11.0, y * 0.028));
+      float tow = smoothstep(0.42, 0.70, rf1) * (0.55 + 0.45 * rf2);              // 다른 건물이 비친 어두운 영역
+      float hz = smoothstep(-0.25, 0.85, rfl_.y);                                     // 위쪽일수록 하늘색
+      vec3 skyB = mix(vec3(0.07, 0.19, 0.40), vec3(0.27, 0.52, 0.90), hz) * (0.55 + 0.75 * dayK);
+      vec3 skyCW = mix(skyG, skyB, 0.72 * dayK);
+      vec3 refl = mix(skyCW, vec3(0.025, 0.06, 0.13) + skyCW * 0.18, tow * 0.78);
+      refl *= 0.92 + 0.14 * rWin;
+      float fcw = clamp(0.62 + 0.38 * pow(1.0 - ndv, 2.0), 0.0, 1.0);
+      glassC = mix(glassC * 0.7, refl, fcw);
+      // 스팬드럴(층 띠)도 같은 반사를 어둡게 받는다
+      col = mix(col, refl * 0.42 + col * 0.5, spd * 0.9);
+    } else
     glassC = mix(glassC * 0.82, skyG, fres * (pFam < 0.5 ? 1.0 : 0.8) * (0.6 + 0.4 * gAA));
     // 하이라이트 번쩍임 대신 넓은 면 반사: 창 한 장마다 위쪽이 살짝 더 밝은 그라데이션
-    glassC += skyG * 0.06 * uvW.y * gAA;
-    col = mix(col, glassC, gls * (pFam < 0.5 ? 0.78 : 0.94) * uWinQ);   // 통유리 커튼월(pFam 0)만 유리 불투명도 0.94 → 0.78 (다른 양식은 그대로)
+    glassC += skyG * 0.06 * uvW.y * gAA * (pFam < 0.5 ? 0.0 : 1.0);
+    col = mix(col, glassC, gls * (pFam < 0.5 ? 0.97 : 0.94) * uWinQ);   // 통유리 커튼월(pFam 0)만 유리 불투명도 0.94 → 0.78 (다른 양식은 그대로)
     rough = mix(rough, mix(0.10, 0.24, smoothstep(0.03, 0.30, w)), gls * uWinQ); metal = mix(metal, 0.35, gls * uWinQ);
     gDN *= 1.0 - gls * uWinQ;
     float lightK = ground ? shopG : uWinGlow;
