@@ -9806,6 +9806,18 @@ const SPA = (function () {
   }
 
   // ---------- 웹스윙 ----------
+  // [INERT 7.4] 착지 사전 분기: t_impact = (vy + sqrt(vy^2 + 2g*h)) / g <= 0.22s 가 되면 착지 준비 자세(무릎 굽힘/팔 균형)로 미리 블렌딩
+  function preLand(c, T) {
+    const pos = c.posW, gy = c.groundY; if (!pos || gy === undefined || gy === null) return;
+    const h = pos[1] - gy, vy = c.vy; if (!(h > 0.05) || vy > -1.5) return;
+    const g = c.grav || 14.7, tImp = (vy + M.sqrt(vy * vy + 2 * g * h)) / g;
+    const w0 = clamp((0.22 - tImp) / 0.17, 0, 1), w = w0 * w0 * (3 - 2 * w0); if (w < 0.002) return;
+    const hipY = 0.852 + T[K.hy];
+    for (const s of [L, Rr]) { const sg = SPA.SIDE[s], lead = (s === L) === (S.legSide > 0);
+      T[K['fX' + s]] = lerp(T[K['fX' + s]], sg * 0.13, w); T[K['fY' + s]] = lerp(T[K['fY' + s]], hipY - 0.66, w); T[K['fZ' + s]] = lerp(T[K['fZ' + s]], lead ? 0.14 : 0.03, w); T[K['fP' + s]] = lerp(T[K['fP' + s]], 0.5, w);
+      T[K['aAbd' + s]] = lerp(T[K['aAbd' + s]], 0.75, w); T[K['aFlex' + s]] = lerp(T[K['aFlex' + s]], 0.3, w); T[K['eFlex' + s]] = lerp(T[K['eFlex' + s]], 0.45, w); }
+    T[K.sP] += 0.12 * w;
+  }
   function genSwing(c, T, dt, ms, kinfo) {
     T.set(DEF);
     const an = kinfo.anchorM, ch = kinfo.chestM, g01 = S.tension, sw = S.sw;
@@ -10064,7 +10076,7 @@ HLP[K.aIkL] = HLP[K.aIkR] = 0.2;
     } else if (mode === 'sling') { if (sl.aimW) { const a = toL(sl.aimW[0], sl.aimW[1], sl.aimW[2]); kinfo.aimM = dirToModel(cq, a); } genSling(c, T, kinfo); }
     else if (mode === 'glide') genGlide(c, T);
     else if (mode === 'dive' || (mode === 'air' && sl.fly)) genDive(c, T);
-    else if (mode === 'air') genAir(c, T, dt);
+    else if (mode === 'air') { genAir(c, T, dt); preLand(c, T); }
     else genGround(c, T, dt, ms, mode === 'wall');
     // 지상 착지 오버레이(슈퍼히어로/구르기)
     if (mode === 'ground' && S.land) {
@@ -10104,8 +10116,32 @@ HLP[K.aIkL] = HLP[K.aIkR] = 0.2;
     // ---- 관성화: 모드가 바뀌면 직전 출력과의 차이를 오프셋으로 두고 임계 감쇠로 소멸 ----
     const O = S.O, off = S.off, offV = S.offV;
     if (!S.init) { O.set(T); S.Oprev.set(T); S.sx.set(T); S.init = true; }
-    if (changed || S.hardT) { for (let i = 0; i < NP; i++) off[i] = S.Oprev[i] - T[i]; }
-    for (let i = 0; i < NP; i++) { const y = 2 * M.LN2 / HLP[i], eydt = M.exp(-y * dt), j1 = offV[i] + off[i] * y; off[i] = eydt * (off[i] + j1 * dt); offV[i] = eydt * (offV[i] - j1 * y * dt); O[i] = T[i] + off[i]; }
+    if (P.quintic === false) {   // (이전 방식: 지수 감쇠 스프링)
+      if (changed || S.hardT) { for (let i = 0; i < NP; i++) off[i] = S.Oprev[i] - T[i]; }
+      for (let i = 0; i < NP; i++) { const y = 2 * M.LN2 / HLP[i], eydt = M.exp(-y * dt), j1 = offV[i] + off[i] * y; off[i] = eydt * (off[i] + j1 * dt); offV[i] = eydt * (offV[i] - j1 * y * dt); O[i] = T[i] + off[i]; }
+    } else {   // [INERT 7.2/7.3] 5차 다항식 관성 블렌딩: x(Tef)=x'(Tef)=x''(Tef)=0, 오버슈트 없음
+      const Q = S.Q || (S.Q = { s: new Float32Array(NP), x0: new Float32Array(NP), v0: new Float32Array(NP), a0: new Float32Array(NP), Te: new Float32Array(NP), A: new Float32Array(NP), B: new Float32Array(NP), C: new Float32Array(NP), t: new Float32Array(NP).fill(1e9), Op2: new Float32Array(NP), tr: null, ok: false });
+      if (!Q.ok) { Q.Op2.set(T); Q.ok = true; }
+      if (!Q.tr) { Q.tr = new Float32Array(NP); for (const n of Object.keys(K)) { let tq = 0.22; if (/^(hx|hy|hz|pP|pY|pR|fX|fY|fZ|fP|fYw|fR|kPole)/.test(n)) tq = 0.42; else if (/^(aIk|haX|haY|haZ)/.test(n)) tq = 0.10; Q.tr[K[n]] = tq * (P.inertScale || 1); } }   // 팔(IK) 0.10 / 상체·머리 0.22 / 골반·다리 0.42
+      if (changed || S.hardT) {
+        const idt = 1 / dt;
+        for (let i = 0; i < NP; i++) {
+          const o0 = S.Oprev[i] - T[i], sg = o0 < 0 ? -1 : 1, m0 = M.abs(o0);
+          if (m0 < 1e-4) { Q.t[i] = 1e9; Q.Te[i] = 0; Q.s[i] = 0; continue; }
+          let v0 = sg * (S.Oprev[i] - Q.Op2[i]) * idt; v0 = M.min(0, M.max(v0, -m0 * 60));   // v0 <= 0 (하한: Tef 최소값이 걸려 오버슈트 나는 것 방지)
+          let Tef = Q.tr[i]; if (v0 < 0) Tef = M.min(Tef, -2.5 * m0 / v0); Tef = M.max(Tef, 0.04);   // 명세는 -5 x0/v0 이나, 초기 가속도 a0<=0 을 보장하는 -2.5 x0/v0 로 제한해 오버슈트 완전 제거(수치 검증)
+          const T2 = Tef * Tef, T3 = T2 * Tef, T4 = T3 * Tef, T5 = T4 * Tef, a0 = M.min(0, -(8 * v0 * Tef + 20 * m0) / T2);
+          Q.A[i] = -(a0 * T2 + 6 * v0 * Tef + 12 * m0) / (2 * T5); Q.B[i] = (3 * a0 * T2 + 16 * v0 * Tef + 30 * m0) / (2 * T4); Q.C[i] = -(3 * a0 * T2 + 12 * v0 * Tef + 20 * m0) / (2 * T3);
+          Q.s[i] = sg; Q.x0[i] = m0; Q.v0[i] = v0; Q.a0[i] = a0; Q.Te[i] = Tef; Q.t[i] = 0;
+        }
+      }
+      for (let i = 0; i < NP; i++) {
+        let x = 0; const t = Q.t[i];
+        if (t < Q.Te[i]) { const t2 = t * t, t3 = t2 * t; x = M.max(0, Q.A[i] * t3 * t2 + Q.B[i] * t3 * t + Q.C[i] * t3 + 0.5 * Q.a0[i] * t2 + Q.v0[i] * t + Q.x0[i]); Q.t[i] = t + dt; }
+        O[i] = T[i] + Q.s[i] * x;
+      }
+      Q.Op2.set(S.Oprev);
+    }
     S.Oprev.set(O);
     // ---- 2차 모션: 부드러운 후행(과도한 흔들림 방지를 위해 변위 상한) ----
     const Of = S.sx2 || (S.sx2 = new Float32Array(NP)); Of.set(O);
@@ -10215,7 +10251,8 @@ function updateSpiderManRig(dt) {
       gliding: !!(typeof glide !== 'undefined' && glide.active), swinging: !!isSwinging, twoHand: !!isSwinging && !msm2QuickWhip, diving: !!msm2IsDiving,
       wall: { active: !!wallState.active, phase: wallState.phase || 0, moving: player.vel.length() > 0.4 }, wallR: (typeof WALL_R === 'number' ? WALL_R : 0.46),
       sling: { active: !!slingState.charging, g: slingState.g || 0, aimW: [slingState.aim.x, slingState.aim.y, slingState.aim.z], fly: slingState.glideT > 0 && !isSwinging },
-      anchorW: [webAnchor.x, webAnchor.y, webAnchor.z], posW: [player.pos.x, player.pos.y, player.pos.z], velW: [player.vel.x, player.vel.y, player.vel.z]
+      anchorW: [webAnchor.x, webAnchor.y, webAnchor.z], posW: [player.pos.x, player.pos.y, player.pos.z], velW: [player.vel.x, player.vel.y, player.vel.z],
+      groundY: GROUND_Y, grav: (typeof PHYS !== 'undefined' && typeof AIR !== 'undefined') ? PHYS.gravity * AIR.fallGravityMul : 14.7   // [INERT] 착지 예측(t_impact)용
     }, window.__bndForce || null));
   } catch (e) { if (!window.__bndErrShown) { window.__bndErrShown = 1; console.error('[SPA] 모션 오류', e); } }
   spideyGroup.updateMatrixWorld(true);
