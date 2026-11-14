@@ -5816,17 +5816,18 @@ LDM.skyT = { value: new THREE.Vector3(0.35, 0.55, 0.90) }; LDM.skyH = { value: n
 //   (기존: 픽셀단위 노이즈·가는 선 셰이더 + GLB의 수만 개 슬래브/멀리언 조각 → 원거리에서 지글거림. 이제는 필터링되는 텍스처 + 단순 외피 지오메트리)
 //   GLB 는 재질명 facade / wall / crown 3종, UV = 미터 단위 (u=외곽선 따라, v=높이).
 const LDM_TEX = {
-  '432park':            { bay: 5.3,  fh: 5.1, nx: 4, ny: 4, frame: '#e6e3dc', glass: ['#0c1823', '#13222f', '#0a141d'], mx: 0.10, mt: 0.10, mb: 0.12, sp: 0.0,  spc: '#e6e3dc', mull: 0,    mullc: '#e6e3dc', lit: 0.30, wall: '#d9d6cf' },
-  '270park':            { bay: 3.0,  fh: 4.7, nx: 6, ny: 4, frame: '#5a3a1e', glass: ['#0e1b25', '#142431', '#0a141c'], mx: 0.04, mt: 0.03, mb: 0.0,  sp: 0.24, spc: '#2a2220', mull: 0.025, mullc: '#5a3a1e', lit: 0.35, wall: '#8a8478' },
-  'one57':              { bay: 1.35, fh: 4.2, nx: 12, ny: 6, frame: '#1c222a', glass: ['#061a40', '#0f3885', '#547aa8', '#29303d', '#04070b'], mx: 0.03, mt: 0.02, mb: 0.0, sp: 0.17, spc: '#1a1d22', mull: 0, mullc: '', lit: 0.30, wall: '#9a9488', klimt: true },
-  '111w57':             { bay: 1.5,  fh: 4.8, nx: 12, ny: 4, frame: '#7d5427', glass: ['#0a1b27', '#10283a', '#071420'], mx: 0.0,  mt: 0.02, mb: 0.0,  sp: 0.12, spc: '#7d5427', mull: 0.10, mullc: '#8a5f2e', lit: 0.32, wall: '#cdbd9d', finRight: true },
-  'central_park_tower': { bay: 1.5,  fh: 4.6, nx: 12, ny: 4, frame: '#9aa0a6', glass: ['#123049', '#1a3d59', '#0c2236'], mx: 0.05, mt: 0.02, mb: 0.0,  sp: 0.18, spc: '#262b31', mull: 0,    mullc: '', lit: 0.35, wall: '#a8a49c' }
+  '432park':            { fm: 0.0, fr: 0.8, bay: 5.3,  fh: 5.1, nx: 4, ny: 4, frame: '#e6e3dc', glass: ['#0c1823', '#13222f', '#0a141d'], mx: 0.10, mt: 0.10, mb: 0.12, sp: 0.0,  spc: '#e6e3dc', mull: 0,    mullc: '#e6e3dc', lit: 0.30, wall: '#d9d6cf' },
+  '270park':            { fm: 0.7, fr: 0.4, bay: 3.0,  fh: 4.7, nx: 6, ny: 4, frame: '#5a3a1e', glass: ['#0e1b25', '#142431', '#0a141c'], mx: 0.04, mt: 0.03, mb: 0.0,  sp: 0.24, spc: '#2a2220', mull: 0.025, mullc: '#5a3a1e', lit: 0.35, wall: '#8a8478' },
+  'one57':              { fm: 0.3, fr: 0.5, bay: 1.35, fh: 4.2, nx: 12, ny: 6, frame: '#1c222a', glass: ['#061a40', '#0f3885', '#547aa8', '#29303d', '#04070b'], mx: 0.03, mt: 0.02, mb: 0.0, sp: 0.17, spc: '#1a1d22', mull: 0, mullc: '', lit: 0.30, wall: '#9a9488', klimt: true },
+  '111w57':             { fm: 0.7, fr: 0.4, bay: 1.5,  fh: 4.8, nx: 12, ny: 4, frame: '#7d5427', glass: ['#0a1b27', '#10283a', '#071420'], mx: 0.0,  mt: 0.02, mb: 0.0,  sp: 0.12, spc: '#7d5427', mull: 0.10, mullc: '#8a5f2e', lit: 0.32, wall: '#cdbd9d', finRight: true },
+  'central_park_tower': { fm: 0.8, fr: 0.35, bay: 1.5,  fh: 4.6, nx: 12, ny: 4, frame: '#9aa0a6', glass: ['#123049', '#1a3d59', '#0c2236'], mx: 0.05, mt: 0.02, mb: 0.0,  sp: 0.18, spc: '#262b31', mull: 0,    mullc: '', lit: 0.35, wall: '#a8a49c' }
 };
 function ldmHash(x, y) { let h = (x * 374761393 + y * 668265263) | 0; h = (h ^ (h >> 13)) * 1274126177 | 0; return ((h ^ (h >> 16)) >>> 0) / 4294967295; }
 function ldmMakeTex(c, pxs) {
   const mk = () => { const e = document.createElement('canvas'); e.width = e.height = pxs; return e; };
-  const cv = mk(), ev = mk(), g = cv.getContext('2d'), ge = ev.getContext('2d'), cw = pxs / c.nx, ch = pxs / c.ny;
+  const cv = mk(), ev = mk(), rv = mk(), g = cv.getContext('2d'), ge = ev.getContext('2d'), gr_ = rv.getContext('2d'), cw = pxs / c.nx, ch = pxs / c.ny;
   ge.fillStyle = '#000'; ge.fillRect(0, 0, pxs, pxs);
+  gr_.fillStyle = 'rgb(0,' + Math.round(c.fr * 255) + ',' + Math.round(c.fm * 255) + ')'; gr_.fillRect(0, 0, pxs, pxs);   // 반사 마스크: G=거칠기, B=금속성 (프레임/스팬드럴)
   for (let iy = 0; iy < c.ny; iy++) for (let ix = 0; ix < c.nx; ix++) {
     const x = ix * cw, y = iy * ch, r = ldmHash(ix, iy);
     g.fillStyle = c.frame; g.fillRect(x, y, cw, ch);
@@ -5834,14 +5835,16 @@ function ldmMakeTex(c, pxs) {
     const wx = x + cw * c.mx, wy = y + ch * c.mt, ww = cw * (1 - 2 * c.mx) - (c.finRight ? cw * c.mull : 0), wh = ch * (1 - c.mt - c.mb - c.sp);
     const gc = c.klimt ? c.glass[Math.floor(ldmHash(ix * 7 + 3, Math.floor(iy / 2) + 11) * c.glass.length) % c.glass.length] : c.glass[Math.floor(r * c.glass.length) % c.glass.length];
     const gr = g.createLinearGradient(0, wy, 0, wy + wh); gr.addColorStop(0, gc); gr.addColorStop(1, '#000');
-    g.fillStyle = gc; g.fillRect(wx, wy, ww, wh);
-    g.globalAlpha = 0.35; g.fillStyle = gr; g.fillRect(wx, wy, ww, wh); g.globalAlpha = 1;       // 유리 위→아래 음영
+    const tn = ldmTint(gc, c.klimt ? 0.35 : 0.6); g.fillStyle = tn; g.fillRect(wx, wy, ww, wh);
+    gr_.fillStyle = 'rgb(0,10,235)'; gr_.fillRect(wx, wy, ww, wh);   // 유리: 매끈 + 거의 금속 → 하늘 큐브맵 반사
+    g.globalAlpha = 0.18; g.fillStyle = gr; g.fillRect(wx, wy, ww, wh); g.globalAlpha = 1;       // 유리 위→아래 음영
     if (c.mull > 0 && !c.finRight) { g.fillStyle = c.mullc; g.fillRect(x + cw / 2 - cw * c.mull / 2, y, cw * c.mull, ch); }
     if (c.finRight) { g.fillStyle = c.mullc; g.fillRect(x + cw - cw * c.mull, y, cw * c.mull, ch); }
     if (ldmHash(ix + 91, iy + 17) < c.lit) { ge.fillStyle = ldmHash(ix, iy + 5) < 0.3 ? '#cfe0ff' : '#ffb868'; ge.globalAlpha = 0.55 + 0.45 * ldmHash(ix + 3, iy + 9); ge.fillRect(wx, wy, ww, wh); ge.globalAlpha = 1; }
   }
-  return [cv, ev];
+  return [cv, ev, rv];
 }
+function ldmTint(hex, k) { const n = parseInt(hex.slice(1), 16), r = n >> 16, g = (n >> 8) & 255, b = n & 255, T = [150, 175, 205]; return 'rgb(' + Math.round(r + (T[0] - r) * k) + ',' + Math.round(g + (T[1] - g) * k) + ',' + Math.round(b + (T[2] - b) * k) + ')'; }
 function ldmWallTex(col) {
   const n = 512, cv = document.createElement('canvas'); cv.width = cv.height = n; const g = cv.getContext('2d'), bw = n / 4, bh = n / 4;
   g.fillStyle = col; g.fillRect(0, 0, n, n);
@@ -5867,12 +5870,13 @@ function ldmMat(src, t, gy, yaw) {
   const nm = src.name || 'wall', ck = t.key + ':' + nm; let m = LDM.mats.get(ck); if (m) return m;
   const c = LDM_TEX[t.key];
   if (nm === 'facade') {
-    const [cv, ev] = ldmMakeTex(c, 1024), rx = 1 / (c.nx * c.bay), ry = 1 / (c.ny * c.fh);
-    m = new THREE.MeshStandardMaterial({ map: ldmTexOf(cv, rx, ry, true), emissive: new THREE.Color(0xffffff), emissiveMap: ldmTexOf(ev, rx, ry, true), emissiveIntensity: 0, roughness: 0.42, metalness: 0.0, side: THREE.FrontSide });
+    const [cv, ev, rv] = ldmMakeTex(c, 1024), rx = 1 / (c.nx * c.bay), ry = 1 / (c.ny * c.fh);
+    m = new THREE.MeshStandardMaterial({ map: ldmTexOf(cv, rx, ry, true), emissive: new THREE.Color(0xffffff), emissiveMap: ldmTexOf(ev, rx, ry, true), emissiveIntensity: 0, roughnessMap: ldmTexOf(rv, rx, ry, false), metalnessMap: ldmTexOf(rv, rx, ry, false), roughness: 1, metalness: 1, envMapIntensity: 1.3, side: THREE.FrontSide });
     LDM.facadeMats.push(m);
   } else {
     m = new THREE.MeshStandardMaterial({ map: ldmTexOf(ldmWallTex(c.wall), 1 / 4.8, 1 / 2.4, true), color: nm === 'crown' ? new THREE.Color(0x555a60) : new THREE.Color(0xffffff), roughness: 0.85, metalness: 0.0, side: THREE.FrontSide });
   }
+  try { if (typeof GFX !== 'undefined' && GFX.envTex && GFX.quality !== 'low') m.envMap = GFX.envTex; } catch (e) {}
   LDM.mats.set(ck, m); return m;
 }
 async function ldmPreload() {
