@@ -2552,7 +2552,7 @@ canvas { display: block; width: 100%; height: 100%; }
     <header class="st-brand">
       <h1 class="st-title"><span>Manhattan 1:1</span><span>Web-Swing</span></h1>
       <p class="st-sub">실제 크기의 맨해튼 위를 거미줄로 날아다니세요.</p>
-      <span id="game-version" class="st-ver">v14 · 기기선택</span>
+      <span id="game-version" class="st-ver">v15 · 기기선택</span>
     </header>
 
     <nav class="st-menu" aria-label="메인 메뉴">
@@ -5126,7 +5126,10 @@ function nrDetail() {
   const CARS = [[196, 32, 36], [34, 62, 142], [206, 206, 210], [22, 22, 26], [122, 126, 132], [236, 236, 238], [40, 108, 72], [150, 152, 158], [92, 60, 40]], TAXI = [244, 188, 18], UNDER = [16, 16, 18];
   const SHIRT = [[200, 60, 50], [50, 90, 170], [230, 230, 225], [60, 60, 66], [220, 170, 50], [70, 140, 90], [150, 70, 150]], PANT = [[40, 44, 60], [70, 64, 56], [30, 30, 34], [60, 80, 110]], SKIN = [[236, 190, 160], [198, 146, 110], [140, 98, 70], [96, 64, 44]];
   const SIGN = [[255, 70, 60], [70, 170, 255], [255, 205, 50], [80, 235, 130], [240, 240, 250], [255, 130, 40]], UMB = [[200, 40, 40], [40, 110, 200], [230, 190, 40], [50, 150, 90], [220, 220, 224]];
-  const cap = { car: 6000 * K, ped: 3500 * K, tree: 7000 * K, sign: 2200 * K, cart: 600 * K }, cnt = { car: 0, ped: 0, tree: 0, sign: 0, cart: 0 }, taken = new Set();
+  const capC = { car: Math.ceil(70 * K), ped: Math.ceil(40 * K), tree: Math.ceil(80 * K), sign: Math.ceil(20 * K), cart: Math.ceil(6 * K) }, cnt = { car: 0, ped: 0, tree: 0, sign: 0, cart: 0 }, taken = new Set(), cc = new Map();
+  // [v15] 전역 상한 대신 청크(400m)당 상한: 큰 도로에서 상한이 소진돼 나머지 지역에 소품이 없던 문제 해결
+  const ccObj = (x, z) => { const k = nrKeyC(x, z); let o = cc.get(k); if (!o) cc.set(k, o = { car: 0, ped: 0, tree: 0, sign: 0, cart: 0 }); return o; };
+  const room = (t, x, z) => ccObj(x, z)[t] < capC[t], inc = (t, x, z) => { ccObj(x, z)[t]++; };
   const blk = (x, z) => !nrLand(x, z) || nrOcc(x, z);
   const free = (x, z, s, tag) => !taken.has(tag + Math.floor(x / s) + ',' + Math.floor(z / s)), take = (x, z, s, tag) => taken.add(tag + Math.floor(x / s) + ',' + Math.floor(z / s));
   const junction = (x, z, tx, tz, hw) => {   // 교차로 근처(다른 방향 도로가 가까움)에는 배치하지 않음
@@ -5139,35 +5142,35 @@ function nrDetail() {
     const x = l[q], z = l[q + 1], tx = l[q + 2], tz = l[q + 3], hw = l[q + 4]; if (hw < 2.8) continue;
     const h = nrH(x * 1.713 + 3.1, z * 0.917 + 5.7), h2 = nrH(z * 2.11 + 9.3, x * 1.37 + 1.9), nx = -tz, nz = tx, sd = h2 < 0.5 ? -1 : 1, hr = nrH(x * 3.1 + 1.7, z * 2.3 + 4.1);
     if (h < 0.30) {   // 주차 차량
-      if (cnt.car >= cap.car || hw < 3.2) continue;
+      if (!room('car', x, z) || hw < 3.2) continue;
       const o = hw - 1.15, px = x + nx * sd * o, pz = z + nz * sd * o; if (blk(px, pz) || !free(px, pz, 6, 'c' + sd) || junction(x, z, tx, tz, hw)) continue;
-      take(px, pz, 6, 'c' + sd); cnt.car++;
+      take(px, pz, 6, 'c' + sd); cnt.car++; inc('car', x, z);
       const y = nmGroundAt(px, pz), C = nrChunk(nrKeyC(px, pz), px, pz), B = C.pr, rot = Math.atan2(tx, tz), body = hr < 0.28 ? TAXI : CARS[Math.floor(hr * 97) % CARS.length], cab = body.map(v => Math.round(v * 0.45));
       nrBox(B, C, px, y + 0.2, pz, 1.66, 0.3, 3.7, rot, UNDER, so, 0.5);
       nrBox(B, C, px, y + 0.52, pz, 1.78, 0.62, 4.4, rot, body, so, 0.5);
       nrBox(B, C, px - tx * 0.2, y + 1.07, pz - tz * 0.2, 1.58, 0.5, 2.2, rot, cab, so, 0.5);
     } else if (h < 0.40) {   // 가로수 (인도 쪽)
-      if (cnt.tree >= cap.tree || hw < 3.0 || h > 0.345) { if (!(h >= 0.345 && h < 0.40)) continue; }
+      if (!room('tree', x, z) || hw < 3.0 || h > 0.345) { if (!(h >= 0.345 && h < 0.40)) continue; }
       if (h < 0.345) {
-        const t = hw + 1.7, px = x + nx * sd * t, pz = z + nz * sd * t; if (cnt.tree >= cap.tree || blk(px, pz) || !free(px, pz, 11, 't') || junction(x, z, tx, tz, hw)) continue;
-        take(px, pz, 11, 't'); cnt.tree++; const C = nrChunk(nrKeyC(px, pz), px, pz); C.tr.push([px, nmGroundAt(px, pz), pz, 0.75 + 0.35 * hr, hr * 6.283, nrH(pz, px)]);
+        const t = hw + 1.7, px = x + nx * sd * t, pz = z + nz * sd * t; if (!room('tree', x, z) || blk(px, pz) || !free(px, pz, 11, 't') || junction(x, z, tx, tz, hw)) continue;
+        take(px, pz, 11, 't'); cnt.tree++; inc('tree', x, z); const C = nrChunk(nrKeyC(px, pz), px, pz); C.tr.push([px, nmGroundAt(px, pz), pz, 0.75 + 0.35 * hr, hr * 6.283, nrH(pz, px)]);
       } else {   // 보행자
-        if (cnt.ped >= cap.ped) continue; const t = hw + 1.3 + h2 * 0.8, px = x + nx * sd * t, pz = z + nz * sd * t; if (blk(px, pz) || !free(px, pz, 7, 'p')) continue;
-        take(px, pz, 7, 'p'); cnt.ped++;
+        if (!room('ped', x, z)) continue; const t = hw + 1.3 + h2 * 0.8, px = x + nx * sd * t, pz = z + nz * sd * t; if (blk(px, pz) || !free(px, pz, 7, 'p')) continue;
+        take(px, pz, 7, 'p'); cnt.ped++; inc('ped', x, z);
         const y = nmGroundAt(px, pz), C = nrChunk(nrKeyC(px, pz), px, pz), B = C.pr, rot = Math.atan2(tx, tz) + (hr < 0.5 ? 0 : Math.PI);
         nrBox(B, C, px, y + 0.43, pz, 0.24, 0.86, 0.3, rot, PANT[Math.floor(hr * 53) % PANT.length], so, 0.5);
         nrBox(B, C, px, y + 1.17, pz, 0.42, 0.62, 0.25, rot, SHIRT[Math.floor(hr * 71) % SHIRT.length], so, 0.5);
         nrBox(B, C, px, y + 1.62, pz, 0.19, 0.22, 0.19, rot, SKIN[Math.floor(hr * 89) % SKIN.length], so, 0.5);
       }
     } else if (h < 0.42) {   // 간판 기둥(발광 패널)
-      if (cnt.sign >= cap.sign || hw < 3.0) continue; const t = hw + 0.6, px = x + nx * sd * t, pz = z + nz * sd * t; if (blk(px, pz) || !free(px, pz, 14, 's') || junction(x, z, tx, tz, hw)) continue;
-      take(px, pz, 14, 's'); cnt.sign++;
+      if (!room('sign', x, z) || hw < 3.0) continue; const t = hw + 0.6, px = x + nx * sd * t, pz = z + nz * sd * t; if (blk(px, pz) || !free(px, pz, 14, 's') || junction(x, z, tx, tz, hw)) continue;
+      take(px, pz, 14, 's'); cnt.sign++; inc('sign', x, z);
       const y = nmGroundAt(px, pz), C = nrChunk(nrKeyC(px, pz), px, pz), B = C.pr, L = C.pl, ang = Math.atan2(tx, tz), col = SIGN[Math.floor(hr * 61) % SIGN.length];
       nrBox(B, C, px, y + 1.7, pz, 0.08, 3.4, 0.08, 0, [120, 120, 126], so, 0.5);
       nrLq(L, C, px, y + 3.15, pz, 1.1, 0.7, ang, col); nrLq(L, C, px, y + 3.15, pz, 1.1, 0.7, ang + Math.PI, col);
     } else if (h < 0.432) {   // 노점 + 파라솔
-      if (cnt.cart >= cap.cart || hw < 3.2) continue; const t = hw + 1.5, px = x + nx * sd * t, pz = z + nz * sd * t; if (blk(px, pz) || !free(px, pz, 24, 'k') || junction(x, z, tx, tz, hw)) continue;
-      take(px, pz, 24, 'k'); cnt.cart++;
+      if (!room('cart', x, z) || hw < 3.2) continue; const t = hw + 1.5, px = x + nx * sd * t, pz = z + nz * sd * t; if (blk(px, pz) || !free(px, pz, 24, 'k') || junction(x, z, tx, tz, hw)) continue;
+      take(px, pz, 24, 'k'); cnt.cart++; inc('cart', x, z);
       const y = nmGroundAt(px, pz), C = nrChunk(nrKeyC(px, pz), px, pz), B = C.pr, rot = Math.atan2(tx, tz);
       nrBox(B, C, px, y + 0.6, pz, 0.9, 1.0, 1.6, rot, [160, 160, 166], so, 0.5);
       nrBox(B, C, px, y + 1.5, pz, 0.07, 2.0, 0.07, 0, [110, 110, 116], so, 0.5);
@@ -5543,15 +5546,18 @@ float lcWave(vec2 w) { return lcF(w * 0.45 + vec2(uLcT * 0.06, uLcT * 0.045)) + 
   let _ci = 0; const _cn = NR.chunks.size;
   for (const [key, C] of NR.chunks) {
     const mk = (B, mat, ro, nm, r) => { if (!B.v) return; const m = new THREE.Mesh(nrGeo(B), mat); m.name = nm; m.position.set(C.x0, 0, C.z0); m.renderOrder = ro; m.receiveShadow = true; scene.add(m); NM.cellMeshes.push({ mesh: m, x: C.x0 + NR_CH / 2, z: C.z0 + NR_CH / 2, r }); nV += B.v; B.p = B.u = B.c = B.n = B.i = null; };
-    const sq = (NR._seq = (NR._seq || 0) + 1) * 1e-5; mk(C.lc, NR.mLc, 1 + sq, 'NR_Land', 0); mk(C.g0, NR.mG[0], 2 + sq, 'NR_Road', 0); mk(C.g1, NR.mG[1], 2.1 + sq, 'NR_Road1', 0); mk(C.g2, NR.mG[2], 2.2 + sq, 'NR_Cross', 0); mk(C.g3, NR.mG[3], 2.3 + sq, 'NR_Walk', 0); mk(C.dk, NR.mDk, 3, 'NR_Deck', 0); mk(C.pr, NR.mPr, 0, 'NR_Props', 1300); mk(C.pl, NR.mPl, 0, 'NR_Lights', 1300);
+    const sq = (NR._seq = (NR._seq || 0) + 1) * 1e-5; mk(C.lc, NR.mLc, 1 + sq, 'NR_Land', 0); mk(C.g0, NR.mG[0], 2 + sq, 'NR_Road', 0); mk(C.g1, NR.mG[1], 2.1 + sq, 'NR_Road1', 0); mk(C.g2, NR.mG[2], 2.2 + sq, 'NR_Cross', 0); mk(C.g3, NR.mG[3], 2.3 + sq, 'NR_Walk', 0); mk(C.dk, NR.mDk, 3, 'NR_Deck', 0); mk(C.pr, NR.mPr, 0, 'NR_Props', 280); mk(C.pl, NR.mPl, 0, 'NR_Lights', 450);   // [v15] 1300→280/450m
     if (C.tr.length) {
-      const im = new THREE.InstancedMesh(tg, NR.mTr, C.tr.length); im.name = 'NR_Trees'; im.frustumCulled = false;
+      const im = new THREE.InstancedMesh(tg, NR.mTr, C.tr.length); im.name = 'NR_Trees';
+      { let y0 = 1e9, y1 = -1e9; for (const t of C.tr) { if (t[1] < y0) y0 = t[1]; if (t[1] > y1) y1 = t[1]; }   // [v15] 청크별 바운딩 스피어로 시야 밖 나무 컬링
+        const g2 = new THREE.BufferGeometry(); g2.attributes = tg.attributes; g2.index = tg.index; g2.boundingSphere = new THREE.Sphere(new THREE.Vector3(C.x0 + NR_CH / 2, (y0 + y1) / 2 + 4, C.z0 + NR_CH / 2), 290 + (y1 - y0) / 2 + 12); im.geometry = g2; }
+      im.frustumCulled = true;
       C.tr.forEach((t, i) => {
         tp.set(t[0], t[1], t[2]); tq.setFromAxisAngle(up, t[4]); ts.set(t[3], t[3] * (0.9 + 0.3 * t[5]), t[3]); tm.compose(tp, tq, ts); im.setMatrixAt(i, tm);
         const w = nrH(t[0] * 1.7, t[2] * 1.3); if (w < 0.55) tc.setRGB(0.85 + 0.5 * t[5], 0.9 + 0.2 * t[5], 0.8 + 0.2 * t[5]); else if (w < 0.85) tc.setRGB(2.3, 0.95, 0.4); else tc.setRGB(3.0, 0.7, 0.5);
         im.setColorAt(i, tc);
       });
-      im.instanceMatrix.needsUpdate = true; if (im.instanceColor) im.instanceColor.needsUpdate = true; scene.add(im); NM.cellMeshes.push({ mesh: im, x: C.x0 + NR_CH / 2, z: C.z0 + NR_CH / 2, r: 1500 }); nT += C.tr.length;
+      im.instanceMatrix.needsUpdate = true; if (im.instanceColor) im.instanceColor.needsUpdate = true; scene.add(im); NM.cellMeshes.push({ mesh: im, x: C.x0 + NR_CH / 2, z: C.z0 + NR_CH / 2, r: 650 }); nT += C.tr.length;
     }
     C.g0 = C.g1 = C.g2 = C.g3 = C.dk = C.lc = C.pr = C.pl = null; C.tr = null;
     if ((++_ci % 2) === 0) { nycLoadStatus('도로 메시 업로드 중… ' + Math.round(_ci / _cn * 100) + '%', 0.97 + 0.02 * _ci / _cn); await nmYield(); }
@@ -9009,8 +9015,8 @@ function gfxUpdate() {
     const avg = GFX.acc / GFX.frames; GFX.frames = 0; GFX.acc = 0;
     const maxPR = Math.min(window.devicePixelRatio || 1, GFX_MOBILE ? Math.min(GFX_PRESETS[GFX.quality].maxPR, 2.0) : GFX_PRESETS[GFX.quality].maxPR);
     const hiQ = GFX.quality === 'high' || GFX.quality === 'ultra' || GFX.quality === 'cinema' || GFX.quality === 'realistic';
-    const lockPR = GFX.lockPR || (hiQ && gfxEffDetail() >= 1200);
-    const floorPR = lockPR ? maxPR : Math.min(maxPR, GFX_MOBILE ? 1.0 : 1.5);
+    const lockPR = GFX.lockPR || (hiQ && gfxEffDetail() >= 1200 && !GFX_MOBILE);   // [v15] 폰은 FPS 낮으면 해상도 자동 하향
+    const floorPR = lockPR ? maxPR : Math.min(maxPR, GFX_MOBILE ? 1.25 : 1.5);
     if (lockPR) { if (Math.abs(GFX.pr - maxPR) > 0.01) gfxSetPR(maxPR); }
     else if (avg > 24 && GFX.pr > floorPR + 0.01) { gfxSetPR(Math.max(floorPR, GFX.pr - 0.1)); GFX.lockUp = 480; }
     else if (avg < 18.5 && GFX.lockUp === 0 && GFX.pr < maxPR - 0.01) { gfxSetPR(Math.min(maxPR, GFX.pr + 0.05)); GFX.lockUp = 240; }
