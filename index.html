@@ -3334,7 +3334,7 @@ function nmWallInit() {
   };
   NM_WALL.FC = `varying vec3 vWP; varying vec3 vLP; varying vec3 vCP; varying vec2 vAnc; flat varying vec2 vWn; varying vec4 vSty; varying vec4 vTop; varying vec2 vTr;
 uniform float uWinQ; uniform float uWinGlow; uniform float uWinFar; uniform float uTime;
-uniform sampler2D tCor; uniform vec3 uCorC;
+uniform sampler2D tCor; uniform vec3 uCorC; uniform samplerCube tRealEnv; uniform float uRealOn;
 float vfxWin = 0.0;
 // ---- 파사드 전역 상태 (색상 단계에서 계산 → 러프니스/노멀 단계에서 사용) ----
 vec3 gWN = vec3(0.0, 0.0, 1.0), gDN = vec3(0.0);
@@ -3390,20 +3390,9 @@ vec3 cwEnv(vec3 rv, float u, float y, float seed, float day, vec3 sun) {
   sky = mix(sky, vec3(1.0), cl * 0.92);
   float sd = max(dot(rv, sun), 0.0);
   sky += vec3(1.0, 0.95, 0.85) * (pow(sd, 20.0) * 0.5 + pow(sd, 300.0) * 3.0) * smoothstep(0.0, 0.2, sun.y);
-  float aa = atan(rv.z, rv.x) * 13.0 + u * 0.02 + seed * 40.0;
-  float ey = e + y * 0.0035;
-  float aw = fwidth(ey) * 1.5 + 0.012;
-  float tH = 0.30 + 0.85 * h21(vec2(floor(aa), seed * 7.0));
-  float tH2 = 0.12 + 0.50 * h21(vec2(floor(aa * 2.3) + 17.0, seed * 3.0));
-  float b = max(1.0 - smoothstep(tH - aw, tH + aw, ey), 0.7 * (1.0 - smoothstep(tH2 - aw, tH2 + aw, ey)));
-  vec2 gp = vec2(aa * 14.0, ey * 38.0);
-  vec2 gf = abs(fract(gp) - 0.5);
-  float gw = max(fwidth(gp.x), fwidth(gp.y));
-  float grid = smoothstep(0.40, 0.50, max(gf.x, gf.y)) * (1.0 - smoothstep(0.25, 0.7, gw));
-  vec3 bc = mix(vec3(0.03, 0.07, 0.15), vec3(0.20, 0.32, 0.52), smoothstep(0.0, 0.8, ey));
-  bc = mix(bc, bc * 0.45, grid);
-  vec3 c = mix(sky, bc, b);
-  return c * (0.10 + 0.90 * day);
+  vec3 c = sky * (0.10 + 0.90 * day);                 // 캡처 전 임시값: 하늘만 (가짜 건물 없음)
+  if (uRealOn > 0.5) c = textureCube(tRealEnv, rv).rgb;   // 실제 장면(진짜 건물·하늘·지형)을 플레이어 위치에서 캡처한 큐브맵
+  return c;
 }
 void facParams(float sid, float seed, float H, float cat){
   float r1 = fract(seed * 5.31), r2 = fract(seed * 13.7), r3 = fract(seed * 29.1), r4 = fract(seed * 47.3), v = fract(seed * 7.77);
@@ -3858,7 +3847,7 @@ function nmWallOBC(sh) {
   nmWallInit();
   const U = NM_WALL.U;
   sh.uniforms.uWinQ = U.uWinQ; sh.uniforms.uWinGlow = U.uWinGlow; sh.uniforms.uWinFar = U.uWinFar; sh.uniforms.uGlassR = U.uGlassR;
-  sh.uniforms.uTime = FC.time; sh.uniforms.tCor = FC.corTex; sh.uniforms.uCorC = FC.corC;
+  sh.uniforms.uTime = FC.time; sh.uniforms.tCor = FC.corTex; sh.uniforms.uCorC = FC.corC; sh.uniforms.tRealEnv = REALENV.tex; sh.uniforms.uRealOn = REALENV.on;
   sh.vertexShader = sh.vertexShader
     .replace('#include <common>', '#include <common>\nattribute vec4 aSty; attribute vec4 aTop; attribute vec2 aTr; attribute vec2 aBc; attribute vec2 aWn; flat varying vec2 vWn; varying vec3 vWP; varying vec3 vLP; varying vec3 vCP; varying vec2 vAnc; varying vec4 vSty; varying vec4 vTop; varying vec2 vTr;')
     .replace('#include <begin_vertex>', '#include <begin_vertex>\nvWP=(modelMatrix*vec4(position,1.0)).xyz; vLP=position; vCP=position+(modelMatrix[3].xyz-cameraPosition); vAnc=aBc*0.0125; vWn=aWn; vSty=aSty; vTop=aTop; vTr=aTr;');
@@ -4546,6 +4535,7 @@ function nmEsbRoof() {
 function nmFrame(dt) {
   if (NR.lcT) NR.lcT.value += dt;
   fcUpdate(dt);
+  if (NM.ready) realEnvTick();
   if (!NM.ready) return; NM.camT += dt; if (NM.camT < 0.3) return; NM.camT = 0;
   ldmTick();
   const cx = camera.position.x, cz = camera.position.z, R = (GFXU.chunk || 2300) + 250;
@@ -5900,6 +5890,27 @@ async function ldmPreload() {
       LDM.ok.push(t.key); for (const d of t.demolish) LDM.skip.add(d[0] + ':' + d[1]);
     } catch (e) { console.warn('[landmark] ' + t.key + ' 로드 실패 → 이 타워 철거/배치 생략', e); }
   }));
+}
+
+// ★ REAL REFLECTION — 창문 반사는 '실제 장면'을 비춘다. 플레이어 위치에서 6면 큐브맵을 실제 씬(건물·하늘·지형)으로 계속 갱신(3프레임에 1면).
+//   읽는 큐브(A)와 그리는 큐브(B)를 분리하고 6면이 다 그려지면 교체 → 같은 텍스처를 읽으며 쓰는 피드백 루프 없음.
+const REALENV = { tex: { value: null }, on: { value: 0 }, rt: [null, null], cc: null, w: 0, k: 0, f: 0, every: 3 };
+function realEnvTick() {
+  if (typeof renderer === 'undefined' || !renderer || !scene || !camera) return;
+  if (GFX && GFX.quality === 'low') { REALENV.on.value = 0; return; }
+  if ((++REALENV.f) % REALENV.every) return;
+  if (!REALENV.cc) {
+    const sz = (typeof GFX_MOBILE !== 'undefined' && GFX_MOBILE) ? 128 : 256;
+    for (let i = 0; i < 2; i++) REALENV.rt[i] = new THREE.WebGLCubeRenderTarget(sz, { generateMipmaps: false, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, type: THREE.UnsignedByteType });
+    REALENV.cc = new THREE.CubeCamera(0.5, 2400, REALENV.rt[1]); REALENV.w = 1;
+  }
+  const R = REALENV, cc = R.cc, k = R.k;
+  cc.position.copy(camera.position); cc.updateMatrixWorld(true);
+  const cam = cc.children[k], prev = renderer.getRenderTarget(), tm = renderer.toneMapping, sa = renderer.shadowMap.autoUpdate;
+  renderer.toneMapping = THREE.NoToneMapping; renderer.shadowMap.autoUpdate = false;
+  try { renderer.setRenderTarget(R.rt[R.w], k); renderer.clear(); renderer.render(scene, cam); } catch (e) { console.warn('[realenv]', e); }
+  renderer.setRenderTarget(prev); renderer.toneMapping = tm; renderer.shadowMap.autoUpdate = sa;
+  if (++R.k >= 6) { R.k = 0; R.tex.value = R.rt[R.w].texture; R.w = 1 - R.w; R.on.value = 1; }   // 6면 완료 → 방금 완성된 큐브를 읽기용으로 교체
 }
 function ldmTick() {
   const w = currentWeatherMode;
@@ -9165,7 +9176,7 @@ function gfxBuildEnv() {
   if (!GFX.sky) return;
   const key = currentWeatherMode + '|' + scene.fog.color.getHex(); if (key === GFX.envKey) return; GFX.envKey = key;
   const es = new THREE.Scene(), em = rgsEnvSkyMat(); em.depthTest = false; em.depthWrite = false; em.needsUpdate = true;
-  const m = new THREE.Mesh(new THREE.SphereGeometry(1000, 32, 16), em); m.frustumCulled = false; es.add(m); try { es.add(vfxSkylineMesh(currentWeatherMode)); } catch (e) {} if (RGS.on && RGS.gfx) es.add(RGS.gfx.makeEnvDome());
+  const m = new THREE.Mesh(new THREE.SphereGeometry(1000, 32, 16), em); m.frustumCulled = false; es.add(m); if (RGS.on && RGS.gfx) es.add(RGS.gfx.makeEnvDome());
   if (!GFX.envRT) GFX.envRT = new THREE.WebGLCubeRenderTarget(GFX_MOBILE ? 128 : 256, { generateMipmaps: true, minFilter: THREE.LinearMipmapLinearFilter, type: THREE.UnsignedByteType });
   const cc = new THREE.CubeCamera(1, 3000, GFX.envRT);
   const old = renderer.toneMapping; renderer.toneMapping = THREE.NoToneMapping;
