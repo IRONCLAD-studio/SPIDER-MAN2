@@ -2552,7 +2552,7 @@ canvas { display: block; width: 100%; height: 100%; }
     <header class="st-brand">
       <h1 class="st-title"><span>Manhattan 1:1</span><span>Web-Swing</span></h1>
       <p class="st-sub">실제 크기의 맨해튼 위를 거미줄로 날아다니세요.</p>
-      <span id="game-version" class="st-ver">v20 · 기기선택</span>
+      <span id="game-version" class="st-ver">v21 · 기기선택</span>
     </header>
 
     <nav class="st-menu" aria-label="메인 메뉴">
@@ -3325,18 +3325,88 @@ function nmHash(a, b) { const v = Math.sin(a * 12.9898 + b * 78.233) * 43758.545
 
 // ---------------- 렌더 메시 (건물) ----------------
 // ---- 외벽 셰이더 공용 부분 (일반 렌더 + G-buffer 렌더가 같은 창문 판정을 공유) ----
-// ===== v20: 실시간 레이마칭 창문 반사용 유니폼 (시간대/날씨/카메라와 연동) =====
+// ===== v21: 실제 씬 기반 창문 반사 (SSR 프리패스 + 실제 건물 높이맵 DataTexture) =====
 const WX = {
-  oc: 0, rain: 0, wet: 0, acc: 0, init: false, CELL: [56.0, 40.2],
+  oc: 0, rain: 0, wet: 0, acc: 0, init: false, bk: null, err: 0,
+  dummy: null, cap: { on: true, rt: null, w: 0, h: 0, scale: 0.5, v2: null },
   U: {
     uWxSun: { value: new THREE.Vector3(0, 1, 0) }, uWxSunCol: { value: new THREE.Vector3(1, 0.95, 0.85) },
     uWxTop: { value: new THREE.Vector3(0.12, 0.44, 0.79) }, uWxHor: { value: new THREE.Vector3(0.6, 0.8, 0.95) },
-    uWxGrid: { value: new THREE.Vector4() }, uWxRot: { value: new THREE.Vector2(0.8746, 0.4848) },   // 29°: 코드의 아베뉴 벡터(0.483,-0.875)와 같은 맨해튼 격자 방향
     uWxOc: { value: 0 }, uWxRain: { value: 0 }, uWxWet: { value: 0 }, uWxDay: { value: 1 }, uWxFogD: { value: 0.0003 },
-    uWxSteps: { value: 8 }, uWxGround: { value: 0 }, uWxCoat: { value: 0.045 }, uWxQ: { value: 1 }
+    uWxCoat: { value: 0.045 }, uWxQ: { value: 1 },
+    tWxColor: { value: null }, tWxDepth: { value: null }, tWxA: { value: null }, tWxB: { value: null },
+    uWxVP: { value: new THREE.Matrix4() }, uWxNF: { value: new THREE.Vector2(0.2, 2600) }, uWxBake: { value: new THREE.Vector4(0, 0, 1, 1) },
+    uWxInCap: { value: 0 }, uWxBakeOn: { value: 0 }, uWxSsrSteps: { value: 24 }, uWxHfSteps: { value: 44 }, uWxSsrGrow: { value: 1.2 }
   }
 };
+WX.dummy = new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1, THREE.RGBAFormat); WX.dummy.needsUpdate = true;
+WX.U.tWxColor.value = WX.dummy; WX.U.tWxDepth.value = WX.dummy; WX.U.tWxA.value = WX.dummy; WX.U.tWxB.value = WX.dummy;
+WX.cap.v2 = new THREE.Vector2();
 window.WX = WX;
+
+// --- (1) 실제 맨해튼 건물 데이터 Bake: 월드 로딩 때 만든 10m 래스터(R)를 RGBA8 DataTexture 2장으로 구움 ---
+//  tWxA: R,G = 지붕 고도(16bit, (h+50)*64) / B = 지면 고도((g+20)*2.5) / A = 분류(0 물, 40 육지, 90 도로, 255 건물)
+//  tWxB: RGB = 그 건물 실제 벽 정점색 평균
+function wxBakeInit(R) {
+  const W = R.W, H = R.H, N = W * H, T = NM.ter, G = NM_G;
+  const A = new Uint8Array(N * 4), B = new Uint8Array(N * 4), own = new Float32Array(N).fill(-1e9);
+  for (let j = 0; j < H; j++) for (let i = 0; i < W; i++) {
+    const q = j * W + i, o = q * 4, x = R.x0 + (i + 0.5) * G, z = R.z0 + (j + 0.5) * G;
+    const land = T && T.land ? T.land[q] : 1, g = land ? nmGroundAt(x, z) : 0;
+    let cls = land ? 40 : 0, roof = 0;
+    if (R.top[q] > -1e8) { cls = 255; roof = R.top[q]; } else if (R.occ[q]) { cls = 255; roof = g + 12; } else if (R.road && R.road[q] > 0 && land) cls = 90;
+    const rv = Math.max(0, Math.min(65535, Math.round((roof + 50) * 64)));
+    A[o] = rv >> 8; A[o + 1] = rv & 255; A[o + 2] = Math.max(0, Math.min(255, Math.round((g + 20) * 2.5))); A[o + 3] = cls;
+  }
+  WX.bk = { R, A, B, own, W, H };
+}
+// nmBuildPart 에서 건물마다 호출: 바운딩 안의 건물 셀에 그 건물의 실제 벽 색을 기록(가장 높은 건물 우선)
+function wxBkBld(R, mnx, mxx, mnz, mxz, topY, r, g, b) {
+  const K = WX.bk; if (!K || r < 0) return;
+  const G = NM_G, W = K.W, H = K.H;
+  const i0 = Math.max(0, Math.floor((mnx - R.x0) / G)), i1 = Math.min(W - 1, Math.floor((mxx - R.x0) / G)), j0 = Math.max(0, Math.floor((mnz - R.z0) / G)), j1 = Math.min(H - 1, Math.floor((mxz - R.z0) / G));
+  const cr = Math.round(r * 255), cg = Math.round(g * 255), cb = Math.round(b * 255);
+  for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+    const q = j * W + i; if (K.A[q * 4 + 3] !== 255 || topY < K.own[q]) continue;
+    K.own[q] = topY; K.B[q * 4] = cr; K.B[q * 4 + 1] = cg; K.B[q * 4 + 2] = cb; K.B[q * 4 + 3] = 255;
+  }
+}
+function wxBakeFinish() {
+  const K = WX.bk; if (!K) return;
+  const mk = d => { const t = new THREE.DataTexture(d, K.W, K.H, THREE.RGBAFormat, THREE.UnsignedByteType); t.minFilter = t.magFilter = THREE.NearestFilter; t.generateMipmaps = false; t.flipY = false; t.needsUpdate = true; return t; };
+  if (K.W > renderer.capabilities.maxTextureSize || K.H > renderer.capabilities.maxTextureSize) { console.warn('[wx] 높이맵이 텍스처 한도를 넘음 → 폴백 비활성'); return; }
+  WX.U.tWxA.value = mk(K.A); WX.U.tWxB.value = mk(K.B);
+  WX.U.uWxBake.value.set(K.R.x0, K.R.z0, K.W, K.H); WX.U.uWxBakeOn.value = 1;
+  console.log('[wx] 실제 건물 높이맵 Bake 완료', K.W + 'x' + K.H, (K.W * K.H * 8 / 1048576).toFixed(1) + 'MB');
+  WX.bk = null;   // CPU 쪽 배열 해제
+}
+
+// --- (2) SSR 입력: 메인 렌더 직전에 같은 카메라로 실제 씬을 반해상도 프리패스 렌더(컬러 HDR + 깊이 텍스처) ---
+function wxCapture() {
+  const C = WX.cap, U = WX.U;
+  if (!C.on || !NM.ready || typeof renderer === 'undefined' || !renderer || !scene || !camera) return;
+  if (typeof mapOpen !== 'undefined' && mapOpen) return;
+  try {
+    renderer.getDrawingBufferSize(C.v2);
+    const w = Math.max(64, Math.round(C.v2.x * C.scale)), h = Math.max(64, Math.round(C.v2.y * C.scale));
+    if (!C.rt || C.w !== w || C.h !== h) {
+      if (C.rt) { C.rt.depthTexture.dispose(); C.rt.dispose(); }
+      const hf = renderer.capabilities.isWebGL2 && renderer.extensions.get('EXT_color_buffer_float');
+      C.rt = new THREE.WebGLRenderTarget(w, h, { type: hf ? THREE.HalfFloatType : THREE.UnsignedByteType, format: THREE.RGBAFormat, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: true, stencilBuffer: false });
+      C.rt.depthTexture = new THREE.DepthTexture(w, h, THREE.UnsignedIntType); C.w = w; C.h = h;
+    }
+    camera.updateMatrixWorld();
+    const vr = U.uWxVP.value.copy(camera.matrixWorldInverse); vr.elements[12] = 0; vr.elements[13] = 0; vr.elements[14] = 0;   // 카메라 상대 좌표용(이동 성분 제거)
+    U.uWxVP.value.premultiply(camera.projectionMatrix); U.uWxNF.value.set(camera.near, camera.far);
+    const prevRT = renderer.getRenderTarget(), tm = renderer.toneMapping, sa = renderer.shadowMap.autoUpdate;
+    U.tWxColor.value = WX.dummy; U.tWxDepth.value = WX.dummy; U.uWxInCap.value = 1;   // 캡처 중에는 자기 자신을 읽지 않음(피드백 루프 방지)
+    renderer.toneMapping = THREE.NoToneMapping; renderer.shadowMap.autoUpdate = false;
+    try { renderer.setRenderTarget(C.rt); renderer.clear(); renderer.render(scene, camera); }
+    finally { renderer.setRenderTarget(prevRT); renderer.toneMapping = tm; renderer.shadowMap.autoUpdate = sa; U.uWxInCap.value = 0; }
+    U.tWxColor.value = C.rt.texture; U.tWxDepth.value = C.rt.depthTexture;
+  } catch (e) { if (!WX.err) { WX.err = 1; console.warn('[wx] capture', e); } C.on = false; U.tWxColor.value = WX.dummy; U.tWxDepth.value = WX.dummy; U.uWxSsrSteps.value = 0; }
+}
+
 function wxUpdate(dt) {
   try {
     const U = WX.U; dt = Math.min(0.25, dt || 0.016);
@@ -3358,12 +3428,9 @@ function wxUpdate(dt) {
         if (scene.fog) { U.uWxHor.value.set(scene.fog.color.r, scene.fog.color.g, scene.fog.color.b); U.uWxFogD.value = scene.fog.density || 0.0003; }
       }
       const mob = typeof GFX_MOBILE !== 'undefined' && GFX_MOBILE, low = typeof GFX !== 'undefined' && GFX && GFX.quality === 'low';
-      U.uWxSteps.value = low ? 4 : (mob ? 6 : 8); U.uWxQ.value = mob ? 0.75 : 1.0;
-    }
-    if (typeof camera !== 'undefined' && camera) {   // 카메라가 속한 격자 필지/오프셋(작은 수로 정밀도 확보)
-      const c = U.uWxRot.value.x, s = U.uWxRot.value.y, cx = camera.position.x, cz = camera.position.z;
-      const gx = c * cx + s * cz, gz = -s * cx + c * cz, ix = Math.floor(gx / WX.CELL[0]), iz = Math.floor(gz / WX.CELL[1]);
-      U.uWxGrid.value.set(ix, iz, gx - ix * WX.CELL[0], gz - iz * WX.CELL[1]);
+      WX.cap.on = !low && !WX.err; WX.cap.scale = mob ? 0.4 : 0.5;
+      U.uWxSsrSteps.value = (low || !WX.cap.on) ? 0 : (mob ? 14 : 24); U.uWxSsrGrow.value = mob ? 1.3 : 1.2;
+      U.uWxHfSteps.value = low ? 24 : (mob ? 28 : 44); U.uWxQ.value = mob ? 0.75 : 1.0;
     }
   } catch (e) { if (!WX.err) { WX.err = 1; console.warn('[wx]', e); } }
 }
@@ -3424,46 +3491,30 @@ void lmP(float id){
 
 // ---- 일반 건물: 시드로 양식(3종)과 변형을 결정 ----
 // =====================================================================================
-// v20: 실시간 월드공간 레이마칭 도시 반사 (큐브맵/envMap 없음)
-//  · 맨해튼 블록 격자(회전 29°, 56m x 40.2m 필지)를 DDA 로 4~8 스텝 레이마칭 → 맞은편 빌딩 실루엣/켜진 창/도로/택시/가로등/하늘/구름
-//  · 창 칸마다 다른 법선 일렁임, 비 올 때 흘러내리는 물줄기·물방울 노멀, Ray-Box 3D 실내, Schlick 프레넬(IOR 1.52)
+// v21: 실제 씬 기반 창문 반사 (큐브맵/절차적 가짜 건물 없음)
+//  1) SSR  : 프리패스로 렌더한 "실제 게임 화면"(tWxColor)·깊이(tWxDepth)를 반사 벡터로 추적 → 실제 건물 외벽/도로/하늘 픽셀이 그대로 비침
+//  2) 폴백  : 광선이 화면 밖으로 나가거나 못 찾으면, 월드 로딩 시 한 번 구운 "실제 맨해튼 건물 높이/색 DataTexture"(tWxA/tWxB)를 2D DDA 로 추적
+//  3) 유지  : 판별 법선 일렁임(Wobble), 비 물줄기, Ray-Box 3D 실내, Schlick 프레넬(IOR 1.52)
 // =====================================================================================
 uniform vec3 uWxSun; uniform vec3 uWxSunCol; uniform vec3 uWxTop; uniform vec3 uWxHor;
-uniform vec4 uWxGrid; uniform vec2 uWxRot;
 uniform float uWxOc; uniform float uWxRain; uniform float uWxWet; uniform float uWxDay; uniform float uWxFogD;
-uniform float uWxSteps; uniform float uWxGround; uniform float uWxCoat; uniform float uWxQ;
-#define WX_CELL vec2(56.0, 40.2)
+uniform float uWxCoat; uniform float uWxQ;
+uniform sampler2D tWxColor; uniform sampler2D tWxDepth; uniform sampler2D tWxA; uniform sampler2D tWxB;
+uniform mat4 uWxVP;          // 카메라 상대 좌표 → 클립 (프로젝션 * 뷰 회전)
+uniform vec2 uWxNF;          // near, far
+uniform vec4 uWxBake;        // 높이맵 원점 x0, z0, 폭 W, 높이 H (10m 격자)
+uniform float uWxInCap; uniform float uWxBakeOn; uniform float uWxSsrSteps; uniform float uWxHfSteps; uniform float uWxSsrGrow;
 
-// 월드 방향 → 격자 좌표계(회전)
-vec3 wxToG(vec3 v) { return vec3(uWxRot.x * v.x + uWxRot.y * v.z, v.y, -uWxRot.y * v.x + uWxRot.x * v.z); }
+float wxLin(float d) { float n = uWxNF.x, f = uWxNF.y; return 2.0 * n * f / (f + n - (2.0 * d - 1.0) * (f - n)); }
+float wxIGN(vec2 p) { return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715)))); }
 
-// ---------------- 하늘 / 태양(달) / 절차적 구름 ----------------
-vec3 wxSky(vec3 rd, vec3 sg) {
+// ---------------- 하늘(화면 밖 폴백) ----------------
+vec3 wxSky(vec3 rd) {
   float e = max(rd.y, 0.0);
   vec3 col = mix(uWxHor, uWxTop, pow(smoothstep(0.0, 0.9, e), 0.55));
   col *= 0.85 + 0.8 * uWxDay;
-  float sd = max(dot(rd, sg), 0.0);
-  col += uWxSunCol * (pow(sd, 18.0) * 0.12 + pow(sd, 900.0) * 5.0) * (1.0 - uWxOc) * smoothstep(-0.05, 0.10, sg.y);
-  return col;
-}
-// 2겹 구름층(고도 1.5km / 3.6km). 레이가 구름 평면과 만나는 점을 샘플 → 카메라가 움직이면 층마다 시차가 다르게 흘러감. 태양쪽 샘플 차이로 입체 음영.
-vec3 wxClouds(vec3 roA, vec3 rd, vec3 sg, vec3 sky) {
-  if (rd.y < 0.03) return sky;
-  vec3 col = sky;
-  float thr = mix(0.50, 0.14, uWxOc);
-  vec3 amb = mix(uWxHor, vec3(0.62, 0.68, 0.76), 0.55) * (0.30 + 0.85 * uWxDay) * (1.0 - 0.35 * uWxOc);
-  for (int L = 0; L < 2; L++) {
-    float hg = L == 0 ? 1500.0 : 3600.0;
-    float sc = L == 0 ? 0.00060 : 0.00026;
-    float t = (hg - roA.y) / rd.y;
-    vec2 p = (roA.xz + rd.xz * t) * sc + vec2(uTime * (L == 0 ? 0.0065 : 0.0030), 5.3 * float(L));
-    float d = fbm(p);
-    float dens = smoothstep(thr, thr + 0.20, d) * smoothstep(0.03, 0.20, rd.y);
-    float dl = fbm(p + sg.xz * 0.045);
-    float lt = clamp(0.55 + (d - dl) * 5.0, 0.0, 1.0) * (1.0 - 0.8 * uWxOc);
-    vec3 cc = amb * (0.75 + 0.5 * lt) + uWxSunCol * 0.35 * lt * smoothstep(-0.1, 0.2, sg.y);
-    col = mix(col, cc, dens * (L == 0 ? 0.9 : 0.6));
-  }
+  float sd = max(dot(rd, uWxSun), 0.0);
+  col += uWxSunCol * (pow(sd, 18.0) * 0.12 + pow(sd, 900.0) * 5.0) * (1.0 - uWxOc) * smoothstep(-0.05, 0.10, uWxSun.y);
   return col;
 }
 vec3 wxFog(vec3 c, float t) {
@@ -3471,213 +3522,138 @@ vec3 wxFog(vec3 c, float t) {
   float k = 1.0 - exp(-a * a - t * 0.00045 * (1.0 + 2.0 * uWxOc));
   return mix(c, uWxHor * (0.9 + 0.9 * uWxDay), clamp(k, 0.0, 1.0));
 }
-
-// ---------------- 원거리/저비용 반사 (큐브맵 없음): 하늘 + 구름 1겹 + 스카이라인 실루엣 ----------------
+// 원거리/저비용 반사: 하늘 + 구름 1겹 (건물은 없음 — 건물은 SSR/높이맵이 담당)
 vec3 cwEnv(vec3 rv, float u, float y, float seed, float day, vec3 sun) {
-  vec3 sg = wxToG(uWxSun), rg = wxToG(rv);
-  vec3 col = wxSky(rg, sg);
-  if (rg.y > 0.03) {
+  vec3 col = wxSky(rv);
+  if (rv.y > 0.03) {
     float thr = mix(0.50, 0.14, uWxOc);
-    float d = fbm(rg.xz / (rg.y + 0.25) * 0.96 + vec2(uTime * 0.01, 0.0));
-    float dens = smoothstep(thr, thr + 0.20, d) * smoothstep(0.03, 0.25, rg.y);
+    float d = fbm(rv.xz / (rv.y + 0.25) * 0.96 + vec2(uTime * 0.01, 0.0));
+    float dens = smoothstep(thr, thr + 0.20, d) * smoothstep(0.03, 0.25, rv.y);
     vec3 cc = mix(uWxHor, vec3(0.7, 0.75, 0.82), 0.6) * (0.35 + 0.9 * uWxDay) * (1.0 - 0.3 * uWxOc) + uWxSunCol * 0.2 * (1.0 - uWxOc);
     col = mix(col, cc, dens * 0.85);
   }
-  vec2 dir = normalize(rg.xz + vec2(1e-4));
-  float sk = vn(dir * 5.0) * 0.6 + vn(dir * 17.0) * 0.4;
-  float ha = 0.03 + 0.20 * sk * sk;
-  if (rg.y < -0.02) {
-    float sp = step(0.97, h21(floor(rg.xz / (0.1 - rg.y) * 40.0))) * (1.0 - uWxDay) * 1.5;
-    col = vec3(0.05, 0.05, 0.06) * (0.3 + 0.7 * uWxDay) + vec3(1.0, 0.72, 0.38) * sp;
-  } else if (rg.y < ha) {
-    float win = step(0.86, h21(floor(vec2(dir.x * 70.0 + dir.y * 43.0, rg.y * 300.0)))) * uWinGlow * 0.6;
-    vec3 bld = mix(uWxHor, vec3(0.05, 0.06, 0.08) * (0.4 + 0.6 * uWxDay), 0.75) + vec3(1.0, 0.78, 0.46) * win;
-    col = mix(bld, col, smoothstep(ha - 0.006, ha, rg.y));
-  }
+  if (rv.y < -0.02) col = mix(col, vec3(0.05, 0.05, 0.06) * (0.3 + 0.7 * uWxDay), smoothstep(-0.02, -0.15, rv.y));
   return min(col, vec3(8.0));
 }
 
-// ---------------- 맨해튼 격자 도시 ----------------
-// 필지(cell) 한 칸 = 56m x 40.2m. 블록 = 5 x 2 필지(280m x 80m). 필지의 가장자리 여백이 가로(18m)/애비뉴(28m)
-vec4 wxMargins(vec2 ci) {
-  float ixm = mod(ci.x, 5.0), izm = mod(ci.y, 2.0);
-  return vec4(ixm < 0.5 ? 14.0 : 0.5, ixm > 3.5 ? 14.0 : 0.5, izm < 0.5 ? 9.0 : 0.5, izm > 0.5 ? 9.0 : 0.5);
-}
-bool wxBox(vec3 ro, vec3 inv, vec3 rd, vec3 bmin, vec3 bmax, out float tn, out vec3 nrm) {
-  vec3 t0 = (bmin - ro) * inv, t1 = (bmax - ro) * inv;
-  vec3 tmn = min(t0, t1), tmx = max(t0, t1);
-  tn = max(max(tmn.x, tmn.y), tmn.z);
-  float tf = min(min(tmx.x, tmx.y), tmx.z);
-  nrm = vec3(0.0, 1.0, 0.0);
-  if (tn > tf || tn <= 0.0) return false;   // 시작점이 박스 안(= 자기 자신 건물)이면 무시
-  nrm = -sign(rd) * step(vec3(tn - 1e-4), tmn);
-  nrm = normalize(nrm + vec3(1e-6));
-  return true;
-}
-bool wxBuilding(vec3 ro, vec3 inv, vec3 rd, vec2 o, vec2 ci, out float tn, out vec3 nrm, out float H, out float tier) {
-  float hs = h21(ci + 17.3), h2 = h21(ci + 5.9);
-  H = 24.0 + 70.0 * hs * hs;
-  if (h21(ci + 41.7) > 0.78) H = 110.0 + 280.0 * h2 * h2;   // 초고층
-  vec4 m = wxMargins(ci);
-  vec3 lo = vec3(o.x + m.x, uWxGround, o.y + m.z);
-  vec3 hi = vec3(o.x + WX_CELL.x - m.y, uWxGround + H, o.y + WX_CELL.y - m.w);
-  tn = 1e9; nrm = vec3(0.0, 1.0, 0.0); tier = 0.0;
-  bool tall = H > 100.0, hit = false;
-  vec3 hiA = hi; if (tall) hiA.y = uWxGround + H * 0.6;
-  float t1; vec3 n1;
-  if (wxBox(ro, inv, rd, lo, hiA, t1, n1)) { tn = t1; nrm = n1; hit = true; }
-  if (tall) {   // 세트백(웨딩케이크) 상층부
-    vec2 ins = (hi.xz - lo.xz) * 0.2;
-    vec3 loB = vec3(lo.x + ins.x, uWxGround + H * 0.6, lo.z + ins.y), hiB = vec3(hi.x - ins.x, hi.y, hi.z - ins.y);
-    if (wxBox(ro, inv, rd, loB, hiB, t1, n1) && t1 < tn) { tn = t1; nrm = n1; tier = 1.0; hit = true; }
-  }
-  return hit;
-}
-// 맞은편 빌딩 외벽: 켜진 창문 불빛 + 태양 직사/그림자 + 유리 번쩍임. fp = 픽셀 풋프린트(m) → 멀수록 평균색으로 수렴(앨리어싱 방지)
-vec3 wxFacade(vec2 cl, float hy, vec3 n, vec2 cid, float H, float tier, float fp, vec3 rd, vec3 sg) {
-  float hs = h21(cid + 4.7);
-  bool gt = H > 90.0 ? hs > 0.35 : hs > 0.88;
-  float bay = gt ? 1.5 : 3.1, flh = gt ? 3.9 : 3.7;
-  vec3 wallC = gt ? mix(vec3(0.06, 0.14, 0.24), vec3(0.14, 0.30, 0.38), h21(cid + 8.1))
-                  : (hs < 0.45 ? vec3(0.55, 0.24, 0.17) : (hs < 0.7 ? vec3(0.50, 0.46, 0.40) : vec3(0.40, 0.41, 0.43)));
-  float u = abs(n.x) > 0.5 ? cl.y : cl.x;
-  vec2 g = vec2(u / bay, hy / flh);
-  vec2 f = fract(g), id = floor(g);
-  float wr = h21(id + cid * 3.17 + tier * 11.0);
-  float fk = clamp(fp / min(bay, flh), 0.0, 1.0);
-  float aa = 0.02 + 0.5 * fk;
-  vec2 lo = gt ? vec2(0.04, 0.05) : vec2(0.22, 0.28), hi = gt ? vec2(0.96, 0.93) : vec2(0.78, 0.80);
-  float inW = smoothstep(lo.x - aa, lo.x + aa, f.x) * (1.0 - smoothstep(hi.x - aa, hi.x + aa, f.x))
-            * smoothstep(lo.y - aa, lo.y + aa, f.y) * (1.0 - smoothstep(hi.y - aa, hi.y + aa, f.y));
-  float litW = step(wr, 0.40);
-  vec3 lcw = mix(vec3(1.0, 0.78, 0.46), vec3(0.78, 0.90, 1.0), step(0.75, h21(id + 9.3)));
-  float ndl = max(dot(n, sg), 0.0) * (1.0 - 0.85 * uWxOc) * smoothstep(-0.05, 0.12, sg.y);
+// ---------------- 실제 건물 높이맵 폴백 ----------------
+vec3 wxHFWall(vec3 hp, vec3 n, vec3 alb, float gnd, float fp) {
+  float hy = hp.y - gnd;
+  float ndl = max(dot(n, uWxSun), 0.0) * (1.0 - 0.85 * uWxOc) * smoothstep(-0.05, 0.12, uWxSun.y);
   vec3 amb = mix(uWxHor, uWxTop, 0.35) * (0.45 + 0.9 * uWxDay);
   float ao = mix(0.35, 1.0, smoothstep(0.0, 45.0, hy));
   vec3 lightC = amb * ao + uWxSunCol * ndl * 0.32;
-  vec3 wallR = wallC * lightC;
-  if (n.y > 0.5) {   // 지붕: 어두운 방수막 + 설비 + 야간 항공장애등
-    float sp = step(0.992, h21(floor(cl * 0.5) + cid));
-    vec3 roofC = vec3(0.07, 0.072, 0.078) * lightC + vec3(1.0, 0.1, 0.08) * sp * (1.0 - uWxDay) * 1.5;
-    return roofC;
-  }
-  vec3 glR = mix(vec3(0.02, 0.04, 0.07), amb, 0.28) * (0.7 + 0.6 * h21(id + 1.7)) * ao;
-  vec3 rr = reflect(rd, n);
-  float gl = pow(max(dot(rr, sg), 0.0), 40.0) * (1.0 - uWxOc) * smoothstep(0.0, 0.15, sg.y);
-  glR += uWxSunCol * gl * 2.5 * (1.0 - fk);
-  vec3 em = lcw * litW * uWinGlow * 1.5;
-  vec3 detail = mix(wallR, glR + em, inW);
-  float gk = gt ? 0.8 : 0.35;
-  vec3 avgC = mix(wallR, glR, gk) + lcw * 0.16 * uWinGlow * gk;
+  vec3 wall = alb * lightC;
+  if (n.y > 0.5) return alb * 0.55 * lightC;   // 지붕
+  float lat = abs(n.x) > 0.5 ? hp.z : hp.x;
+  vec2 g = vec2(lat / 2.6, hy / 3.8);
+  vec2 f = fract(g), id = floor(g);
+  float fk = clamp(fp / 2.6, 0.0, 1.0), aa = 0.02 + 0.5 * fk;
+  float inW = smoothstep(0.2 - aa, 0.2 + aa, f.x) * (1.0 - smoothstep(0.8 - aa, 0.8 + aa, f.x))
+            * smoothstep(0.25 - aa, 0.25 + aa, f.y) * (1.0 - smoothstep(0.8 - aa, 0.8 + aa, f.y));
+  float litW = step(h21(id + floor(hp.xz * 0.05)), 0.38);
+  vec3 lcw = mix(vec3(1.0, 0.78, 0.46), vec3(0.78, 0.90, 1.0), step(0.75, h21(id + 9.3)));
+  vec3 glass = mix(vec3(0.02, 0.04, 0.07), amb, 0.25) * ao;
+  vec3 detail = mix(wall, glass + lcw * litW * uWinGlow * 1.4, inW * 0.75);
+  vec3 avgC = mix(wall, glass, 0.3) + lcw * 0.13 * uWinGlow * 0.3;
   return mix(avgC, detail, 1.0 - smoothstep(0.3, 0.85, fk));
 }
-// 지면: 아스팔트 + 차선 + 움직이는 택시/차량(전조등/후미등) + 가로등 + 인도. 비 오면 불빛이 번짐
-vec3 wxGround(vec2 cl, vec2 ci, float fp, vec3 sg) {
-  float ixm = mod(ci.x, 5.0), izm = mod(ci.y, 2.0);
-  float cA = ixm < 0.5 ? cl.x : (ixm > 3.5 ? cl.x - WX_CELL.x : 99.0);
-  float cS = izm < 0.5 ? cl.y : cl.y - WX_CELL.y;
-  bool onAve = abs(cA) < 14.0, onSt = abs(cS) < 9.0;
-  float night = 1.0 - uWxDay;
-  float ndl = max(sg.y, 0.0) * (1.0 - 0.85 * uWxOc);
+vec3 wxHFGround(float cls, vec3 hp) {
+  float ndl = max(uWxSun.y, 0.0) * (1.0 - 0.85 * uWxOc);
   vec3 lightC = mix(uWxHor, uWxTop, 0.4) * (0.45 + 0.9 * uWxDay) + uWxSunCol * ndl * 0.30;
-  if (!onAve && !onSt) return vec3(0.20, 0.19, 0.18) * lightC * 0.6;
-  bool inter = onAve && onSt;
-  bool alongX = onSt && !onAve;
-  float along = alongX ? cl.x + ci.x * WX_CELL.x : cl.y + ci.y * WX_CELL.y;
-  float across = alongX ? cS : cA;
-  float halfW = alongX ? 9.0 : 14.0;
-  float ac = abs(across);
-  float wetK = 1.0 + 1.5 * uWxWet;
-  vec3 col;
-  float sidewalk = step(halfW - 3.0, ac) * (inter ? 0.0 : 1.0);
-  float asn = 0.05 + 0.03 * vn(cl * 0.7);
-  col = mix(vec3(asn), vec3(0.24, 0.235, 0.22), sidewalk);
-  col *= 1.0 - 0.45 * uWxWet * (1.0 - sidewalk);
-  col *= lightC;
-  float fkk = clamp(fp / 0.3, 0.0, 1.0);
-  vec3 em = vec3(0.0);
-  if (!inter && sidewalk < 0.5) {
-    // 차선
-    float yl = 1.0 - smoothstep(0.08, 0.08 + fp, abs(ac - 0.18));
-    float lane = abs(fract(ac / 3.2 + 0.5) - 0.5) * 3.2;
-    float wl = (1.0 - smoothstep(0.06, 0.06 + fp, lane)) * step(0.5, fract(along / 6.0)) * step(0.5, ac);
-    col = mix(col, vec3(0.9, 0.7, 0.1) * lightC, yl * (1.0 - fkk));
-    col = mix(col, vec3(0.8) * lightC, wl * 0.8 * (1.0 - fkk));
-    // 차량 (택시 위주)
-    float li = floor(ac / 3.2);
-    float sgn = across >= 0.0 ? 1.0 : -1.0;
-    float laneC = (li + 0.5) * 3.2;
-    float s = along - sgn * uTime * (7.0 + li * 1.5);
-    float slot = floor(s / 15.0), f = s - slot * 15.0;
-    float hv = h21(vec2(slot + ci.x * 3.0 + ci.y * 7.0, li * 2.0 + step(0.0, sgn)));
-    float lat = ac - laneC;
-    if (li < (alongX ? 2.0 : 4.0) && hv < 0.40) {
-      vec3 cc = hv < 0.26 ? vec3(1.0, 0.72, 0.04) : (vec3(0.10) + vec3(0.5) * h21(vec2(hv * 91.0, 3.1)));
-      float body = step(abs(lat), 0.95) * step(5.0, f) * step(f, 9.6);
-      col = mix(col, cc * (0.35 + 0.65 * lightC), body * (1.0 - 0.5 * fkk));
-      float frontF = sgn > 0.0 ? 9.6 : 5.0, rearF = sgn > 0.0 ? 5.0 : 9.6;
-      float gr = max(0.30, fp * 1.2) * wetK;
-      vec2 dh = vec2(f - frontF, abs(lat) - 0.65), dt = vec2(f - rearF, abs(lat) - 0.65);
-      em += vec3(1.0, 0.95, 0.8) * exp(-dot(dh, dh) / (gr * gr)) * 2.5 * night * min(1.0, 0.3 / gr + 0.4);
-      em += vec3(1.0, 0.05, 0.04) * exp(-dot(dt, dt) / (gr * gr)) * 2.0 * night * min(1.0, 0.3 / gr + 0.4);
-    }
-  }
-  // 가로등(30m 간격, 양쪽 인도)
-  float ls = (fract(along / 30.0) - 0.5) * 30.0;
-  float ld = length(vec2(ls, ac - (halfW - 1.2)));
-  float lr = max(0.40, fp * 1.2) * wetK;
-  float head = exp(-ld * ld / (lr * lr)), pool = exp(-ld * ld / (2.0 * 7.0 * 7.0 * wetK));
-  vec3 sod = vec3(1.0, 0.72, 0.38);
-  em += sod * (head * 3.0 * min(1.0, 0.4 / lr + 0.5) + pool * 0.35) * night;
-  return col + em;
+  if (cls < 20.0) return mix(vec3(0.02, 0.05, 0.07), uWxHor, 0.18) * (0.4 + 0.8 * uWxDay);   // 물
+  if (cls > 70.0) return vec3(0.05 + 0.02 * vn(hp.xz * 0.3)) * lightC * (1.0 - 0.45 * uWxWet);  // 도로
+  return vec3(0.17, 0.17, 0.15) * lightC;                                                         // 인도/공원
 }
-
-// 레이마칭 본체. ro/rd = 격자 좌표계(ro.xz 는 카메라 필지 기준 작은 수, ro.y 는 월드 높이). 4~8스텝 2D DDA.
-vec3 wxMarch(vec3 ro, vec3 rd, vec3 sg, float steps, float blur, float fp0) {
-  rd = normalize(rd);
-  if (abs(rd.x) < 1e-4) rd.x = rd.x < 0.0 ? -1e-4 : 1e-4;
-  if (abs(rd.z) < 1e-4) rd.z = rd.z < 0.0 ? -1e-4 : 1e-4;
-  vec3 inv = 1.0 / rd;
-  vec2 c0 = floor(ro.xz / WX_CELL);
-  vec2 stp = sign(rd.xz);
-  vec2 tD = abs(WX_CELL / rd.xz);
-  vec2 tM = ((c0 + step(0.0, rd.xz)) * WX_CELL - ro.xz) / rd.xz;
-  float tg = rd.y < -1e-4 ? (uWxGround - ro.y) / rd.y : 1e9;
-  vec3 res = vec3(-1.0);
-  float tHit = 0.0;
-  for (int i = 0; i < 8; i++) {
-    if (float(i) >= steps) break;
-    vec2 ci = uWxGrid.xy + c0;
-    vec2 o = c0 * WX_CELL;
+// 10m 격자 2D DDA. P/R 월드 좌표. wn = 시작 벽 법선(자기 건물 자기반사 방지)
+vec3 wxHF(vec3 P, vec3 R, vec3 wn, float fp0, float blur, float maxSteps) {
+  if (uWxBakeOn < 0.5) return cwEnv(R, 0.0, 0.0, 0.0, 0.0, vec3(0.0));
+  const float G = 10.0;
+  vec2 org = uWxBake.xy, wh = uWxBake.zw;
+  vec2 cell = floor((P.xz - org) / G);
+  vec2 sx = vec2(abs(R.x) < 1e-5 ? 1e-5 : R.x, abs(R.z) < 1e-5 ? 1e-5 : R.z);
+  vec2 stp = sign(sx), tD = abs(G / sx);
+  vec2 tM = ((cell + step(0.0, sx)) * G + org - P.xz) / sx;
+  vec2 oc = floor((P.xz - wn.xz * 5.0 - org) / G);
+  vec4 oa = texture2D(tWxA, (oc + 0.5) / wh);
+  float ownRoof = oa.a > 0.78 ? (oa.r * 255.0 * 256.0 + oa.g * 255.0) / 64.0 - 50.0 : -1e3;
+  float tEn = 0.0; float axis = 0.0;
+  vec3 res = vec3(-1.0); float tHit = 0.0;
+  for (int i = 0; i < 48; i++) {
+    if (float(i) >= maxSteps) break;
+    if (cell.x < 0.0 || cell.y < 0.0 || cell.x >= wh.x || cell.y >= wh.y) break;
+    vec2 tuv = (cell + 0.5) / wh;
+    vec4 a = texture2D(tWxA, tuv);
+    float cls = a.a * 255.0, gnd = a.b * 255.0 * 0.4 - 20.0;
     float tEx = min(tM.x, tM.y);
-    float tn, H, tier; vec3 nrm;
-    bool hit = wxBuilding(ro, inv, rd, o, ci, tn, nrm, H, tier);
-    if (hit && tn < tg) {
-      vec3 hp = ro + rd * tn;
-      float fp = fp0 + tn * (0.0016 + 0.03 * blur) + 0.04;
-      res = wxFacade(hp.xz - o, hp.y - uWxGround, nrm, ci, H, tier, fp, rd, sg);
-      tHit = tn; break;
+    float yEn = P.y + R.y * tEn, yEx = P.y + R.y * tEx;
+    if (cls > 200.0) {
+      float roof = (a.r * 255.0 * 256.0 + a.g * 255.0) / 64.0 - 50.0;
+      bool self = abs(roof - ownRoof) < 3.0 && tEn < 200.0;
+      if (!self && i > 0 && min(yEn, yEx) < roof) {
+        vec3 n; float th;
+        if (yEn < roof) { th = tEn; n = axis < 0.5 ? vec3(-stp.x, 0.0, 0.0) : vec3(0.0, 0.0, -stp.y); }
+        else { th = clamp((roof - P.y) / R.y, tEn, tEx); n = vec3(0.0, 1.0, 0.0); }
+        vec3 alb = texture2D(tWxB, tuv).rgb; if (dot(alb, vec3(1.0)) < 0.01) alb = vec3(0.38, 0.37, 0.36);
+        float fp = fp0 + th * (0.0016 + 0.03 * blur) + 0.04;
+        res = wxHFWall(P + R * th, n, alb, gnd, fp); tHit = th; break;
+      }
+    } else if (min(yEn, yEx) < gnd) {
+      float th = yEn < gnd ? tEn : clamp((gnd - P.y) / R.y, tEn, tEx);
+      res = wxHFGround(cls, P + R * th); tHit = th; break;
     }
-    if (tg <= tEx) {
-      vec3 hp = ro + rd * tg;
-      float fp = fp0 + tg * (0.0016 + 0.03 * blur) + 0.04;
-      res = wxGround(hp.xz - o, ci, fp, sg);
-      tHit = tg; break;
-    }
-    if (rd.y > 0.0 && ro.y + rd.y * tEx > uWxGround + 400.0) break;   // 어떤 빌딩보다 위로 빠져나감 → 하늘
-    if (tM.x < tM.y) { c0.x += stp.x; tM.x += tD.x; } else { c0.y += stp.y; tM.y += tD.y; }
+    if (R.y > 0.0 && yEn > 560.0) break;
+    if (tM.x < tM.y) { cell.x += stp.x; tEn = tM.x; tM.x += tD.x; axis = 0.0; } else { cell.y += stp.y; tEn = tM.y; tM.y += tD.y; axis = 1.0; }
   }
-  if (res.x < 0.0) {
-    if (rd.y < -1e-4) return wxFog(uWxHor * 0.35, 900.0);   // 스텝 소진: 먼 지면은 안개색
-    vec3 roA = vec3(ro.x + uWxGrid.x * WX_CELL.x, ro.y, ro.z + uWxGrid.y * WX_CELL.y);
-    vec3 sky = wxSky(rd, sg);
-    return wxClouds(roA, rd, sg, sky);
-  }
+  if (res.x < 0.0) return wxFog(cwEnv(R, 0.0, 0.0, 0.0, 0.0, vec3(0.0)), 800.0);   // 데이터 밖/소진: 하늘·지평선
   return wxFog(res, tHit);
 }
 
+// ---------------- SSR: 실제 화면 컬러/깊이 ----------------
+// rel = 카메라 상대 시작점. 반환 rgb=반사색, a=신뢰도(0이면 미스 → 폴백)
+vec4 wxSSR(vec3 rel, vec3 R, float jit) {
+  if (uWxInCap > 0.5 || uWxSsrSteps < 1.0) return vec4(0.0);
+  float t = 0.5 + jit * 0.8, dt = 1.1, tPrev = 0.0;
+  vec2 lastUv = vec2(-1.0);
+  bool ended = true;
+  for (int i = 0; i < 28; i++) {
+    if (float(i) >= uWxSsrSteps) break;
+    vec4 c = uWxVP * vec4(rel + R * t, 1.0);
+    if (c.w < 0.25) { ended = false; break; }
+    vec2 uv = c.xy / c.w * 0.5 + 0.5;
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) { ended = false; break; }
+    float dd = texture2D(tWxDepth, uv).r;
+    float diff = c.w - wxLin(dd);
+    if (dd < 0.99999 && diff > 0.0 && diff < dt * 1.6 + 0.8) {
+      float lo = tPrev, hi = t;
+      for (int k = 0; k < 5; k++) {
+        float m = 0.5 * (lo + hi);
+        vec4 cm = uWxVP * vec4(rel + R * m, 1.0);
+        vec2 um = cm.xy / cm.w * 0.5 + 0.5;
+        if (cm.w - wxLin(texture2D(tWxDepth, um).r) > 0.0) hi = m; else lo = m;
+      }
+      vec4 ch = uWxVP * vec4(rel + R * hi, 1.0);
+      vec2 uh = ch.xy / ch.w * 0.5 + 0.5;
+      float e = min(min(uh.x, 1.0 - uh.x), min(uh.y, 1.0 - uh.y));
+      return vec4(min(texture2D(tWxColor, uh).rgb, vec3(8.0)), smoothstep(0.0, 0.10, e));
+    }
+    lastUv = uv; tPrev = t; t += dt; dt *= uWxSsrGrow;
+  }
+  if (ended && R.y > 0.05 && lastUv.x >= 0.0 && texture2D(tWxDepth, lastUv).r >= 0.99999) {   // 화면에 보이는 하늘/구름으로 빠져나감
+    float e = min(min(lastUv.x, 1.0 - lastUv.x), min(lastUv.y, 1.0 - lastUv.y));
+    return vec4(min(texture2D(tWxColor, lastUv).rgb, vec3(8.0)), 0.9 * smoothstep(0.0, 0.10, e));
+  }
+  return vec4(0.0);
+}
+vec3 wxReflect(vec3 cp, vec3 wn, vec3 R, float blur, float fp0, float jit) {
+  vec3 rel = cp + wn * 0.3;
+  vec4 s = wxSSR(rel, R, jit);
+  vec3 fb = vec3(0.0);
+  if (s.a < 0.99) fb = wxHF(cameraPosition + rel, R, wn, fp0, blur, uWxInCap > 0.5 ? min(uWxHfSteps, 20.0) : uWxHfSteps);
+  return mix(fb, s.rgb, s.a);
+}
+
 // ---------------- 유리판 법선 ----------------
-// 판마다 고유 해시 + 저주파 노이즈로 법선을 미세하게 구부림(기울기 ±0.01rad, 볼록/오목 ±0.015rad, 판 내부 저주파)
 vec3 wxWobble(vec3 wn, vec3 T3, vec2 uv, vec2 pid, float seed, float k) {
   float a = h21(pid + seed * 3.1), b = h21(pid.yx + seed * 5.7 + 1.3), c = h21(pid + seed * 9.9 + 4.4);
   vec2 tilt = (vec2(a, b) - 0.5) * 0.020;
@@ -3686,7 +3662,6 @@ vec3 wxWobble(vec3 wn, vec3 T3, vec2 uv, vec2 pid, float seed, float k) {
   vec2 d = (tilt + bulge + lf) * k;
   return normalize(wn + T3 * d.x + vec3(0.0, 1.0, 0.0) * d.y);
 }
-// 비: 흘러내리는 물줄기(머리 + 꼬리) + 정지 물방울 비드. p = (유리 면 위 가로 m, 높이 m)
 float wxRainH(vec2 p, float seed) {
   float cw = 0.13;
   float col = floor(p.x / cw);
@@ -3715,7 +3690,6 @@ vec3 wxRoom(vec2 uv, vec3 d, vec2 pane, float bayW, vec2 sd, float lit, vec3 lc,
   float oy0 = ground > 0.5 ? 0.25 : (RH - pane.y) * 0.5;
   vec3 o = vec3((RW - pane.x) * 0.5 + uv.x * pane.x, oy0 + uv.y * pane.y, 0.0);
   float oTop = oy0 + pane.y;
-  // 블라인드: 창 위에서부터 내려온 슬랫(시선을 막음)
   float bcov = 0.18 + 0.75 * h21(sd + 6.1);
   if (blindK > 0.5 && o.y > oTop - bcov * pane.y) {
     float slat = 0.65 + 0.35 * sin(o.y * 70.0);
@@ -3726,22 +3700,21 @@ vec3 wxRoom(vec2 uv, vec3 d, vec2 pane, float bayW, vec2 sd, float lit, vec3 lc,
   float t = min(min(te.x, te.y), te.z);
   vec3 p = o + d * t;
   float isBack = step(te.z, min(te.x, te.y));
-  float isVert = (1.0 - isBack) * step(te.y, te.x);   // 천장/바닥
+  float isVert = (1.0 - isBack) * step(te.y, te.x);
   float isCeil = isVert * step(0.0, d.y);
   float isFloor = isVert * (1.0 - step(0.0, d.y));
   float hs = h21(sd + 3.1);
   vec3 wallT = mix(vec3(0.80, 0.77, 0.70), vec3(0.62, 0.68, 0.76), hs);
   float Lr = lamp * 0.55 * (0.55 + 0.45 * (1.0 - p.z / RD)) + dayAmb * exp(-p.z * 0.35);
-  vec3 col = wallT * Lr * 0.8;                                    // 측벽
+  vec3 col = wallT * Lr * 0.8;
   float desk = (1.0 - smoothstep(0.74, 0.80, p.y)) * smoothstep(0.10, 0.16, p.x) * (1.0 - smoothstep(RW - 0.16, RW - 0.10, p.x));
   vec3 back = mix(wallT * 0.9, vec3(0.20, 0.15, 0.10), desk * step(0.4, hs));
   col = mix(col, back * Lr, isBack);
   vec2 pc = vec2(p.x / 1.8, p.z / 1.2);
   float pad = step(abs(fract(pc.x) - 0.5), 0.30) * step(abs(fract(pc.y) - 0.5), 0.33) * step(0.2, h21(floor(pc) + sd));
-  vec3 ceilC = vec3(0.85) * Lr * 0.7 + lc * pad * lamp * 2.2;       // 천장 조명 패드
+  vec3 ceilC = vec3(0.85) * Lr * 0.7 + lc * pad * lamp * 2.2;
   col = mix(col, ceilC, isCeil);
-  col = mix(col, vec3(0.18, 0.19, 0.22) * Lr, isFloor);              // 카펫 바닥
-  // 사무실 파티션(큐비클 패널) 실루엣 + 모니터 불빛
+  col = mix(col, vec3(0.18, 0.19, 0.22) * Lr, isFloor);
   float zp = RD * (0.45 + 0.2 * h21(sd + 4.2));
   float tp = zp / d.z;
   if (tp < t) {
@@ -3753,18 +3726,19 @@ vec3 wxRoom(vec2 uv, vec3 d, vec2 pane, float bayW, vec2 sd, float lit, vec3 lc,
       col += vec3(0.30, 0.50, 1.0) * mon * lit * (0.25 + 0.75 * uWinGlow);
     }
   }
-  col *= mix(vec3(1.0), lc, 0.6 * lit);   // 켜진 방은 따뜻/차가운 조명 톤
+  col *= mix(vec3(1.0), lc, 0.6 * lit);
   return col;
 }
 
 // ---------------- 유리 한 칸 ----------------
-// 반환: 방출광(실내 투과 * (1-F) + 레이마칭 외부 반사 * F). 프레넬 = Schlick(F0 = ((1.52-1)/(1.52+1))^2 ≈ 0.0426)
+// 반환: 방출광 = 실내 투과 * (1-F) + 실제 씬 반사(SSR→높이맵 폴백) * F.  F = Schlick(F0 = ((1.52-1)/(1.52+1))^2 ≈ 0.0426)
 vec3 wxGlass(vec3 wn, vec3 vv, vec3 T3, vec2 uv, vec2 pane, float bayW, vec2 pid, float seed, float lit, vec3 lc, float blindK,
-             float cdist, float w, float F0, float ground, vec3 cp, float wy, vec2 lm) {
-  float aa = 1.0 - smoothstep(0.06, 0.28, w);   // 멀어 칸이 작아지면 일렁임/물방울 감쇠(깜빡임 방지)
+             float cdist, float w, float F0, float ground, vec3 cp, vec2 lm) {
+  float inCap = uWxInCap;
+  float aa = 1.0 - smoothstep(0.06, 0.28, w);
   vec3 nw = wxWobble(wn, T3, uv, pid, seed, uWxQ * mix(0.35, 1.0, aa));
   float blur = 0.0;
-  if (uWxRain > 0.02) {
+  if (uWxRain > 0.02 && inCap < 0.5) {
     float e = 0.025;
     float h0 = wxRainH(lm, seed), hx = wxRainH(lm + vec2(e, 0.0), seed), hy = wxRainH(lm + vec2(0.0, e), seed);
     vec2 dn = vec2(hx - h0, hy - h0) / e * 0.018 * aa;
@@ -3775,27 +3749,23 @@ vec3 wxGlass(vec3 wn, vec3 vv, vec3 T3, vec2 uv, vec2 pane, float bayW, vec2 pid
   float F = F0 + (1.0 - F0) * pow(1.0 - cs, 5.0);   // Schlick
   vec3 R = reflect(vv, nw);
   float rl = dot(R, wn);
-  if (rl < 0.03) R = normalize(R + wn * (0.03 - rl));   // 벽 안쪽으로 파고드는 반사 방지
-  vec3 sg = wxToG(uWxSun);
-  vec3 refl = cwEnv(R, 0.0, 0.0, 0.0, 0.0, vec3(0.0));  // 먼 곳용 저비용 하늘(큐브맵 아님)
+  if (rl < 0.03) R = normalize(R + wn * (0.03 - rl));
+  vec3 refl = cwEnv(R, 0.0, 0.0, 0.0, 0.0, vec3(0.0));
   float rmK = 1.0 - smoothstep(170.0, 300.0, cdist);
   if (rmK > 0.01) {
-    vec3 og = wxToG(cp), wg = wxToG(wn);
-    vec3 ro = vec3(uWxGrid.z + og.x + wg.x * 0.35, wy, uWxGrid.w + og.z + wg.z * 0.35);
-    float fp0 = cdist * 0.0012;
-    vec3 m1 = wxMarch(ro, wxToG(R), sg, uWxSteps, blur, fp0);
-    if (uWxRain > 0.15 && uWxQ > 0.9) {   // 물기: 두 번째 광선으로 번짐(불빛이 물기를 머금고 퍼짐)
+    float fp0 = cdist * 0.0012, jit = wxIGN(gl_FragCoord.xy);
+    vec3 m1 = wxReflect(cp, wn, R, blur, fp0, jit);
+    if (uWxRain > 0.15 && uWxQ > 0.9 && inCap < 0.5) {   // 물기: 두 번째 광선으로 번짐
       vec3 R2 = normalize(R + T3 * 0.05 * uWxRain + vec3(0.0, 0.03 * uWxRain, 0.0));
-      m1 = 0.5 * (m1 + wxMarch(ro, wxToG(R2), sg, uWxSteps, blur, fp0));
+      m1 = 0.5 * (m1 + wxReflect(cp, wn, R2, blur, fp0, jit));
     }
     refl = mix(refl, m1, rmK);
   }
-  // 실내 (투과)
   float lamp = lit * uWinGlow * 1.0 * (0.6 + 0.9 * h21(pid + 7.3)) * (ground > 0.5 ? 1.2 : 1.0);
   float dayAmb = uWxDay * (1.0 - 0.6 * uWxOc) * 0.07;
   vec3 imAvg = mix(vec3(0.5, 0.48, 0.44), lc, lit * 0.6) * (lamp * 0.35 + dayAmb * 0.8);
   vec3 inter = imAvg;
-  float roomK = (1.0 - smoothstep(40.0, 100.0, cdist)) * (1.0 - smoothstep(0.03, 0.10, w));
+  float roomK = (1.0 - smoothstep(40.0, 100.0, cdist)) * (1.0 - smoothstep(0.03, 0.10, w)) * (1.0 - inCap);
   if (roomK > 0.01) {
     vec3 d = vec3(dot(vv, T3), vv.y, dot(vv, -wn));
     d = normalize(vec3(d.xy, max(d.z, 0.05)));
@@ -3804,7 +3774,6 @@ vec3 wxGlass(vec3 wn, vec3 vv, vec3 T3, vec2 uv, vec2 pane, float bayW, vec2 pid
   vec3 tint = vec3(0.80, 0.90, 0.92);
   return inter * tint * (1.0 - F) + min(refl, vec3(8.0)) * F;
 }
-
 void facParams(float sid, float seed, float H, float cat){
   float r1 = fract(seed * 5.31), r2 = fract(seed * 13.7), r3 = fract(seed * 29.1), r4 = fract(seed * 47.3), v = fract(seed * 7.77);
   pDepth = 0.2; pCrown = 0.0; pGlow = 0.0; pBlank = 0.0; pEnd = 0.0; pBow = 0.0; pArch = 0.0; pNeon = 0.0; gBrick = 0.0; gStone = 0.0;
@@ -4152,7 +4121,7 @@ void shopCell(float u, float y, float w, float gH, float SW, out float h, out ve
     if (gls > 0.01) {
       vec2 pane_ = ground ? vec2(max(SW - 0.8, 1.0), 2.4) : (pFam < 0.5 ? vec2(max(pBW - 0.11, 0.5), max(pFH - pSill, 0.5)) : vec2(pWW, pWH));
       float bay_ = ground ? SW : pBW;
-      vec3 gE_ = wxGlass(wn, vv, T3, uvW, pane_, bay_, cellId + seed * 1.37, seed, lit, lc, blind, cdist, w, 0.0426 + (pFam < 0.5 ? uWxCoat : 0.0), ground ? 1.0 : 0.0, vCP, vWP.y, vec2(u, y));
+      vec3 gE_ = wxGlass(wn, vv, T3, uvW, pane_, bay_, cellId + seed * 1.37, seed, lit, lc, blind, cdist, w, 0.0426 + (pFam < 0.5 ? uWxCoat : 0.0), ground ? 1.0 : 0.0, vCP, vec2(u, y));
       emi += gE_ * gls * uWinQ;
     }
     if (pFam < 0.5 && spd > 0.01) {   // 스팬드럴(불투명 유리 패널)은 저비용 반사만
@@ -4607,6 +4576,7 @@ async function nmBuildPart(P, pi, R, mat, prog) {
       let ax0 = 1e9, ax1 = -1e9, az0 = 1e9, az1 = -1e9; for (let u = 0; u < ch.nu; u++) { ax0 = Math.min(ax0, ch.ux[u]); ax1 = Math.max(ax1, ch.ux[u]); az0 = Math.min(az0, ch.uz[u]); az1 = Math.max(az1, ch.uz[u]); }
       const bq0 = Math.max(-32767, Math.min(32767, Math.round(((ax0 + ax1) / 2 - cx0) / 0.0125))), bq1 = Math.max(-32767, Math.min(32767, Math.round(((az0 + az1) / 2 - cz0) / 0.0125)));
       vmap.fill(-1, 0, ch.nu * K);
+      let wsr = 0, wsg = 0, wsb = 0, wsn = 0;
       for (let t = 0; t < ch.nt; t++) {
         const ci = ch.C[t], cl = cls[ci];
         // 벽 삼각형의 수평 법선 각도(0..π, 15bit). 정점마다 인접한 서로 다른 벽 2개까지 기록 → 셰이더가 provoking vertex(flat)로 정확한 벽 방향을 얻는다
@@ -4622,6 +4592,7 @@ async function nmBuildPart(P, pi, R, mat, prog) {
             let f = k0; if (cl === 2) { const yr = ch.uy[p] - baseY; f *= yr < 3 ? 0.72 : 0.9 + 0.2 * Math.min(1, yr / Math.max(1, HH)); } else if (cl === 1) f *= 0.85;
             if (cl === 0) { const rc = nmRoofColor(i, pi, ci); Cc[v * 3] = rc[0]; Cc[v * 3 + 1] = rc[1]; Cc[v * 3 + 2] = rc[2]; }
             else { Cc[v * 3] = Math.min(255, d.pal[ci * 3] * f); Cc[v * 3 + 1] = Math.min(255, d.pal[ci * 3 + 1] * f); Cc[v * 3 + 2] = Math.min(255, d.pal[ci * 3 + 2] * f); }
+            if (cl === 2) { wsr += Cc[v * 3]; wsg += Cc[v * 3 + 1]; wsb += Cc[v * 3 + 2]; wsn++; }
             Sa[v * 4] = sB; Sa[v * 4 + 1] = sS; Sa[v * 4 + 2] = sL; Sa[v * 4 + 3] = sP; Tp[v * 4] = tT; Tp[v * 4 + 1] = tB; Tp[v * 4 + 2] = tq[0]; Tp[v * 4 + 3] = tq[1]; Tr[v * 2] = tq[2]; Tr[v * 2 + 1] = tq[3]; Bc[v * 2] = bq0; Bc[v * 2 + 1] = bq1;
           }
           X[pi2++] = v;
@@ -4634,6 +4605,7 @@ async function nmBuildPart(P, pi, R, mat, prog) {
       const gi = NM.bx.length, mnx = ch.ux.reduce((a, b) => Math.min(a, b), 1e9), mxx = ch.ux.reduce((a, b) => Math.max(a, b), -1e9),
         mnz = ch.uz.reduce((a, b) => Math.min(a, b), 1e9), mxz = ch.uz.reduce((a, b) => Math.max(a, b), -1e9);
       NM.bx.push({ p: pi, i, built: false, prof: [inf.lit, inf.profSeed], shop: inf.shop, shopT: inf.shopT, sty: sB, sB: sS, H: inf.H, base: inf.baseY, anc: [cx0 + bq0 * 0.0125, cz0 + bq1 * 0.0125] });
+      if (wsn > 0) wxBkBld(R, mnx, mxx, mnz, mxz, inf.topY, wsr / wsn / 255, wsg / wsn / 255, wsb / wsn / 255);
       const a0 = Math.floor((mnx - 0.5) / SPATIAL_CELL), a1 = Math.floor((mxx + 0.5) / SPATIAL_CELL), b0 = Math.floor((mnz - 0.5) / SPATIAL_CELL), b1 = Math.floor((mxz + 0.5) / SPATIAL_CELL);
       for (let a = a0; a <= a1; a++) for (let b = b0; b <= b1; b++) { const kk2 = a + ',' + b; let l = NM.idx.get(kk2); if (!l) NM.idx.set(kk2, l = []); l.push(gi); }
     }
@@ -6044,10 +6016,12 @@ async function nmLoadWorld() {
     nycLoadStatus('지형·바다·지도 생성 중…', 0.2); await nmYield();
     try { await nrPrepRoads(R); } catch (e) { console.warn('도로 마스크 준비 실패', e); }
     nmBuildTerrain(R);
+    try { wxBakeInit(R); } catch (e) { console.warn('[wx] bake', e); }
     for (let k = 0; k < 6; k++) {
       await nmBuildPart(NM.parts[k], k, R, mat, p => nycLoadStatus('건물 메시 생성 중… 구간 ' + (k + 1) + '/6 (' + Math.round(p * 100) + '%)', 0.22 + 0.66 * (k + p) / 6));
     }
     try { await nrBuild(R); } catch (e) { console.error('도로·지물 생성 실패', e); }
+    try { wxBakeFinish(); } catch (e) { console.warn('[wx] bake finish', e); }
     NM.ready = true;
     try { ldmPlace(); } catch (e) { console.error('[landmark] 배치 실패', e); }
     nycLoadStatus('충돌체·웹 앵커 준비 중…', 0.95); await nmYield();
@@ -10063,6 +10037,7 @@ function animate() {
 
   drawMap();
   gfxUpdate();
+  wxCapture();   // v21: 창문 SSR용 실제 씬 프리패스
   if (window.__rceFrame && window.__rceFrame(dt)) { /* RCE 컴포저가 렌더 */ } else if (GFXB.on) gfxRenderBloom(); else renderer.render(scene, camera);
 }
 
