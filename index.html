@@ -2552,7 +2552,7 @@ canvas { display: block; width: 100%; height: 100%; }
     <header class="st-brand">
       <h1 class="st-title"><span>Manhattan 1:1</span><span>Web-Swing</span></h1>
       <p class="st-sub">실제 크기의 맨해튼 위를 거미줄로 날아다니세요.</p>
-      <span id="game-version" class="st-ver">v21 · 기기선택</span>
+      <span id="game-version" class="st-ver">v22 · 기기선택</span>
     </header>
 
     <nav class="st-menu" aria-label="메인 메뉴">
@@ -3439,7 +3439,7 @@ function nmWallInit() {
   if (NM_WALL.U) return;
   NM_WALL.U = {
     uWinQ: window.__winQ = { value: 1.0 }, uWinGlow: window.__winGlow = { value: vfxGlowValue() },
-    uWinFar: window.__winFar = { value: 455.0 }, uGlassR: { value: 1.25 }
+    uWinFar: window.__winFar = { value: 455.0 }, uGlassR: { value: 0.0 }
   };
   NM_WALL.FC = `varying vec3 vWP; varying vec3 vLP; varying vec3 vCP; varying vec2 vAnc; flat varying vec2 vWn; varying vec4 vSty; varying vec4 vTop; varying vec2 vTr;
 uniform float uWinQ; uniform float uWinGlow; uniform float uWinFar; uniform float uTime;
@@ -3538,25 +3538,16 @@ vec3 cwEnv(vec3 rv, float u, float y, float seed, float day, vec3 sun) {
 
 // ---------------- 실제 건물 높이맵 폴백 ----------------
 vec3 wxHFWall(vec3 hp, vec3 n, vec3 alb, float gnd, float fp) {
+  // v22: 가짜 창문 격자/무작위 점등 제거. 실제 구운 외벽색 + 조명만 사용 (먼 건물은 평균 유리 톤)
   float hy = hp.y - gnd;
   float ndl = max(dot(n, uWxSun), 0.0) * (1.0 - 0.85 * uWxOc) * smoothstep(-0.05, 0.12, uWxSun.y);
   vec3 amb = mix(uWxHor, uWxTop, 0.35) * (0.45 + 0.9 * uWxDay);
   float ao = mix(0.35, 1.0, smoothstep(0.0, 45.0, hy));
   vec3 lightC = amb * ao + uWxSunCol * ndl * 0.32;
-  vec3 wall = alb * lightC;
-  if (n.y > 0.5) return alb * 0.55 * lightC;   // 지붕
-  float lat = abs(n.x) > 0.5 ? hp.z : hp.x;
-  vec2 g = vec2(lat / 2.6, hy / 3.8);
-  vec2 f = fract(g), id = floor(g);
-  float fk = clamp(fp / 2.6, 0.0, 1.0), aa = 0.02 + 0.5 * fk;
-  float inW = smoothstep(0.2 - aa, 0.2 + aa, f.x) * (1.0 - smoothstep(0.8 - aa, 0.8 + aa, f.x))
-            * smoothstep(0.25 - aa, 0.25 + aa, f.y) * (1.0 - smoothstep(0.8 - aa, 0.8 + aa, f.y));
-  float litW = step(h21(id + floor(hp.xz * 0.05)), 0.38);
-  vec3 lcw = mix(vec3(1.0, 0.78, 0.46), vec3(0.78, 0.90, 1.0), step(0.75, h21(id + 9.3)));
+  if (n.y > 0.5) return alb * 0.55 * lightC;
   vec3 glass = mix(vec3(0.02, 0.04, 0.07), amb, 0.25) * ao;
-  vec3 detail = mix(wall, glass + lcw * litW * uWinGlow * 1.4, inW * 0.75);
-  vec3 avgC = mix(wall, glass, 0.3) + lcw * 0.13 * uWinGlow * 0.3;
-  return mix(avgC, detail, 1.0 - smoothstep(0.3, 0.85, fk));
+  vec3 night = vec3(1.0, 0.78, 0.46) * 0.04 * uWinGlow * (1.0 - uWxDay);
+  return mix(alb * lightC, glass, 0.3) + night;
 }
 vec3 wxHFGround(float cls, vec3 hp) {
   float ndl = max(uWxSun.y, 0.0) * (1.0 - 0.85 * uWxOc);
