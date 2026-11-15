@@ -2552,7 +2552,7 @@ canvas { display: block; width: 100%; height: 100%; }
     <header class="st-brand">
       <h1 class="st-title"><span>Manhattan 1:1</span><span>Web-Swing</span></h1>
       <p class="st-sub">실제 크기의 맨해튼 위를 거미줄로 날아다니세요.</p>
-      <span id="game-version" class="st-ver">v27 · 기기선택</span>
+      <span id="game-version" class="st-ver">v30 · 웹 벽달리기</span>
     </header>
 
     <nav class="st-menu" aria-label="메인 메뉴">
@@ -6768,6 +6768,7 @@ function colEdgeNormal(col, a, b, nx, nz) {
 }
 function handleWallContact(col, nx, nz, hSpeed) {
   const vInto = -(player.vel.x * nx + player.vel.z * nz);
+  if (vInto > 1.0 && vInto >= (wallState.hitVn || 0)) { wallState.hitVn = vInto; wallState.hitT = 0.3; }   // v30: 충돌 처리가 지우기 전 벽 방향 속도 기록
   if (vInto > 0) {
     player.vel.x += nx * vInto;
     player.vel.z += nz * vInto;
@@ -8571,7 +8572,8 @@ function toggleRun() {
 }
 function triggerJump(isRepeat) {
   if (!isGameStarted) return;
-  if (wallState.active) { wallJump(player.vel.y > 4); return; }
+  if (wallState.active) { if (wallState.webRun) wallKick(); else wallJump(player.vel.y > 4); return; }
+  if (!isRepeat && tryWallAttachByJump()) return;   // v29: 벽에 붙은 채 점프 = 벽 잡기
   if (isSwinging) {
     releaseWeb(true);   // v7: 속도 그대로 포물선 전환 (추가 부스트 없음)
     msm2TrickSpin = Math.PI * 2;
@@ -8716,7 +8718,7 @@ function updatePhysics(dt) {
 let lastTime = performance.now();
 let hudTimer = 0;
 // ===== 건물 충돌 보강 + 마블 스파이더맨2식 벽타기 =====
-const wallState = {active:false, nx:0, nz:1, col:null, t:0, awayT:0, attachT:0, noWall:0, phase:0};
+const wallState = {active:false, nx:0, nz:1, col:null, t:0, awayT:0, attachT:0, noWall:0, phase:0, hitVn:0, hitT:0, webRun:false};
 function nearbyColliders(x, z) {
   const gx = Math.floor(x / SPATIAL_CELL), gz = Math.floor(z / SPATIAL_CELL), out = [], seen = new Set();
   for (let ox=-1; ox<=1; ox++) for (let oz=-1; oz<=1; oz++) {
@@ -8814,7 +8816,7 @@ function findWallContact(reach) {
   }
   return best;
 }
-function detachWall(cool) { wallState.active = false; wallState.mom = false; wallState.noWall = Math.max(cool || 0.3, 0.5); wallState.awayT = 0; wallState.attachT = 0; }
+function detachWall(cool) { wallState.active = false; wallState.mom = false; wallState.webRun = false; wallState.noWall = Math.max(cool || 0.3, 0.5); wallState.awayT = 0; wallState.attachT = 0; }
 function wallJump(upward) {
   const nx=wallState.nx, nz=wallState.nz;
   detachWall(0.35);
@@ -8827,33 +8829,12 @@ function wallJump(upward) {
 // ══════ [WALL v2] 사전 예측 진입 · 에너지 보존 투영 · 모서리 회전 ══════
 const WALLP = { lookT: 0.15, minSpeed: 12.0, kappa: 0.86, minRun: 14.0, grazeSplit: 0.866, gWallMul: 0.25, momMax: 2.4, reboundKeep: 0.45, reboundMinVn: 8.0, reboundCD: 0.9, cornerLookT: 0.12 };
 function wallEnterMomentum(c, s, vy, label) {
+  wallState.webRun = false;
   stopGlide(); wallState.active = true; wallState.col = c.col; wallState.nx = c.nx; wallState.nz = c.nz;
   wallState.t = 0; wallState.awayT = 0; wallState.attachT = 0; wallState.cornerCD = 0.1;
   wallState.mom = true; wallState.s = s; wallState.vy = vy; wallState.runSpeed = Math.hypot(s, vy); wallState.carry = wallState.runSpeed;
   player.onGround = false; player.vel.set(-c.nz * s, vy, c.nx * s);
   msm2ApexStatusText = label; msm2ApexTimer = 1.0;
-}
-function wallPredictEntry() {
-  if (SWING.noWallAssist) return;   // 벽 접근 자동 보정(벽 달리기·킥 자동 진입) 제거
-  if (isSwinging || player.onGround || slingState.charging || slingState.glideT > 0 || glide.active || wallState.noWall > 0) return;
-  const v = player.vel, sp = v.length(); if (sp < WALLP.minSpeed) return;
-  const c = findWallContact(sp * WALLP.lookT + 0.42); if (!c) return;
-  const cImp = -(v.x * c.nx + v.z * c.nz) / sp;            // sin(θ_graze)
-  if (cImp < 0.12) return;
-  const R2 = webHeld, tx = -c.nz, tz = c.nx, vt = v.x * tx + v.z * tz;
-  if (isSwinging) releaseWeb(false);
-  if (cImp < WALLP.grazeSplit) {                           // 완만한 사선: 무손실 벽 달리기 (v_y 하한 0.15|v|)
-    const vy = Math.max(0.15 * sp, v.y), par = Math.hypot(vt, vy) || 1;
-    const tgt = Math.max(WALLP.minRun, par + (sp - par) * WALLP.kappa), k = tgt / par;
-    wallEnterMomentum(c, vt * k, vy * k, '🕷 WALL RUN (' + Math.round(tgt * 3.6) + ' km/h)');
-  } else if (R2) {                                         // 정면 + R2: 운동량을 벽 위쪽으로 회전 투영
-    wallEnterMomentum(c, vt * 0.5, Math.min(18.0, Math.max(9.0, sp * 0.55)), '🕷 VERTICAL WALL RUN');
-  } else {                                                 // 정면 + R2 없음: 월 리바운드
-    const vn = v.x * c.nx + v.z * c.nz, keep = WALLP.reboundKeep;
-    if (-vn < WALLP.reboundMinVn) { v.x -= vn * c.nx; v.z -= vn * c.nz; wallState.noWall = 0.3; return; }   // 약한 충돌: 벽면을 따라 미끄러짐
-    v.x = (v.x - 2 * vn * c.nx) * keep; v.z = (v.z - 2 * vn * c.nz) * keep; v.y = Math.max(v.y * 0.5, 0.0);
-    wallState.noWall = WALLP.reboundCD; msm2TrickSpin = Math.PI * 2; msm2ApexStatusText = '🕷 WALL KICK'; msm2ApexTimer = 1.0;
-  }
 }
 function wallCornerWrap(dt) {                              // 외각 모서리: 전방 안쪽 프로브가 허공이면 옆면 법선으로 90° 회전 (속력 보존)
   wallState.cornerCD = Math.max(0, (wallState.cornerCD || 0) - dt);
@@ -8869,30 +8850,58 @@ function wallCornerWrap(dt) {                              // 외각 모서리: 
     }
   }
 }
+// v30: 웹 홀드 벽 달리기 진입 — 벽에 '완전히' 닿은 상태(스윙 중 0.8m / 평상시 0.55m 이내)에서만
+function tryWebWallRun(inputDir, inputMag) {
+  const c = findWallContact(isSwinging ? 0.8 : 0.55); if (!c) return false;
+  const v = player.vel;
+  const into = inputMag > 0.25 ? -(inputDir.x * c.nx + inputDir.z * c.nz) : 0;
+  const fast = Math.max(wallState.hitVn || 0, v.length()) > 6.0;
+  if (!(into > 0.5 || (!player.onGround && fast))) return false;   // 지상은 벽 쪽으로 밀 때만, 공중/스윙은 속도가 있으면 닿는 즉시
+  const tx = -c.nz, tz = c.nx, vt = v.x * tx + v.z * tz;
+  const vin = Math.max(wallState.hitVn || 0, -(v.x * c.nx + v.z * c.nz));   // 충돌 직전 벽 방향 속도(충돌 처리가 지우기 전 값)
+  const sp = Math.hypot(vt, v.y, vin);
+  if (isSwinging) releaseWeb(false);
+  let s, vy, label;
+  if (vin >= Math.abs(vt) * 1.5) {                           // 정면: 운동량을 벽 위쪽으로 회전
+    s = vt * 0.5; vy = Math.min(18.0, Math.max(9.0, sp * 0.55, v.y)); label = '🕷 WEB WALL RUN ▲';
+  } else {                                                   // 사선: 무손실 벽 달리기
+    vy = Math.max(0.15 * sp, v.y); const par = Math.hypot(vt, vy) || 1;
+    const tgt = Math.max(WALLP.minRun, par + (sp - par) * WALLP.kappa), k = tgt / par;
+    s = vt * k; vy *= k; label = '🕷 WEB WALL RUN (' + Math.round(tgt * 3.6) + ' km/h)';
+  }
+  wallEnterMomentum(c, s, vy, label);
+  wallState.webRun = true; wallState.noWall = 0; wallState.hitVn = 0; wallState.hitT = 0;
+  return true;
+}
+// v30: 웹 홀드 벽 달리기 중 점프 = 벽 킥 (마블 스파이더맨2) — 벽 반대쪽으로 차고 올라가며 벽을 따라 달리던 속도를 유지
+function wallKick() {
+  const nx = wallState.nx, nz = wallState.nz, tx = -nz, tz = nx;
+  const vt = player.vel.x * tx + player.vel.z * tz, vy = player.vel.y;
+  detachWall(0.35);
+  player.onGround = false;
+  player.vel.set(nx * 12.0 + tx * vt * 0.9, Math.max(13.0, vy * 0.6 + 11.0), nz * 12.0 + tz * vt * 0.9);
+  msm2TrickSpin = Math.PI * 2;
+  msm2ApexStatusText = '🕷 WALL KICK'; msm2ApexTimer = 1.2;
+}
+// v29: 벽에 붙은 채로 점프 버튼 → 벽 부착 (타이머 부착 대체)
+function tryWallAttachByJump() {
+  if (isSwinging || slingState.charging || wallState.active || wallState.noWall > 0) return false;
+  const c = findWallContact(0.55); if (!c) return false;   // v30: 벽에 완전히 닿은 상태(0.55m 이내)에서만
+  const carry = Math.min(24, Math.max(isRunning ? 13 : 7, Math.max(0, player.vel.y) * 0.8));
+  stopGlide(); wallState.active = true; wallState.col = c.col; wallState.nx = c.nx; wallState.nz = c.nz; wallState.t = 0; wallState.awayT = 0; wallState.attachT = 0; wallState.webRun = false;
+  wallState.carry = carry; wallState.mom = false; wallState.runSpeed = 0; player.onGround = false; player.vel.set(0, carry * 0.6, 0);
+  msm2ApexStatusText = '🕷 WALL GRAB'; msm2ApexTimer = 1.0;
+  return true;
+}
 function updateWallMechanic(dt, inputDir, inputMag) {
   wallState.noWall = Math.max(0, wallState.noWall - dt);
-  if (!SWING.noWallAssist && isSwinging && swingHardRope && isGameStarted && !wallState.active && wallState.noWall <= 0) {   // 하드 스윙 중 벽에 닿아 앞으로 밀면 줄을 놓고 벽 잡기
-    const cs = findWallContact(0.82);
-    if (cs && inputMag > 0.25 && -(inputDir.x*cs.nx + inputDir.z*cs.nz) > 0.85 && -(player.vel.x*cs.nx + player.vel.z*cs.nz) > 4.0) { releaseWeb(false); wallState.noWall = 0; wallState.attachT = 0.5; }
-  }
-  if (!wallState.active && isGameStarted) wallPredictEntry();
+  if (wallState.hitT > 0) { wallState.hitT -= dt; if (wallState.hitT <= 0) wallState.hitVn = 0; }
+  // v30: 웹 버튼을 붙잡은 채(webHeld) 벽에 완전히 닿으면 벽 달리기 (스윙 중이면 줄을 놓고 그대로 벽으로 이어짐)
+  if (!wallState.active && webHeld && isGameStarted && wallState.noWall <= 0 && !slingState.charging) tryWebWallRun(inputDir, inputMag);
   if (isSwinging || !isGameStarted) { wallState.active = false; wallState.attachT = 0; return false; }
   const c = findWallContact(wallState.active ? 1.8 : 0.42+0.4);
-  if (!wallState.active) {
-    if (!c || wallState.noWall > 0) { wallState.attachT = 0; return false; }
-    const into = inputMag > 0.25 ? -(inputDir.x*c.nx + inputDir.z*c.nz) : 0;
-    const vInto = -(player.vel.x*c.nx + player.vel.z*c.nz);
-    const air = !player.onGround;
-    // [v12] 벽 쪽으로 거의 정면(0.85↑) + 충분한 접근속도일 때만, 일정 시간 꾹 밀어야 부착
-    if (into > 0.85 && (air ? vInto > 4.0 : ((isRunning || isPOVMode) && vInto > (isRunning ? 5.0 : 3.0)))) wallState.attachT += dt; else wallState.attachT = 0;   // 1인칭은 걷기만으로도 부착
-    const ok = (air && wallState.attachT > (slingState.carryT > 0 ? 0.4 : 0.30)) || (!air && wallState.attachT > 0.45);
-    if (!ok) return false;
-    // 부착: 벽 방향 운동량을 상승 속도로 전환
-    const carry = Math.min(24, Math.max(isRunning ? 13 : 7, vInto*0.9, Math.max(0, player.vel.y)*0.8));
-    stopGlide(); wallState.active = true; wallState.col = c.col; wallState.nx = c.nx; wallState.nz = c.nz; wallState.t = 0; wallState.awayT = 0;
-    wallState.carry = carry; wallState.mom = false; wallState.runSpeed = 0; player.onGround = false; player.vel.set(0, carry*0.6, 0);
-    msm2ApexStatusText = '🕷 WALL RUN'; msm2ApexTimer = 1.0;
-  }
+  if (!wallState.active) { wallState.attachT = 0; return false; }   // v29: 자동 부착(타이머) 제거 — 부착은 triggerJump(점프 버튼)에서만
+  if (wallState.webRun && !webHeld) { detachWall(0.3); return false; }   // v30: 웹 버튼을 놓으면 벽 달리기 종료 (운동량 유지)
   if (!c) { detachWall(0.25); return false; }
   wallState.col = c.col; wallState.nx = c.nx; wallState.nz = c.nz; wallState.t += dt;
   const nx=c.nx, nz=c.nz, tx=-nz, tz=nx;
@@ -8910,7 +8919,7 @@ function updateWallMechanic(dt, inputDir, inputMag) {
   }
   if (!wallState.mom) {
     const mag = inputMag > 0.12 ? 1 : 0;
-    const spd = (isRunning ? 15.5 : 7.5) * (1 + Math.min(0.45, wallState.t*0.1)) * (inputMag>0.12 ? Math.min(1,inputMag) : 0);
+    const spd = (wallState.webRun ? 22.0 : isRunning ? 15.5 : 7.5) * (1 + Math.min(0.45, wallState.t*0.1)) * (inputMag>0.12 ? Math.min(1,inputMag) : 0);
     let vSide = mag ? ia*spd : 0; vUp = mag ? ib*spd*1.0 : 0;
     if (mag && Math.abs(ib) < 0.2 && Math.abs(ia) < 0.2) { vUp = 0; vSide = 0; }
     player.vel.x = THREE.MathUtils.lerp(player.vel.x, tx*vSide, Math.min(1, 12*dt));
