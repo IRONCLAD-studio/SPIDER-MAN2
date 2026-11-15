@@ -2552,7 +2552,7 @@ canvas { display: block; width: 100%; height: 100%; }
     <header class="st-brand">
       <h1 class="st-title"><span>Manhattan 1:1</span><span>Web-Swing</span></h1>
       <p class="st-sub">실제 크기의 맨해튼 위를 거미줄로 날아다니세요.</p>
-      <span id="game-version" class="st-ver">v26 · 기기선택</span>
+      <span id="game-version" class="st-ver">v27 · 기기선택</span>
     </header>
 
     <nav class="st-menu" aria-label="메인 메뉴">
@@ -2974,8 +2974,9 @@ function nycPickFamily(H, A, cat, seed, nT) {
   else if (H >= 60) { if (cat === 0) { g = 0.5; d = 0.45; } else if (cat === 1) { g = 0.15; d = 0.5; } else { g = 0.12; d = 0.28; } }
   else if (H >= 25) { if (cat === 0) { g = 0.3; d = 0.45; } else if (cat === 1) { g = 0.15; d = 0.30; } else { g = 0.05; d = 0.20; } }
   else { if (cat === 0) { g = 0.2; d = 0.3; } else if (cat === 1) { g = 0.05; d = 0.10; } else { g = 0.03; d = 0.10; } }
+  g *= 0.5;   // v27: 외부 매핑(반사) 통유리 건물 수를 절반 수준으로 — 줄어든 만큼 석조/오피스 양식으로 돌아간다
   if (nT >= 3 && H >= 60) g *= 0.4;                       // 계단식 세트백 타워는 아르데코 쪽으로
-  if (H >= 45) return seed < Math.max(0.5, g / (g + d)) ? 0 : 1;   // 고층: 벽돌 블록 대신 유리 커튼월/석조
+  if (H >= 45) return seed < Math.max(0.25, g / (g + d)) ? 0 : 1;   // 고층: 벽돌 블록 대신 유리 커튼월/석조
   return seed < g ? 0 : (seed < g + d ? 1 : 2);
 }
 // 건물 1동(청크)의 지오메트리에서 높이·바닥면적·세트백 단·위치를 읽어 속성을 만든다.
@@ -3786,15 +3787,43 @@ vec3 wxRoom(vec2 uv, vec3 d, vec2 pane, float bayW, vec2 sd, float lit, vec3 lc,
   vec3 ceilC = vec3(0.85) * Lr * 0.7 + lc * pad * lamp * 2.2;
   col = mix(col, ceilC, isCeil);
   col = mix(col, vec3(0.18, 0.19, 0.22) * Lr, isFloor);
-  float zp = RD * (0.45 + 0.2 * h21(sd + 4.2));
-  float tp = zp / d.z;
-  if (tp < t) {
-    vec3 q = o + d * tp;
-    float px0 = RW * (0.05 + 0.30 * h21(sd + 5.3)), px1 = px0 + RW * (0.30 + 0.40 * h21(sd + 7.7));
-    if (q.y < 1.45 && q.x > px0 && q.x < px1) {
-      col = vec3(0.16, 0.18, 0.22) * Lr;
-      float mon = step(px0 + 0.25, q.x) * step(q.x, px0 + 0.85) * step(0.82, q.y) * step(q.y, 1.22) * step(0.35, h21(sd + 8.8));
-      col += vec3(0.30, 0.50, 1.0) * mon * lit * (0.25 + 0.75 * uWinGlow);
+  // v27: 소품 카드 2장 — 먼 카드(책상+모니터+의자), 가까운 카드(파티션/캐비닛/화분). 창마다 해시로 조합이 달라지고, 낮에도 묻히지 않도록 밝기 하한을 둔다
+  float hA = h21(sd + 4.2), hB = h21(sd + 11.3), hC = h21(sd + 13.7);
+  for (int k = 0; k < 2; k++) {
+    float zq = k == 0 ? RD * (0.45 + 0.2 * hA) : RD * (0.16 + 0.10 * hB);
+    float tq = zq / d.z;
+    if (tq < t) {
+      vec3 q = o + d * tq;
+      float LrP = lamp * 0.55 * (0.55 + 0.45 * (1.0 - zq / RD)) + dayAmb * exp(-zq * 0.35) + 0.16;
+      if (k == 0) {
+        float px0 = RW * (0.05 + 0.30 * h21(sd + 5.3)), px1 = px0 + RW * (0.30 + 0.40 * h21(sd + 7.7));
+        if (q.x > px0 && q.x < px1) {
+          float top = 0.74 + 0.04 * hC;
+          if (q.y < top) {   // 책상 몸체 + 상판 모서리 하이라이트
+            col = vec3(0.46, 0.33, 0.22) * LrP * (q.y > top - 0.05 ? 1.35 : 1.0);
+          }
+          float mon = step(px0 + 0.25, q.x) * step(q.x, px0 + 0.85) * step(top + 0.10, q.y) * step(q.y, top + 0.55) * step(0.35, h21(sd + 8.8));
+          col = mix(col, vec3(0.05, 0.05, 0.06) * LrP, mon);
+          col += vec3(0.30, 0.50, 1.0) * mon * step(top + 0.15, q.y) * step(q.y, top + 0.50) * step(px0 + 0.31, q.x) * step(q.x, px0 + 0.79) * lit * (0.25 + 0.75 * uWinGlow);
+        }
+        float cx = mix(px0, px1, 0.3 + 0.4 * hB), chairOn = step(0.30, hC);   // 의자: 등받이 + 좌판
+        float back = step(abs(q.x - cx), 0.27) * step(0.50, q.y) * step(q.y, 1.18);
+        float seat = step(abs(q.x - cx), 0.31) * step(0.40, q.y) * step(q.y, 0.50);
+        col = mix(col, vec3(0.12, 0.13, 0.17) * (LrP + 0.04), clamp(back + seat, 0.0, 1.0) * chairOn);
+      } else {
+        float qx0 = RW * (0.06 + 0.50 * hC), type = h21(sd + 15.9);
+        if (type < 0.30 && q.x > qx0 && q.x < qx0 + RW * 0.36 && q.y < 1.95) {   // 파티션(칸막이)
+          col = vec3(0.56, 0.60, 0.66) * LrP * (q.y > 1.88 ? 0.7 : 1.0);
+        } else if (type < 0.52 && q.x > qx0 && q.x < qx0 + 0.9 && q.y < 2.1) {   // 캐비닛/책장: 가로 칸 줄무늬
+          col = vec3(0.34, 0.27, 0.20) * LrP * (0.65 + 0.35 * step(0.5, fract(q.y * 3.2)));
+        } else if (type < 0.70) {   // 화분
+          vec2 pc = vec2(q.x - qx0 - 0.3, q.y - 0.75);
+          float pot = step(abs(pc.x), 0.16) * step(q.y, 0.35);
+          float leaf = step(length(pc * vec2(1.0, 0.8)), 0.38) * step(0.35, q.y);
+          col = mix(col, vec3(0.45, 0.30, 0.22) * LrP, pot * step(0.0, q.x - qx0) * step(q.x - qx0, 0.6));
+          col = mix(col, vec3(0.16, 0.34, 0.16) * (LrP + 0.04), leaf * step(0.0, q.x - qx0) * step(q.x - qx0, 0.7));
+        }
+      }
     }
   }
   col *= mix(vec3(1.0), lc, 0.6 * lit);
@@ -4320,6 +4349,12 @@ void shopCell(float u, float y, float w, float gH, float SW, out float h, out ve
       }
     }
     if (pFam < 0.5) col = mix(col, gWC * 0.6, spd * 0.9);
+#ifndef GBUF
+    if (!ground && gls > 0.01) {   // v25b: 유리가 너무 투명해 보이는 문제 — 실내 투과(방출광)를 약간 줄이고 하늘 반사를 소량 얹어 불투명도를 높인다(wxGlass 자체는 그대로)
+      vec3 gVeil_ = cwEnv(rfl_, u, y, seed, uWxDay, uWxSun) * mix(0.35, 1.0, pow(1.0 - clamp(abs(dot(-vv, wn)), 0.0, 1.0), 3.0));
+      emi = emi * 0.80 + gVeil_ * 0.07 * gls * uWinQ;
+    }
+#endif
     col = mix(col, glassC, gls * (pFam < 0.5 ? 0.97 : 0.94) * uWinQ);
     rough = mix(rough, 0.85, gls * uWinQ); metal = mix(metal, 0.0, gls * uWinQ);   // 거울 반사는 방출광이 담당 → PBR 스펙큘러/IBL(큐브맵) 기여를 없앰
     gDN *= 1.0 - gls * uWinQ;
