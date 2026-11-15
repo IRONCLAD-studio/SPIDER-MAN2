@@ -2552,7 +2552,7 @@ canvas { display: block; width: 100%; height: 100%; }
     <header class="st-brand">
       <h1 class="st-title"><span>Manhattan 1:1</span><span>Web-Swing</span></h1>
       <p class="st-sub">실제 크기의 맨해튼 위를 거미줄로 날아다니세요.</p>
-      <span id="game-version" class="st-ver">v24 · 기기선택</span>
+      <span id="game-version" class="st-ver">v26 · 기기선택</span>
     </header>
 
     <nav class="st-menu" aria-label="메인 메뉴">
@@ -3454,6 +3454,7 @@ float pCrown = 0.0, pCrownF = 2.0, pEnd = 0.0, pGlow = 0.0, pBlank = 0.0, pNeon 
 vec3 gWC = vec3(0.6), gAC = vec3(0.3), gGC = vec3(0.1, 0.15, 0.2);
 vec2 gPar = vec2(0.0), gCell = vec2(0.0), gUV = vec2(0.5), gLoc = vec2(0.0);
 vec4 gShop = vec4(0.0);
+float gRib = 0.0;   // v25: 1 = 1960~70년대 오피스(흰 기둥 + 짙은 가로 창띠). pFam 은 1(석조/콘크리트 계열)을 그대로 쓴다
 
 float h21(vec2 p){ vec3 q = fract(vec3(p.xyx) * 0.1031); q += dot(q, q.yzx + 33.33); return fract((q.x + q.y) * q.z); }   // sin 없는 해시 (모바일 GPU 정밀도 안전)
 float gh(float i, float s){ return fract(i * 0.6180339 + s * 0.7548776 + 0.31); }   // JS(nycGH)와 동일: 정밀도에 안전한 해시
@@ -3462,6 +3463,85 @@ float vn(vec2 p){ vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
 float fbm(vec2 p){ return 0.5 * vn(p) + 0.25 * vn(p * 2.03 + 7.1) + 0.125 * vn(p * 4.1 + 3.7) + 0.0625 * vn(p * 8.3 + 1.3); }
 float sb(float x, float a, float b, float w){ return smoothstep(a - w, a + w, x) * (1.0 - smoothstep(b - w, b + w, x)); }
 float hwin(float x, float hw, float w){ return 1.0 - smoothstep(hw - w, hw + w, abs(x)); }
+// v25: 화면 발자국(fw, p 공간 단위)보다 촘촘한 옥타브는 평균값(0.5)으로 수렴 → 먼 곳 노이즈 앨리어싱/반짝임 방지
+float fbmAA(vec2 p, float fw){
+  float a0 = 1.0 - smoothstep(0.30, 0.65, fw), a1 = 1.0 - smoothstep(0.30, 0.65, fw * 2.03), a2 = 1.0 - smoothstep(0.30, 0.65, fw * 4.1), a3 = 1.0 - smoothstep(0.30, 0.65, fw * 8.3);
+  return 0.5 * mix(0.5, vn(p), a0) + 0.25 * mix(0.5, vn(p * 2.03 + 7.1), a1) + 0.125 * mix(0.5, vn(p * 4.1 + 3.7), a2) + 0.0625 * mix(0.5, vn(p * 8.3 + 1.3), a3);
+}
+// v25: 옥상 설비용 안티앨리어싱 사각형/원 커버리지
+float rBox(vec2 p, vec2 c, vec2 hs, float fw){ vec2 d = abs(p - c) - hs; return 1.0 - smoothstep(-fw, fw, max(d.x, d.y)); }
+float rDisc(vec2 p, vec2 c, float r, float fw){ return 1.0 - smoothstep(r - fw, r + fw, length(p - c)); }
+// v25: 옥상 절차 디테일 — 기계실 박스(14m 격자) · 에어컨/냉각 팬(6.5m 격자) · 급수탑(28m 격자) · 포장 테라스 + 태양 방향 그림자.
+// rp = 건물 기준점 상대 xz(m), fw = 화면 발자국(m/px), sh = 태양 쪽 수평 오프셋 비(그림자 길이/높이), shK = 그림자 세기. 텍스처 샘플링 없음.
+vec3 roofDetail(vec2 rp, float fw, float seed, float H, vec3 base, vec2 sh, float shK){
+  vec3 c = base;
+  float fa = max(fw * 0.9, 0.02);
+  float paved = step(0.74, fract(seed * 13.3 + 0.21));
+  if (paved > 0.5) {
+    vec2 pc = rp / 1.3, pg = abs(fract(pc + 0.5) - 0.5) * 1.3;
+    float jt = 1.0 - smoothstep(0.012, 0.012 + fa, min(pg.x, pg.y));
+    c = mix(c, vec3(0.50, 0.49, 0.46) * (0.88 + 0.24 * h21(floor(pc + 0.5) + seed * 9.0)), 0.55);
+    c *= 1.0 - 0.24 * jt * (1.0 - smoothstep(0.15, 0.50, fw));
+  }
+  float shd = 0.0;
+  vec4 o1 = vec4(0.0), o2 = vec4(0.0), o3 = vec4(0.0);
+  // (1) 큰 기계실 박스
+  {
+    vec2 C1 = floor(rp / 14.0), L1 = rp - C1 * 14.0;
+    float a1 = h21(C1 + seed * 17.3 + 1.1), a2 = h21(C1.yx + seed * 5.7 + 2.3), a3 = h21(C1 + seed * 9.1 + 4.7), a4 = h21(C1.yx + seed * 3.3 + 6.1);
+    if (a1 < 0.42) {
+      vec2 hs = vec2(1.2 + 1.8 * a2, 1.0 + 1.6 * a3);
+      vec2 cc = hs + 3.0 + (14.0 - 2.0 * hs - 6.0) * vec2(a4, a2);
+      float bh = 2.0 + 1.2 * a3;
+      shd = max(shd, rBox(L1 + sh * bh, cc, hs, fa * 1.5));
+      float cv = rBox(L1, cc, hs, fa), inner = rBox(L1, cc, hs - 0.22, fa);
+      vec3 bc = mix(vec3(0.42, 0.42, 0.41), vec3(0.53, 0.52, 0.50), a4);
+      o1 = vec4(mix(bc * 0.76, bc, inner), cv);
+    }
+  }
+  // (2) 에어컨 박스 / 냉각 팬
+  {
+    vec2 C2 = floor(rp / 6.5), L2 = rp - C2 * 6.5;
+    float g1 = h21(C2 + seed * 41.0 + 3.0), g2 = h21(C2.yx + seed * 27.0 + 8.0), g3 = h21(C2 + seed * 11.0 + 5.0);
+    if (g1 < 0.30) {
+      vec2 hs = vec2(0.7 + 1.0 * g2, 0.6 + 0.9 * g3);
+      vec2 cc = hs + 1.4 + (6.5 - 2.0 * hs - 2.8) * vec2(g3, g2);
+      shd = max(shd, rBox(L2 + sh * 1.2, cc, hs, fa * 1.5));
+      float cv = rBox(L2, cc, hs, fa), inner = rBox(L2, cc, hs - 0.14, fa);
+      vec3 bc = mix(vec3(0.50, 0.51, 0.50), vec3(0.62, 0.63, 0.62), g3);
+      o2 = vec4(mix(bc * 0.72, bc, inner), cv);
+    } else if (g1 < 0.46) {
+      float r = 0.9 + 0.5 * g2;
+      vec2 cc = vec2(r + 1.5) + (6.5 - 2.0 * r - 3.0) * vec2(g3, g2);
+      shd = max(shd, rDisc(L2 + sh * 1.0, cc, r, fa * 1.5));
+      float body = rDisc(L2, cc, r, fa), ring = rDisc(L2, cc, r * 0.80, fa), hub = rDisc(L2, cc, r * 0.20, fa);
+      vec3 fc = mix(vec3(0.58, 0.59, 0.58), vec3(0.14, 0.15, 0.16), ring);
+      fc = mix(fc, vec3(0.45, 0.46, 0.46), hub);
+      o2 = vec4(fc, body);
+    }
+  }
+  // (3) 급수탑 (낮은 전후 건물에만)
+  if (H < 130.0) {
+    vec2 C3 = floor(rp / 28.0), L3 = rp - C3 * 28.0;
+    float t1 = h21(C3 + seed * 23.0 + 9.0), t2 = h21(C3.yx + seed * 7.0 + 1.0), t3 = h21(C3 + seed * 3.0 + 2.0);
+    if (t1 < 0.30) {
+      float r = 1.8 + 0.6 * t2;
+      vec2 cc = vec2(14.0) + (vec2(t2, t3) - 0.5) * 3.0;
+      vec2 s1 = sh * 5.0, s2 = sh * 10.0;
+      shd = max(shd, max(rDisc(L3 + s1, cc, r, fa * 2.0), rDisc(L3 + s2, cc, r * 0.9, fa * 2.0)));
+      float body = rDisc(L3, cc, r, fa), lid = rDisc(L3, cc, r * 0.72, fa);
+      float rad = length(L3 - cc) / r;
+      vec3 wc = mix(vec3(0.30, 0.21, 0.15), vec3(0.20, 0.14, 0.10), smoothstep(0.7, 1.0, rad));
+      wc = mix(wc, vec3(0.42, 0.31, 0.22) * (1.0 - 0.25 * rad), lid);
+      o3 = vec4(wc, body);
+    }
+  }
+  c *= 1.0 - 0.40 * shd * shK;
+  c = mix(c, o1.rgb, o1.a);
+  c = mix(c, o2.rgb, o2.a);
+  c = mix(c, o3.rgb, o3.a);
+  return c;
+}
 
 // ---- 인테리어 매핑: 창 평면에서 레이를 방 안쪽 박스(바닥/천장/측벽/뒷벽)에 교차 ----
 vec3 imap(vec2 uv, vec3 d, vec2 sd, float lit, vec3 lc){
@@ -3765,35 +3845,57 @@ vec3 wxGlass(vec3 wn, vec3 vv, vec3 T3, vec2 uv, vec2 pane, float bayW, vec2 pid
   vec3 tint = vec3(0.92, 0.97, 0.98);
   return inter * tint * (1.0 - F) + min(refl, vec3(8.0)) * F;
 }
+// v25: 햇빛 받는 면은 따뜻한 황금빛, 그늘 면은 차가운 청회색 — 알베도 쪽 미세 보정(조명/노출/안개는 건드리지 않는다). sunF = dot(태양 방향, 벽 법선)
+vec3 nmSunTint(float sunF, float k){
+  float dayK = clamp(uWxDay, 0.0, 1.0) * (1.0 - 0.7 * uWxOc) * k;
+  vec3 warm = vec3(1.07, 1.00, 0.87), cool = vec3(0.91, 0.97, 1.08);
+  return mix(vec3(1.0), mix(cool, warm, smoothstep(0.05, 0.55, sunF)), dayK);
+}
 void facParams(float sid, float seed, float H, float cat){
   float r1 = fract(seed * 5.31), r2 = fract(seed * 13.7), r3 = fract(seed * 29.1), r4 = fract(seed * 47.3), v = fract(seed * 7.77);
-  pDepth = 0.2; pCrown = 0.0; pGlow = 0.0; pBlank = 0.0; pEnd = 0.0; pBow = 0.0; pArch = 0.0; pNeon = 0.0; gBrick = 0.0; gStone = 0.0;
+  float v2 = fract(seed * 91.37 + 0.29), v3 = fract(seed * 17.93 + 0.61);   // v25: 연식·팔레트 변주용 추가 해시
+  pDepth = 0.2; pCrown = 0.0; pGlow = 0.0; pBlank = 0.0; pEnd = 0.0; pBow = 0.0; pArch = 0.0; pNeon = 0.0; gBrick = 0.0; gStone = 0.0; gRib = 0.0;
   if (sid > 7.5) { lmP(sid - 8.0); gStone = pFam > 0.5 ? 1.0 : 0.0; return; }
   if (sid < 0.5) {                                   // ① 현대 청록/은색/흑청색 통유리 커튼월
     pFam = 0.0; pBW = r2 < 0.34 ? 1.35 : (r2 < 0.67 ? 1.5 : 1.8); pFH = 3.8 + 0.5 * r3; pSill = r1 > 0.72 ? 0.03 : 0.8 + 0.3 * r3; pCorn = 0.45; pDepth = 0.05;
     // v16: 사진 같은 통유리 — 파란 거울 유리 / 청록 / 거의 검은 남색 / 밝은 은청색, 멀리언은 은빛, 스팬드럴은 짙은 남색 유리
-    if (v < 0.50) { gGC = vec3(0.05, 0.17, 0.34); gWC = vec3(0.035, 0.09, 0.19); gAC = vec3(0.10, 0.13, 0.18); }
-    else if (v < 0.72) { gGC = vec3(0.06, 0.24, 0.32); gWC = vec3(0.04, 0.13, 0.18); gAC = vec3(0.09, 0.14, 0.15); }
-    else if (v < 0.88) { gGC = vec3(0.03, 0.07, 0.15); gWC = vec3(0.025, 0.05, 0.10); gAC = vec3(0.07, 0.08, 0.10); }
-    else { gGC = vec3(0.17, 0.33, 0.50); gWC = vec3(0.09, 0.17, 0.28); gAC = vec3(0.14, 0.18, 0.24); }
+    if (v < 0.42) { gGC = vec3(0.07, 0.15, 0.25); gWC = vec3(0.045, 0.085, 0.14); gAC = vec3(0.12, 0.145, 0.18); }          // 짙은 청회색 유리
+    else if (v < 0.68) { gGC = vec3(0.075, 0.19, 0.25); gWC = vec3(0.05, 0.11, 0.14); gAC = vec3(0.10, 0.145, 0.155); }   // 청록 회색
+    else if (v < 0.86) { gGC = vec3(0.045, 0.075, 0.12); gWC = vec3(0.03, 0.05, 0.085); gAC = vec3(0.08, 0.09, 0.11); }  // 거의 검은 남색
+    else { gGC = vec3(0.16, 0.26, 0.36); gWC = vec3(0.10, 0.16, 0.23); gAC = vec3(0.16, 0.19, 0.23); }                    // 밝은 은청색
   } else if (sid < 1.5) {                            // ② 아르데코 석조/콘크리트
-    pFam = 1.0; pBW = 2.7 + 0.8 * r2; pFH = 3.7 + 0.4 * r3; pWW = 0.95 + 0.35 * r4; pWH = 1.7 + 0.3 * r1; pSill = 0.85; pCorn = 0.9 + 0.8 * r3; gStone = 1.0;
-    if (v < 0.30) gWC = vec3(0.68, 0.67, 0.63);
-    else if (v < 0.55) gWC = vec3(0.47, 0.50, 0.54);
-    else if (v < 0.80) gWC = vec3(0.58, 0.58, 0.57);
-    else gWC = vec3(0.38, 0.39, 0.41);
-    gAC = vec3(0.30, 0.32, 0.34); gGC = vec3(0.08, 0.11, 0.15);
+    pFam = 1.0;
+    // v25: 높이·구역(연식)·해시로 '전후 석조(아르데코)' ↔ '1960~70년대 오피스(흰 기둥 + 짙은 가로 창띠)' 를 가른다. 둘 다 pFam=1 분기를 공유
+    float ribbon = (H >= 38.0 && v2 < (cat < 0.5 ? 0.45 : 0.28)) ? 1.0 : 0.0;
+    if (ribbon > 0.5) {
+      gRib = 1.0; pBW = 1.8 + 0.6 * r2; pFH = 3.7 + 0.4 * r3; pWW = pBW - 0.40; pSill = pFH * 0.40; pWH = pFH * 0.50; pCorn = 0.35; gStone = 0.0;
+      if (v < 0.50) gWC = vec3(0.80, 0.79, 0.75);        // 흰 프리캐스트
+      else if (v < 0.80) gWC = vec3(0.67, 0.68, 0.68);   // 연회색
+      else gWC = vec3(0.74, 0.71, 0.64);                 // 크림
+      gAC = gWC * 0.90; gGC = vec3(0.04, 0.06, 0.09);
+    } else {
+      pBW = 2.6 + 0.6 * r2; pFH = 3.6 + 0.6 * r3; pWW = 0.95 + 0.35 * r4; pWH = 1.7 + 0.3 * r1; pSill = 0.85; pCorn = 0.9 + 0.8 * r3; gStone = 1.0;
+      if (v < 0.28) gWC = vec3(0.70, 0.66, 0.57);        // 석회암 베이지
+      else if (v < 0.50) gWC = vec3(0.60, 0.61, 0.62);   // 회색 석조
+      else if (v < 0.72) gWC = vec3(0.65, 0.58, 0.47);   // 황갈
+      else if (v < 0.88) gWC = vec3(0.49, 0.50, 0.52);   // 짙은 회색
+      else gWC = vec3(0.55, 0.45, 0.39);                 // 적갈 석조
+      gWC *= 0.94 + 0.12 * v2;
+      gAC = vec3(0.30, 0.32, 0.34) * (0.9 + 0.2 * v3); gGC = vec3(0.08, 0.11, 0.15);
+    }
   } else if (sid < 2.5) {                            // ③ 붉은 벽돌 / 브라운스톤
     pFam = 2.0; pBW = 2.5 + 0.5 * r2; pFH = 3.1 + 0.25 * r3; pWW = 0.95 + 0.2 * r4; pWH = 1.7 + 0.2 * r1; pSill = 0.75; pCorn = 1.0 + 0.5 * r3; gBrick = 1.0;
     float brown = (H < 24.0 && cat > 0.5 && v < 0.55) ? 1.0 : 0.0;
-    if (brown > 0.5) { gWC = vec3(0.37, 0.23, 0.18); gBrick = 0.0; gStone = 1.0; }
-    else if (v < 0.45) gWC = vec3(0.56, 0.23, 0.16);
-    else if (v < 0.72) gWC = vec3(0.45, 0.29, 0.21);
-    else gWC = vec3(0.64, 0.51, 0.35);
-    gAC = vec3(0.60, 0.57, 0.50); gGC = vec3(0.06, 0.09, 0.12);
+    if (brown > 0.5) { gWC = vec3(0.36, 0.25, 0.20); gBrick = 0.0; gStone = 1.0; }
+    else if (v < 0.40) gWC = vec3(0.50, 0.26, 0.20);   // 적갈 벽돌(채도 낮춤)
+    else if (v < 0.62) gWC = vec3(0.43, 0.30, 0.24);   // 갈색 벽돌
+    else if (v < 0.82) gWC = vec3(0.65, 0.55, 0.42);   // 황갈/베이지 벽돌
+    else gWC = vec3(0.58, 0.54, 0.47);                 // 회갈색 벽돌
+    gWC *= 0.95 + 0.10 * v2;
+    gAC = vec3(0.62, 0.59, 0.52) * (0.92 + 0.14 * v3); gGC = vec3(0.06, 0.09, 0.12);
   } else {                                           // 창고·차고: 단순 콘크리트
     pFam = 1.0; pBW = 4.5; pFH = 4.6; pWW = 2.6; pWH = 2.2; pSill = 1.0; pCorn = 0.4; gStone = 0.0;
-    gWC = vec3(0.52, 0.50, 0.47); gAC = vec3(0.30, 0.30, 0.30); gGC = vec3(0.08, 0.11, 0.14);
+    gWC = v < 0.50 ? vec3(0.52, 0.50, 0.47) : (v < 0.78 ? vec3(0.50, 0.41, 0.35) : vec3(0.60, 0.55, 0.46)); gAC = vec3(0.30, 0.30, 0.30); gGC = vec3(0.08, 0.11, 0.14);
   }
 }
 
@@ -3839,13 +3941,23 @@ void fcell(float u, float y, float w, out float h, out vec4 m){
     h = 0.11 * mull + 0.07 * tr * (1.0 - mull) + 0.02 * sp * (1.0 - fr) - 0.035 * gls;
     m = vec4(gls, fr, sp * (1.0 - fr), 0.0);
     gUV = vec2(clamp((fx + BW * 0.5 - 0.055) / (BW - 0.11), 0.0, 1.0), clamp((fy - pSill) / max(FH - pSill, 0.1), 0.0, 1.0));
+  } else if (pFam < 1.5 && gRib > 0.5) {             // v25: 1960~70년대 오피스 — 가는 흰 기둥(핀) + 연속된 짙은 가로 창띠 + 흰 스팬드럴
+    float wy0 = pSill, wy1 = pSill + pWH;
+    float pier = 1.0 - smoothstep(0.20 - w, 0.20 + w, BW * 0.5 - abs(fx));
+    float winO = hwin(fx, hw, w) * sb(fy, wy0, wy1, w), win = hwin(sx, hw, w) * sb(sy, wy0, wy1, w);
+    float inn = hwin(sx, hw - 0.05, w) * sb(sy, wy0 + 0.05, wy1 - 0.05, w);
+    float bar = (1.0 - smoothstep(0.025 - w, 0.025 + w, abs(sx))) * inn;
+    h = 0.09 * pier - 0.12 * winO + 0.04 * bar + 0.05 * sb(fy, wy0 - 0.20, wy0, w) * (1.0 - pier) * (1.0 - winO);
+    m = vec4(inn * (1.0 - bar), clamp(win - inn + bar, 0.0, 1.0), (1.0 - winO) * (1.0 - pier), clamp(winO - win, 0.0, 1.0));
+    gUV = vec2(clamp((sx + hw) / pWW, 0.0, 1.0), clamp((sy - wy0) / pWH, 0.0, 1.0));
   } else if (pFam < 1.5) {
     float inS = hwin(fx, hw + 0.10, w), wy0 = pSill, wy1 = pSill + pWH;
     float winO = hwin(fx, hw, w) * sb(fy, wy0, wy1, w), win = hwin(sx, hw, w) * sb(sy, wy0, wy1, w);
     float inn = hwin(sx, hw - 0.07, w) * sb(sy, wy0 + 0.07, wy1 - 0.07, w);
     float bar = clamp((1.0 - smoothstep(0.03 - w, 0.03 + w, abs(sx))) + sb(sy, wy0 + pWH * 0.62 - 0.03, wy0 + pWH * 0.62 + 0.03, w), 0.0, 1.0) * inn;
     float belt = sb(fy, 0.0, 0.34, w) * (1.0 - step(0.5, mod(fi, 7.0)));
-    h = -0.14 * inS - 0.16 * winO + 0.06 * bar + 0.11 * belt;
+    float pierD = 1.0 - smoothstep(0.30 - w, 0.30 + w, BW * 0.5 - abs(fx));   // v25: 수직 강조 핀(pier)
+    h = -0.14 * inS - 0.16 * winO + 0.06 * bar + 0.11 * belt + 0.07 * pierD;
     m = vec4(inn * (1.0 - bar), clamp(win - inn + bar, 0.0, 1.0), inS * (1.0 - winO), clamp(winO - win, 0.0, 1.0));
     gUV = vec2(clamp((sx + hw) / pWW, 0.0, 1.0), clamp((sy - wy0) / pWH, 0.0, 1.0));
   } else if (pFam < 2.5) {
@@ -3856,8 +3968,10 @@ void fcell(float u, float y, float w, out float h, out vec4 m){
     float lintel = hwin(fx, hw + 0.14, w) * sb(fy, wy1, wy1 + 0.22, w);
     float sill = hwin(fx, hw + 0.10, w) * sb(fy, wy0 - 0.15, wy0, w);
     float bowH = pBow * max(0.0, 1.0 - fx * fx / ((hw + 0.2) * (hw + 0.2))) * sb(fy, wy0 - 0.12, wy1 + 0.12, w);
-    h = -0.20 * winO + 0.07 * lintel + 0.12 * sill + bowH + 0.035 * rail;
-    m = vec4(inn * (1.0 - rail), clamp(win - inn + rail, 0.0, 1.0), clamp(lintel + sill, 0.0, 1.0), clamp(winO - win, 0.0, 1.0));
+    float pilB = 1.0 - smoothstep(0.17 - w, 0.17 + w, BW * 0.5 - abs(fx));      // v25: 수직 벽기둥(pilaster)
+    float beltB = sb(fy, 0.0, 0.20, w) * (1.0 - winO);                         // v25: 층마다 가로 돌림띠(스팬드럴 석재)
+    h = -0.20 * winO + 0.07 * lintel + 0.12 * sill + bowH + 0.035 * rail + 0.05 * pilB + 0.035 * beltB;
+    m = vec4(inn * (1.0 - rail), clamp(win - inn + rail, 0.0, 1.0), clamp(lintel + sill + beltB, 0.0, 1.0), clamp(winO - win, 0.0, 1.0));
     gUV = vec2(clamp((sx + hw) / pWW, 0.0, 1.0), clamp((sy - wy0) / pWH, 0.0, 1.0));
   } else {
     float wy0 = pSill, wy1 = pSill + pWH;
@@ -3944,7 +4058,7 @@ void shopCell(float u, float y, float w, float gH, float SW, out float h, out ve
         float uF = dot(vLP.xz - vAnc, T3f.xz) + seed * 23.7;
         vec2 cl = vec2(uF / max(pBW, 1.3), y / max(pFH, 2.8));
         float cpx = max(fwidth(cl.x), fwidth(cl.y));
-        float lodF = 1.0 - smoothstep(0.30, 0.80, cpx);
+        float lodD = 1.0 - smoothstep(0.30, 0.80, cpx), lodMono = smoothstep(300.0, 380.0, cdist), lodF = lodD * (1.0 - lodMono);   // v25: 300m+ 는 창 격자 대신 단색 + 층 줄무늬
         if (lodF > 0.01) {
           vec2 cf = fract(cl), ci = floor(cl);
           float wx = pFam < 0.5 ? 0.95 : clamp(pWW / max(pBW, 1.0), 0.3, 0.8);
@@ -3968,8 +4082,22 @@ void shopCell(float u, float y, float w, float gH, float SW, out float h, out ve
           totalEmissiveRadiance += vec3(1.0, 0.80, 0.52) * farWin * step(0.68, hv2) * uWinGlow * 0.55 * lodF;
           farWin *= lodF;
         }
+        {   // v25: 300m+ — 단색 + 약한 층 줄무늬. 한 층이 몇 픽셀 이상일 때만 줄무늬, 더 멀면 평균으로 수렴(화면 미분)
+          float fhS = max(pFH, 2.8), cpyS = fwidth(y) / fhS;
+          float stA = 1.0 - smoothstep(0.25, 0.80, cpyS);
+          float stC = 0.5 + 0.5 * cos(6.2831853 * (y / fhS - (pFam < 0.5 ? 0.5 : (pSill + 0.5 * pWH) / fhS)));   // 1 = 창 줄 중앙
+          float wFrac = pFam < 0.5 ? 0.78 : clamp(pWW / max(pBW, 1.0), 0.3, 0.95) * clamp(pWH / fhS, 0.3, 0.7);
+          farC *= 1.0 - lodMono * stA * (pFam < 0.5 ? 0.06 : 0.10) * stC;
+          totalEmissiveRadiance += vec3(1.0, 0.80, 0.52) * (uWinGlow * 0.176 * wFrac * step(2.5, y) * lodD * lodMono) * mix(1.0, 2.0 * stC, stA);   // 야간: 켜진 창의 평균 방출(층 줄무늬)
+        }
       }
       totalEmissiveRadiance += cwE_;
+#if NUM_DIR_LIGHTS > 0
+      vec3 nmFLw = normalize((vec4(directionalLights[0].direction, 0.0) * viewMatrix).xyz);
+#else
+      vec3 nmFLw = normalize(vec3(0.4, 0.8, 0.3));
+#endif
+      farC *= nmSunTint(dot(nmFLw, wn), pFam < 0.5 ? 0.35 : 1.0);   // v25: 양지 = 따뜻한 베이지, 음지 = 차가운 청회색
       diffuseColor.rgb = mix(diffuseColor.rgb, farC, 0.9);
       vfxWin = (pFam < 0.5 ? 0.55 : 0.22) * mix(1.0, 0.5 + 0.9 * farWin, step(0.01, farWin));
     } else {
@@ -3982,7 +4110,8 @@ void shopCell(float u, float y, float w, float gH, float SW, out float h, out ve
     float dTop = wallTop - vWP.y;
     vec3 T3 = vec3(-wn.z, 0.0, wn.x);
     float u = dot(vLP.xz - vAnc, T3.xz) + seed * 23.7;   // 건물 기준점 상대 좌표 → 작은 수로 계산해 노이즈 제거
-    float w = clamp(0.5 * (fwidth(u) + fwidth(vWP.y)), 0.012, 1.5);
+    float fwU_ = fwidth(u), fwY_ = fwidth(vWP.y);   // v25: LOD 용(분기 밖에서 미분)
+    float w = clamp(0.5 * (fwU_ + fwY_), 0.012, 1.5);
     #ifdef GBUF
     float nearK = 0.0;
 #else
@@ -4010,6 +4139,33 @@ void shopCell(float u, float y, float w, float gH, float SW, out float h, out ve
       hy += cornice(dTop - eps, u) + fin * step(0.6, fract(u / 1.3)) * (1.0 - smoothstep(1.5, 7.0, dTop - eps)) * step(pCorn, dTop - eps);
     }
     float gls = m.x, fr = m.y, spd = m.z, rev = m.w;
+    // ---- v25: 층 리듬 — 상층 설비층/중간 기계층(루버). 로비·상가층은 shopCell 이 담당 ----
+    float nmMech = 0.0;
+    if (!ground && pFam < 2.5 && H > 45.0 && pBlank < 0.5) {
+      float nmFl = floor((H - gH) / pFH), nmFt = nmFl - 1.0 - cellId.y;     // nmFt: 꼭대기 층에서 몇 층 아래인가
+      float nmMr = fract(seed * 23.3 + 0.37);
+      float nmTop = step(nmFt, (H > 140.0 ? 1.5 : 0.5)) * step(0.0, nmFt) * step(0.3, fract(seed * 7.1 + 0.13));   // 상층 설비층(약 70%)
+      float nmMid = (H > 110.0 && abs(cellId.y - floor(nmFl * (0.34 + 0.22 * nmMr))) < 0.5) ? 1.0 : 0.0;           // 중간 기계층
+      nmMech = max(nmTop, nmMid);
+    }
+    // ---- v25: 거리·화면미분 LOD — 100m+ 창 격자 → 평균 + 가로 줄무늬, 300m+ → 단색 + 약한 층 줄무늬 (마스크를 미리 평균해 모아레 방지) ----
+    float nmLodW = 0.0, nmLodM = 0.0;
+    if (!ground && pFam < 2.5 && pBlank < 0.5) {
+      nmLodW = max(smoothstep(100.0, 190.0, cdist), smoothstep(0.20, 0.55, max(fwU_ / pBW, fwY_ / pFH)));
+      nmLodM = max(smoothstep(300.0, 400.0, cdist), smoothstep(0.55, 1.10, fwY_ / pFH));
+    }
+    if (nmLodW > 0.003) {
+      float aX = pFam < 0.5 ? 0.93 : clamp(pWW / pBW, 0.2, 0.97);
+      float aY0 = pFam < 0.5 ? max(pSill, 0.06) : pSill, aY1 = pFam < 0.5 ? pFH - 0.08 : pSill + pWH;
+      float gRow = aX * sb(loc.y, aY0, aY1, w);                                   // 가로 평균: 창 줄(가로 줄무늬)
+      float gMono = aX * (aY1 - aY0) / pFH;                                       // 세로까지 평균: 단색
+      float stA = 1.0 - smoothstep(0.30, 0.80, fwY_ / pFH);                       // 한 층이 몇 픽셀 이상일 때만 줄무늬
+      float gStr = gMono * (1.0 + 0.30 * stA * cos(6.2831853 * (loc.y - 0.5 * (aY0 + aY1)) / pFH));
+      float gT = mix(gRow, gStr, nmLodM);
+      gls = mix(gls, gT, nmLodW); fr *= 1.0 - nmLodW; rev *= 1.0 - nmLodW;
+      spd = mix(spd, (1.0 - gT) * (gRib > 0.5 ? 0.88 : (pFam < 0.5 ? 0.70 : 0.50)), nmLodW);
+    }
+    if (nmMech > 0.5) { gls = 0.0; fr = 0.0; rev = 0.0; spd = pFam < 0.5 ? 0.0 : 1.0; }
     // 랜드마크 특수 처리: 통짜 포디움(원 월드 트레이드), 대리석 단부벽(UN)
     if (pBlank > 0.0 && y < pBlank) { gls = 0.0; spd = 1.0 - fr; }
     if (pEnd > 0.5) { vec2 av = vec2(0.483, -0.875); if (abs(dot(wn.xz, av)) > 0.7) { gls = 0.0; fr = 0.0; spd = 0.0; rev = 0.0; } }
@@ -4041,9 +4197,9 @@ void shopCell(float u, float y, float w, float gH, float SW, out float h, out ve
     float ao = 1.0 - clamp(-h0 * 1.4, 0.0, 0.5);
     // ---- 외벽 기본색 ----
     float age = 0.35 + 0.65 * fract(seed * 3.71);
-    float ton = fbm(vec2(u, y) * 0.55 + seed * 40.0);
+    float ton = fbmAA(vec2(u, y) * 0.55 + seed * 40.0, w * 0.55);   // v25: 화면 발자국 기반 대역 제한
     vec3 wallC = gWC * (0.86 + 0.28 * ton);
-    wallC = mix(wallC, wallC * (0.72 + 0.56 * brRnd), (gBrick > 0.5 ? 0.9 : 0.3) * bk * step(0.5, pFam));
+    wallC = mix(wallC, wallC * (0.72 + 0.56 * brRnd), (gBrick > 0.5 ? 0.9 : (gStone > 0.5 ? 0.45 : 0.3)) * bk * step(0.5, pFam));
     wallC = gBrick > 0.5 ? mix(wallC, vec3(0.60, 0.58, 0.53), mortar * 0.75) : mix(wallC, wallC * 0.70, mortar * 0.65);
     vec3 col = wallC; float rough = pFam < 0.5 ? 0.35 : (gBrick > 0.5 ? 0.92 : (gStone > 0.5 ? 0.76 : 0.86)), metal = pFam < 0.5 ? 0.5 : 0.02;
     vec3 sashC = fract(seed * 19.3) < 0.6 ? vec3(0.16, 0.15, 0.14) : vec3(0.80, 0.79, 0.74);
@@ -4081,16 +4237,49 @@ void shopCell(float u, float y, float w, float gH, float SW, out float h, out ve
       emi += neon.zxy * opn * 1.4 * shopG;
     }
     // ---- 웨더링: 빗물 자국 · 그을음 · 먼지 · 모서리 마모 ----
+    if (nmMech > 0.5) {   // v25: 기계층 루버 — 가로 슬랫(0.19m) + 상하 프레임
+      float slatA = 1.0 - smoothstep(0.03, 0.09, w);
+      float slat = mix(0.5, smoothstep(0.30, 0.75, abs(fract(yy / 0.19) - 0.5) * 2.0), slatA);
+      vec3 lvB = pFam < 0.5 ? gAC * 1.25 : wallC * 0.62;
+      float lvIn = sb(loc.y, 0.30, pFH - 0.30, w);
+      col = mix(col, mix(lvB * 0.42, lvB * 1.05, slat), lvIn);
+      rough = mix(rough, 0.55, lvIn); metal = mix(metal, pFam < 0.5 ? 0.6 : 0.3, lvIn);
+    }
     float wallM = 1.0 - gls;
     float colN = h21(vec2(floor(u * 5.0), seed * 77.0)), stK = vn(vec2(u * 3.0, y * 0.12) + seed * 20.0);
-    float dirt = age * (0.12 + 0.55 * fbm(vec2(u * 0.6, y * 0.05) + seed * 7.0)) * (0.55 + 0.45 * (1.0 - smoothstep(0.0, 90.0, y)));
+    float dirt = age * (0.12 + 0.55 * fbmAA(vec2(u * 0.6, y * 0.05) + seed * 7.0, w * 0.6)) * (0.55 + 0.45 * (1.0 - smoothstep(0.0, 90.0, y)));
     float belowSill = (!ground && pFam > 0.5 && pFam < 3.5) ? step(loc.y, pSill) * (1.0 - smoothstep(0.0, 0.5 + 1.6 * colN, pSill - loc.y)) * hwin(loc.x, pWW * 0.5 + 0.15, 0.1) : 0.0;
     float underCorn = (!ground) ? (1.0 - smoothstep(pCorn, pCorn + 2.0 + 4.0 * colN, dTop)) * step(pCorn, dTop) * (0.35 + 0.65 * stK) : 0.0;
     float splash = 1.0 - smoothstep(0.0, 1.4 + 0.8 * stK, y);
-    float streaks = smoothstep(0.45, 0.8, vn(vec2(u * 4.0 + seed * 11.0, y * 0.07))) * (0.5 + 0.5 * (1.0 - smoothstep(0.0, 60.0, dTop)));
-    float soot = clamp(dirt + 0.55 * belowSill * age + 0.5 * underCorn * age + 0.45 * splash * age + 0.25 * streaks * age * (pFam < 0.5 ? 0.0 : 1.0), 0.0, 0.85);
+    float streaks = mix(0.3, smoothstep(0.45, 0.8, vn(vec2(u * 4.0 + seed * 11.0, y * 0.07))), 1.0 - smoothstep(0.06, 0.25, w)) * (0.5 + 0.5 * (1.0 - smoothstep(0.0, 60.0, dTop)));
+    float sillRun = 0.0;   // v25: 창 모서리에서 아래로 흘러내린 빗물 자국(구멍창 계열)
+    if (!ground && pFam > 0.5 && pFam < 2.5) {
+      float dxE = abs(abs(loc.x) - pWW * 0.5);
+      sillRun = (1.0 - smoothstep(0.0, 0.14 + 0.22 * colN, dxE)) * step(loc.y, pSill) * (1.0 - smoothstep(0.0, pFH * 0.9, pSill - loc.y)) * (1.0 - smoothstep(0.06, 0.25, w)) * (1.0 - nmLodW);
+    }
+    float soot = clamp(dirt + 0.55 * belowSill * age + 0.5 * underCorn * age + 0.45 * splash * age + 0.25 * streaks * age * (pFam < 0.5 ? 0.0 : 1.0) + 0.30 * sillRun * age, 0.0, 0.85);
     col *= 1.0 - soot * 0.62 * wallM * (pFam < 0.5 ? 0.35 : 1.0);
     rough = mix(rough, 1.0, soot * 0.4 * wallM * step(0.5, pFam));
+    // ---- v25: 구멍창 깊이감 — 개구부 둘레 AO · 창턱 윗면 하이라이트 · 창 위 린텔 그림자 ----
+    if (!ground && pFam > 0.5 && pFam < 2.5) {
+      float hwO = pWW * 0.5, wy0o = pSill, wy1o = pSill + pWH, aaO = (1.0 - smoothstep(0.08, 0.30, w)) * (1.0 - nmLodW);
+      float dTopO = loc.y - wy1o, dSideO = abs(loc.x) - hwO;
+      float haloT = (1.0 - smoothstep(0.0, 0.30, dTopO)) * step(0.0, dTopO) * hwin(loc.x, hwO + 0.22, 0.08);                    // 린텔 아래·위 그림자
+      float haloS = (1.0 - smoothstep(0.0, 0.16, dSideO)) * step(0.0, dSideO) * sb(loc.y, wy0o - 0.06, wy1o + 0.10, 0.05);      // 좌우 개구부 가장자리
+      float sillHi = hwin(loc.x, hwO + 0.12, 0.05) * sb(loc.y, wy0o - 0.13, wy0o - 0.02, 0.03);                                  // 창턱 윗면
+      col *= 1.0 - 0.24 * max(haloT, 0.7 * haloS) * aaO * wallM;
+      col = mix(col, col * 1.22 + 0.02, sillHi * aaO * (0.4 + 0.6 * clamp(uWxDay, 0.0, 1.0)) * wallM);
+    }
+    // ---- v25: 파라펫 코핑(밝은 캡) + 코핑 아래 그림자 + 코니스 밝은 석재 (셋백 단마다 wallTop 기준) ----
+    if (!ground && pFam > 0.5 && pFam < 3.5) {
+      float copA = 1.0 - smoothstep(0.10, 0.35, w);
+      float cop = sb(dTop, 0.0, 0.20, w);
+      float parSh = sb(dTop, 0.20, 0.75, w) * copA;
+      float corM = pCorn > 0.05 ? (1.0 - smoothstep(pCorn * 0.65, pCorn, dTop)) : 0.0;
+      col = mix(col, wallC * 1.10 + 0.03, corM * 0.55 * wallM);
+      col = mix(col, wallC * 1.18 + 0.05, cop * 0.75 * wallM);
+      col *= 1.0 - 0.14 * parSh * wallM;
+    }
     float cor = 99.0; vec2 cuv = (vWP.xz - uCorC.xy) / uCorC.z + 0.5;
     if (cuv.x > 0.0 && cuv.x < 1.0 && cuv.y > 0.0 && cuv.y < 1.0) cor = texture2D(tCor, cuv).r * 8.0;
     float chip = vn(vec2(y * 2.3, cor * 2.0) + seed * 9.0);
@@ -4101,7 +4290,7 @@ void shopCell(float u, float y, float w, float gH, float SW, out float h, out ve
     col *= 1.0 + 0.10 * clamp(length(vec2(hx - h0, hy - h0)) / eps * 0.25, 0.0, 1.0) * nearK * wallM;
     // ---- 유리 (v20): 실시간 레이마칭 도시 반사 + 판별 법선 일렁임 + Ray-Box 실내 + Schlick 프레넬 ----
     float rWin = h21(vec2(cellId.x, cellId.y) + seed * 13.0), fbs = h21(vec2(cellId.y, seed * 37.0 + 3.1));
-    float lit = ground ? step(shp.z, 0.9) : step(rWin, clamp(lf * (0.35 + 1.3 * fbs), 0.0, 0.92));
+    float lit = ground ? step(shp.z, 0.9) : mix(step(rWin, clamp(lf * (0.35 + 1.3 * fbs), 0.0, 0.92)), clamp(lf * (0.35 + 1.3 * fbs), 0.0, 0.92), nmLodW);   // v25: LOD 구간은 창별 점등 대신 층별 평균 점등률
     float blind = step(0.78, h21(cellId + seed * 17.0)) * (1.0 - lit) * (pFam < 0.5 ? 0.0 : 1.0);
     float cool = step(pFam < 0.5 ? 0.45 : 0.82, h21(cellId + 3.7));
     vec3 lc = mix(vec3(1.0, 0.78, 0.46), vec3(0.78, 0.9, 1.0), cool); if (ground) lc = vec3(1.0, 0.82, 0.55) * 1.25;
@@ -4120,6 +4309,16 @@ void shopCell(float u, float y, float w, float gH, float SW, out float h, out ve
       emi += cwEnvR_ * 0.5 * spd * uWinQ;
     }
 #endif
+    {   // v25: 구멍창 안쪽 AO — 상단(린텔 그림자)·좌우 측벽 쪽을 어둡게, 하단(창턱)은 그대로. wxGlass 는 그대로 두고 결과 방출광에만 곱한다
+      float gvK = (pFam < 0.5 || ground) ? 0.0 : (gRib > 0.5 ? 0.55 : 1.0);
+      if (gvK > 0.0 && gls > 0.01) {
+        float aT = 1.0 - smoothstep(0.0, 0.42, (1.0 - uvW.y) * pWH);
+        float aS = 1.0 - smoothstep(0.0, 0.20, min(uvW.x, 1.0 - uvW.x) * pWW);
+        float aoG = 1.0 - (1.0 - 0.50 * aT) * (1.0 - 0.32 * aS);
+        emi *= 1.0 - aoG * gvK * (1.0 - nmLodW);
+        emi *= mix(1.0, 0.60, gRib * (1.0 - nmLodW));   // 60~70년대 착색 유리: 짙은 가로 창띠
+      }
+    }
     if (pFam < 0.5) col = mix(col, gWC * 0.6, spd * 0.9);
     col = mix(col, glassC, gls * (pFam < 0.5 ? 0.97 : 0.94) * uWinQ);
     rough = mix(rough, 0.85, gls * uWinQ); metal = mix(metal, 0.0, gls * uWinQ);   // 거울 반사는 방출광이 담당 → PBR 스펙큘러/IBL(큐브맵) 기여를 없앰
@@ -4177,6 +4376,7 @@ void shopCell(float u, float y, float w, float gH, float SW, out float h, out ve
 #endif
     }
     float shadowK = 1.0 - 0.45 * shd * (1.0 - uWinGlow * 0.55);
+    col *= nmSunTint(lnn, (pFam < 0.5 ? 0.35 : 1.0) * wallM);   // v25: 양지 = 따뜻한 베이지/황금, 음지 = 차가운 청회색
     diffuseColor.rgb = col * ao * shadowK;
     gRough = rough; gMetal = metal; totalEmissiveRadiance += emi; gWN = wn; gUse = nearK > 0.005 || length(bump) > 0.0 ? 1.0 : 0.0;
     vfxWin = gls;
@@ -4189,6 +4389,23 @@ void shopCell(float u, float y, float w, float gH, float SW, out float h, out ve
       float seam = (1.0 - smoothstep(0.455, 0.5, sm)) * 0.0 + smoothstep(0.5 - 0.035 - rw, 0.5 - rw * 0.2, sm) * (1.0 - smoothstep(0.1, 0.35, rw));
       float pond = smoothstep(0.62, 0.78, fbm((vLP.xz - vAnc) * 0.22 + 3.1)) * 0.22 * (1.0 - smoothstep(0.1, 0.5, rw));
       diffuseColor.rgb *= 1.0 - 0.18 * seam - pond;
+    }
+    {   // v25: 옥상 설비(기계실 박스·에어컨/냉각 팬·급수탑·포장 테라스). 발자국이 커지면(멀어지면) 평균색으로 소거
+      float rcd = length(vCP);
+      vec2 rpp = vLP.xz - vAnc;
+      float rfw = max(fwidth(rpp.x), fwidth(rpp.y));
+      float rkk = (1.0 - smoothstep(0.30, 1.10, rfw)) * (1.0 - smoothstep(450.0, 900.0, rcd));
+      if (rkk > 0.01) {
+#if NUM_DIR_LIGHTS > 0
+        vec3 rLw = normalize((vec4(directionalLights[0].direction, 0.0) * viewMatrix).xyz);
+#else
+        vec3 rLw = normalize(vec3(0.4, 0.8, 0.3));
+#endif
+        vec2 rsh = rLw.xz / max(rLw.y, 0.35);
+        rsh *= min(1.0, 0.9 / max(length(rsh), 1e-3));
+        vec3 rcol = roofDetail(rpp, rfw, vSty.y, H, diffuseColor.rgb, rsh, smoothstep(0.0, 0.20, rLw.y));
+        diffuseColor.rgb = mix(diffuseColor.rgb, rcol, rkk);
+      }
     }
   }
 }
@@ -12483,7 +12700,7 @@ class RGSRT {
     if (!this.lv) this._init();
     const cam = this.g.camera, px = cam.position.x, pz = cam.position.z, now = performance.now();
     const sig = (typeof NM !== 'undefined' && NM.cellMeshes) ? NM.cellMeshes.length : 0;
-    if (this.built && Math.hypot(px - this.cx, pz - this.cz) < 600 && now - this.t < 90000 && !(sig - (this.sig || 0) >= 6 && now - this.t > 4000)) return;
+    if (this.built && Math.hypot(px - this.cx, pz - this.cz) < 900 && now - this.t < 240000 && !(sig - (this.sig || 0) >= 6 && now - this.t > 4000)) return;
     this.sig = sig;
     this.build(px, pz);
   }
