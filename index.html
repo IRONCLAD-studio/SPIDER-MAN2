@@ -3877,7 +3877,7 @@ vec3 wxGlass(vec3 wn, vec3 vv, vec3 T3, vec2 uv, vec2 pane, float bayW, vec2 pid
 // v25: 햇빛 받는 면은 따뜻한 황금빛, 그늘 면은 차가운 청회색 — 알베도 쪽 미세 보정(조명/노출/안개는 건드리지 않는다). sunF = dot(태양 방향, 벽 법선)
 vec3 nmSunTint(float sunF, float k){
   float dayK = clamp(uWxDay, 0.0, 1.0) * (1.0 - 0.7 * uWxOc) * k;
-  vec3 warm = vec3(1.07, 1.00, 0.87), cool = vec3(0.91, 0.97, 1.08);
+  vec3 warm = vec3(1.13, 1.00, 0.80), cool = vec3(0.86, 0.95, 1.12);
   return mix(vec3(1.0), mix(cool, warm, smoothstep(0.05, 0.55, sunF)), dayK);
 }
 void facParams(float sid, float seed, float H, float cat){
@@ -3888,10 +3888,12 @@ void facParams(float sid, float seed, float H, float cat){
   if (sid < 0.5) {                                   // ① 현대 청록/은색/흑청색 통유리 커튼월
     pFam = 0.0; pBW = r2 < 0.34 ? 1.35 : (r2 < 0.67 ? 1.5 : 1.8); pFH = 3.8 + 0.5 * r3; pSill = r1 > 0.72 ? 0.03 : 0.8 + 0.3 * r3; pCorn = 0.45; pDepth = 0.05;
     // v16: 사진 같은 통유리 — 파란 거울 유리 / 청록 / 거의 검은 남색 / 밝은 은청색, 멀리언은 은빛, 스팬드럴은 짙은 남색 유리
-    if (v < 0.42) { gGC = vec3(0.07, 0.15, 0.25); gWC = vec3(0.045, 0.085, 0.14); gAC = vec3(0.12, 0.145, 0.18); }          // 짙은 청회색 유리
-    else if (v < 0.68) { gGC = vec3(0.075, 0.19, 0.25); gWC = vec3(0.05, 0.11, 0.14); gAC = vec3(0.10, 0.145, 0.155); }   // 청록 회색
-    else if (v < 0.86) { gGC = vec3(0.045, 0.075, 0.12); gWC = vec3(0.03, 0.05, 0.085); gAC = vec3(0.08, 0.09, 0.11); }  // 거의 검은 남색
-    else { gGC = vec3(0.16, 0.26, 0.36); gWC = vec3(0.10, 0.16, 0.23); gAC = vec3(0.16, 0.19, 0.23); }                    // 밝은 은청색
+    if (v < 0.30) { gGC = vec3(0.06, 0.15, 0.28); gWC = vec3(0.04, 0.085, 0.15); gAC = vec3(0.12, 0.145, 0.19); }          // 짙은 청색 유리
+    else if (v < 0.50) { gGC = vec3(0.06, 0.21, 0.26); gWC = vec3(0.04, 0.12, 0.15); gAC = vec3(0.09, 0.15, 0.16); }   // 청록 유리
+    else if (v < 0.64) { gGC = vec3(0.045, 0.075, 0.12); gWC = vec3(0.03, 0.05, 0.085); gAC = vec3(0.08, 0.09, 0.11); }  // 거의 검은 남색
+    else if (v < 0.80) { gGC = vec3(0.19, 0.29, 0.40); gWC = vec3(0.12, 0.18, 0.26); gAC = vec3(0.18, 0.21, 0.26); }   // 밝은 은청색
+    else if (v < 0.91) { gGC = vec3(0.21, 0.15, 0.085); gWC = vec3(0.13, 0.09, 0.05); gAC = vec3(0.20, 0.15, 0.10); }  // 청동·호박색 유리
+    else { gGC = vec3(0.06, 0.20, 0.15); gWC = vec3(0.04, 0.12, 0.09); gAC = vec3(0.09, 0.16, 0.13); }                   // 녹색 유리
   } else if (sid < 1.5) {                            // ② 아르데코 석조/콘크리트
     pFam = 1.0;
     // v25: 높이·구역(연식)·해시로 '전후 석조(아르데코)' ↔ '1960~70년대 오피스(흰 기둥 + 짙은 가로 창띠)' 를 가른다. 둘 다 pFam=1 분기를 공유
@@ -3904,9 +3906,9 @@ void facParams(float sid, float seed, float H, float cat){
       gAC = gWC * 0.90; gGC = vec3(0.04, 0.06, 0.09);
     } else {
       pBW = 2.6 + 0.6 * r2; pFH = 3.6 + 0.6 * r3; pWW = 0.95 + 0.35 * r4; pWH = 1.7 + 0.3 * r1; pSill = 0.85; pCorn = 0.9 + 0.8 * r3; gStone = 1.0;
-      if (v < 0.28) gWC = vec3(0.70, 0.66, 0.57);        // 석회암 베이지
+      if (v < 0.28) gWC = vec3(0.74, 0.67, 0.54);        // 석회암 베이지
       else if (v < 0.50) gWC = vec3(0.60, 0.61, 0.62);   // 회색 석조
-      else if (v < 0.72) gWC = vec3(0.65, 0.58, 0.47);   // 황갈
+      else if (v < 0.72) gWC = vec3(0.70, 0.58, 0.43);   // 황갈
       else if (v < 0.88) gWC = vec3(0.49, 0.50, 0.52);   // 짙은 회색
       else gWC = vec3(0.55, 0.45, 0.39);                 // 적갈 석조
       gWC *= 0.94 + 0.12 * v2;
@@ -3916,8 +3918,8 @@ void facParams(float sid, float seed, float H, float cat){
     pFam = 2.0; pBW = 2.5 + 0.5 * r2; pFH = 3.1 + 0.25 * r3; pWW = 0.95 + 0.2 * r4; pWH = 1.7 + 0.2 * r1; pSill = 0.75; pCorn = 1.0 + 0.5 * r3; gBrick = 1.0;
     float brown = (H < 24.0 && cat > 0.5 && v < 0.55) ? 1.0 : 0.0;
     if (brown > 0.5) { gWC = vec3(0.36, 0.25, 0.20); gBrick = 0.0; gStone = 1.0; }
-    else if (v < 0.40) gWC = vec3(0.50, 0.26, 0.20);   // 적갈 벽돌(채도 낮춤)
-    else if (v < 0.62) gWC = vec3(0.43, 0.30, 0.24);   // 갈색 벽돌
+    else if (v < 0.40) gWC = vec3(0.56, 0.25, 0.18);   // 적갈 벽돌
+    else if (v < 0.62) gWC = vec3(0.45, 0.29, 0.21);   // 갈색 벽돌
     else if (v < 0.82) gWC = vec3(0.65, 0.55, 0.42);   // 황갈/베이지 벽돌
     else gWC = vec3(0.58, 0.54, 0.47);                 // 회갈색 벽돌
     gWC *= 0.95 + 0.10 * v2;
@@ -8406,13 +8408,13 @@ function applyWeatherTheme(mode) {
   // 환경광 = 하늘색(위) + 지면 반사색(아래). 노을은 따뜻한 직사광 + 차가운 보랏빛 그늘, 낮은 청백색 하늘광 + 따뜻한 지면 반사.
   if (mode === 'day') {
     scene.background.setHex(0x38bdf8);
-    scene.fog.color.setHex(0x93d3f6);
-    scene.fog.density = 0.00032;
+    scene.fog.color.setHex(0xaecfec);
+    scene.fog.density = 0.00018;
     hemiLightRef.color.setHex(0xcfe4ff);
     hemiLightRef.groundColor.setHex(0x4d4438);
-    hemiLightRef.intensity = 0.60;   // v6: 그림자 암부를 더 진하게(환경광↓·직사광↑)
-    sunLight.color.setHex(0xfff0d2);
-    sunLight.intensity = 2.0;
+    hemiLightRef.intensity = 0.46;   // v6: 그림자 암부를 더 진하게(환경광↓·직사광↑)
+    sunLight.color.setHex(0xffe2b6);
+    sunLight.intensity = 2.3;
     sunLight.position.set(300, 430, 230);      // 고도 약 49° — 건물 높이의 0.9배 길이 그림자
   } else if (mode === 'sunset') {
     scene.background.setHex(0xffa13b);
@@ -9497,7 +9499,7 @@ const GFX_CLOUD = {
   night:  { lo: 0.54, hi: 0.76, a: 0.80, topFade: 1.0, dark: 0.35, lit: [0.05, 0.065, 0.12], shade: [0.006, 0.009, 0.02], rim: [0.15, 0.20, 0.35], wind: 0.0035 }
 };
 const GFX_SKY = {
-  day:    { top: 0x1f6fc9, exp: 0.85, star: 0.0, sun: 0xfff1c9, sunI: 1.0, expo: 1.10, bloom: 0.35 },
+  day:    { top: 0x1f6fc9, exp: 0.85, star: 0.0, sun: 0xfff1c9, sunI: 1.0, expo: 1.03, bloom: 0.35 },
   sunset: { top: 0xff982b, exp: 0.62, star: 0.0, sun: 0xffedc2, sunI: 1.7, expo: 1.08, bloom: 0.40 },
   cloudy: { top: 0x6b7c8e, exp: 0.60, star: 0.0, sun: 0xdde6ee, sunI: 0.0, expo: 1.10, bloom: 0.30 },
   night:  { top: 0x01040c, exp: 0.65, star: 1.0, sun: 0x8aa6ee, sunI: 0.30, expo: 1.08, bloom: 1.6 }
@@ -9892,9 +9894,10 @@ function gfxBloomInit() {
           }
           // 컬러 그레이딩: 대비 + 채도 + 따뜻한 하이라이트/차가운 그림자
           float l = dot(c, vec3(0.299, 0.587, 0.114));
-          c = mix(vec3(l), c, 1.16);
-          c = (c - 0.5) * 1.07 + 0.5;
-          c *= mix(vec3(0.96, 0.99, 1.05), vec3(1.05, 1.0, 0.94), smoothstep(0.1, 0.9, l));
+          c = mix(vec3(l), c, 1.28);
+          { vec3 cs_ = clamp(c, 0.0, 1.0); c += (cs_ * cs_ * (3.0 - 2.0 * cs_) - cs_) * 0.28; }   // 부드러운 S커브(중간톤 대비↑, 1 초과 하이라이트는 그대로)
+          c = (c - 0.5) * 1.08 + 0.5;
+          c *= mix(vec3(0.92, 0.98, 1.08), vec3(1.08, 1.01, 0.91), smoothstep(0.1, 0.9, l));
           // 비네트 + 필름 그레인
           c *= 1.0 - 0.34 * smoothstep(0.35, 1.05, length((uv - 0.5) * vec2(aspect * 0.9, 1.1)));
           // (필름 그레인 제거: 모바일에서 화면 고정 가로줄 유발)
@@ -12334,10 +12337,10 @@ const LUX_KF = [
   { el: -9,  fog: 0x141b38, top: 0x070e2c, hs: 0x44559a, hg: 0x080a16, hi: 0.36, sc: 0x9bb8ff, si: 0.40, ex: 1.10, fd: 0.00046, bl: 1.4 },
   { el: -4,  fog: 0x6a4a66, top: 0x1e2c66, hs: 0x7f7cc4, hg: 0x2c2028, hi: 0.52, sc: 0xff6a3a, si: 0.35, ex: 1.16, fd: 0.00044, bl: 1.1 },
   { el: -1,  fog: 0xd9803f, top: 0x4a5aa8, hs: 0xa59ad8, hg: 0x5a3322, hi: 0.72, sc: 0xff7a2e, si: 1.30, ex: 1.10, fd: 0.00040, bl: 0.55 },
-  { el: 4,   fog: 0xf2994a, top: 0x6d78bd, hs: 0xb5a6e0, hg: 0x6a3d28, hi: 0.82, sc: 0xff9a3a, si: 1.95, ex: 1.08, fd: 0.00038, bl: 0.38 },
-  { el: 12,  fog: 0xe0c7a2, top: 0x3f80d4, hs: 0xcfdcff, hg: 0x5a4a3a, hi: 0.86, sc: 0xffd29a, si: 1.90, ex: 1.08, fd: 0.00034, bl: 0.34 },
-  { el: 30,  fog: 0xb4d8f0, top: 0x1560d6, hs: 0xcfe4ff, hg: 0x4d4438, hi: 0.86, sc: 0xfff0d2, si: 1.70, ex: 1.10, fd: 0.00032, bl: 0.35 },
-  { el: 70,  fog: 0xb4d8f0, top: 0x1560d6, hs: 0xd2e6ff, hg: 0x4d4438, hi: 0.86, sc: 0xfff4de, si: 1.75, ex: 1.10, fd: 0.00031, bl: 0.35 }
+  { el: 4,   fog: 0xf2994a, top: 0x6d78bd, hs: 0xb5a6e0, hg: 0x6a3d28, hi: 0.70, sc: 0xff9a3a, si: 2.20, ex: 1.06, fd: 0.00028, bl: 0.38 },
+  { el: 12,  fog: 0xe3c9a2, top: 0x3a7cd2, hs: 0xc4d6fa, hg: 0x6a5238, hi: 0.66, sc: 0xffcf92, si: 2.20, ex: 1.03, fd: 0.00022, bl: 0.34 },
+  { el: 30,  fog: 0xaecfec, top: 0x1560d6, hs: 0xc2dafa, hg: 0x5c4a38, hi: 0.62, sc: 0xffe2b6, si: 2.00, ex: 1.03, fd: 0.00018, bl: 0.35 },
+  { el: 70,  fog: 0xaecfec, top: 0x1560d6, hs: 0xc8def8, hg: 0x5c4a38, hi: 0.64, sc: 0xffe8c0, si: 2.00, ex: 1.03, fd: 0.00017, bl: 0.35 }
 ];
 const _lc = { a: new THREE.Color(), b: new THREE.Color() };
 function luxKF(el) {
@@ -14901,7 +14904,7 @@ RealisticCityEnvironment.DEFAULTS = {
   bloom: { strength: 0.55, radius: 0.55, threshold: 1.0 },
   ssao: { kernelRadius: 4.5, minDistance: 0.00006, maxDistance: 0.0025, strength: 0.9, scale: 0.6, fadeNear: 90, fadeFar: 260 },
   ssr: { strength: 1.0, maxDistance: 90, fadeFar: 420, scale: 1 },
-  grade: { vignette: 0.28, grain: 0.018, chromatic: 0.012, saturation: 1.0 },
+  grade: { vignette: 0.28, grain: 0.018, chromatic: 0.012, saturation: 1.12 },
   rain: { particles: true, count: 9000 }
 };
 
