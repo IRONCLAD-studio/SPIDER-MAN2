@@ -6516,7 +6516,7 @@ const LDM_GLSL = {
     lRgh = 0.8; lMtl = 0.0;`,
   darkmetal: `
     float br = lN(vec2(lu.x * 30.0, lu.y * 0.2));
-    lAlb = diffuseColor.rgb * 0.55 * (0.9 + 0.2 * br); lRgh = 0.4; lMtl = 0.8; lRf = 0.5; lSl.x = (br - 0.5) * 0.05 * lFine;`,
+    lAlb = max(diffuseColor.rgb * 0.80, vec3(0.20, 0.21, 0.235)) * (0.9 + 0.2 * br); lRgh = 0.55; lMtl = 0.12; lRf = 0.30; lSl.x = (br - 0.5) * 0.05 * lFine;`,   // 도장된 차콜 금속(거울처럼 검게 뚫리지 않게: 금속성↓·알베도 하한)
   glass432: `
     vec2 cell = vec2(floor(lu.x / 5.35 + 0.5), lFl);
     lAlb = vec3(0.020, 0.032, 0.045) * (0.7 + 0.9 * lH(cell + 2.7)) + vec3(0.02, 0.025, 0.03) * smoothstep(0.55, 1.0, lFf) * 0.5;
@@ -6744,8 +6744,11 @@ function ldmPlace() {
     let gy = 1e9; for (const p of [[0, 0]].concat(t.hull)) gy = Math.min(gy, nmGroundAt(cx + p[0], cz + p[1]));   // 부지 내 최저 지반에 앉힘(공중부양 방지)
     if (!isFinite(gy) || gy > 1e8) gy = 0; gy -= 0.15;
     const o = t._gltf.scene; o.name = 'Landmark_' + t.key;
+    o.position.set(0, 0, 0); o.updateMatrixWorld(true);
+    let liftY = 0; try { const bb = new THREE.Box3().setFromObject(o); if (isFinite(bb.min.y) && bb.min.y > 0.05 && bb.min.y < 120) liftY = bb.min.y; } catch (e) {}   // 모델 최하단이 0m보다 높으면(공중부양) 그만큼 내려 지면에 붙인다
+    console.log('[landmark]', t.key, 'model min y', liftY.toFixed(2));
     const yawT = t.yaw + (LDM.yawAdjDeg[t.key] || 0) * Math.PI / 180;
-    o.position.set(cx, gy, cz); o.rotation.y = 0;   // 외벽 셰이더는 월드축 정렬 좌표를 가정 → 회전은 지오메트리에 굽는다
+    o.position.set(cx, gy - liftY, cz); o.rotation.y = 0;   // 외벽 셰이더는 월드축 정렬 좌표를 가정 → 회전은 지오메트리에 굽는다
     const wallMat = window.__baseWallMat || nmMakeMaterial();
     o.traverse(m => {
       if (!m.isMesh) return; m.castShadow = false; m.receiveShadow = true; m.renderOrder = 2.6;
