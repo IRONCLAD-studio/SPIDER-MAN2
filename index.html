@@ -3169,7 +3169,7 @@ function nmBuildCols(g) {
   const P = NM.parts[bx.p], r = nmExtractRings(P.d, bx.i);
   let mi = -1, ma = -1;   // 가장 넓은 단(=지상 외벽)을 주 외곽선으로 표시 (비상계단·어닝용)
   r.rings.forEach((q, k) => { let a = 0; const rg = q.ring; for (let t = 0; t < rg.length; t++) { const p = rg[t], s = rg[(t + 1) % rg.length]; a += p.x * s.z - s.x * p.z; } a = Math.abs(a); if (a > ma) { ma = a; mi = k; } });
-  r.rings.forEach((q, k) => { nmRegister({ name: 'NYC building #' + g, ringXZ: q.ring, cring: q.cring || q.ring, minY: r.base, maxY: q.y, nm: true, winProf: bx.prof, btypeHint: bx.shop ? '' : 'apartments', bx, main: k === mi }); NM.nBuilt++; });
+  const _cols = []; r.rings.forEach((q, k) => { const _c = { name: 'NYC building #' + g, ringXZ: q.ring, cring: q.cring || q.ring, minY: r.base, maxY: q.y, nm: true, winProf: bx.prof, btypeHint: bx.shop ? '' : 'apartments', bx, main: k === mi }; nmRegister(_c); _cols.push(_c); NM.nBuilt++; }); bx._cols = _cols;   // [MEM] 해제용 보관
 }
 function nmEnsureCell(k) {
   if (NM.cellDone.has(k)) return; NM.cellDone.add(k);
@@ -3197,6 +3197,37 @@ function nmAnchorCell(k) {
   if (NM.anchDone.has(k)) return; NM.anchDone.add(k);
   const l = spatialColliderGrid.get(k); if (!l) return;
   for (let i = 0; i < l.length; i++) if (!l[i]._an) nmMakeAnchors(l[i]);
+}
+// [MEM] 멀어진 구역의 충돌체·웹 부착점을 해제 (재접근 시 nmEnsureCell 이 다시 생성)
+function nmEvictFar(cx, cz, R) {
+  const M = spatialColliderGrid._m, A = spatialAnchorGrid._m, S = SPATIAL_CELL, t0 = performance.now();
+  const farCell = (a, b) => Math.hypot((a + 0.5) * S - cx, (b + 0.5) * S - cz) > R;
+  for (const k of NM.cellDone) {
+    if (performance.now() - t0 > 4) break;   // 프레임 예산
+    const i = k.indexOf(','), ka = +k.slice(0, i), kb = +k.slice(i + 1);
+    if (!farCell(ka, kb)) continue;
+    const l = NM.idx.get(k);
+    if (l) for (let n = 0; n < l.length; n++) {
+      const bx = NM.bx[l[n]]; if (!bx || !bx.built || !bx._cols) continue;
+      let ok = true; const spans = [];
+      for (const c of bx._cols) {
+        const g0 = Math.floor((c.minX - 0.5) / S), g1 = Math.floor((c.maxX + 0.5) / S), h0 = Math.floor((c.minZ - 0.5) / S), h1 = Math.floor((c.maxZ + 0.5) / S);
+        if ((g1 - g0 + 1) * (h1 - h0 + 1) > 64) { ok = false; break; }
+        for (let a = g0; a <= g1 && ok; a++) for (let b = h0; b <= h1; b++) if (!farCell(a, b)) { ok = false; break; }
+        spans.push([c, g0, g1, h0, h1]);
+      }
+      if (!ok) continue;
+      for (const [c, g0, g1, h0, h1] of spans) for (let a = g0; a <= g1; a++) for (let b = h0; b <= h1; b++) {
+        const ck = a + ',' + b, cl = M.get(ck);
+        if (cl) { const j = cl.indexOf(c); if (j >= 0) cl.splice(j, 1); if (!cl.length) M.delete(ck); }
+        const al = A.get(ck);
+        if (al) { const nl = al.filter(sp => sp.userData.ringXZ !== c.ringXZ); if (nl.length) A.set(ck, nl); else A.delete(ck); NM.anchDone.delete(ck); }
+        NM.nBuilt--;
+      }
+      bx.built = false; bx._cols = null;
+    }
+    NM.cellDone.delete(k); NM.anchDone.delete(k);
+  }
 }
 function nmPrewarm(x, z, R) {
   const gx = Math.floor(x / SPATIAL_CELL), gz = Math.floor(z / SPATIAL_CELL), n = Math.ceil(R / SPATIAL_CELL);
@@ -5146,13 +5177,21 @@ function nmFrame(dt) {
   if (NR.lcT) NR.lcT.value += dt;
   fcUpdate(dt);
   if (NM.ready) realEnvTick();
-  if (!NM.ready) return; NM.camT += dt; if (NM.camT < 0.3) return; NM.camT = 0;
+  if (!NM.ready) return;
+  { // [PERF] 큐에 쌓인 셀을 프레임당 ~3ms 예산 안에서만 생성 (고속 비행 시 한 프레임 몰림 방지)
+    const q = NM._pq; if (q && q.length) { const t0 = performance.now(); do { nmEnsureCell(q.shift()); } while (q.length && performance.now() - t0 < 3); } }
+  NM.camT += dt; if (NM.camT < 0.3) return; NM.camT = 0;
+  if ((NM._evT = (NM._evT || 0) + 1) >= 10) { NM._evT = 0; try { nmEvictFar(camera.position.x, camera.position.z, 1300); } catch (e) { console.warn('evict', e); } }   // [MEM]
   ldmTick();
   const cx = camera.position.x, cz = camera.position.z, R = (GFXU.chunk || 2300) + 250;
   for (const c of NM.cellMeshes) c.mesh.visible = Math.hypot(c.x - cx, c.z - cz) < (c.r || R) + 300;
   if (window.__winFar) window.__winFar.value = Math.min(2600, Math.max(250, gfxEffDetail() * 1.0));
-  const gx = Math.floor(player.pos.x / SPATIAL_CELL), gz = Math.floor(player.pos.z / SPATIAL_CELL);
-  for (let a = -3; a <= 3; a++) for (let b = -3; b <= 3; b++) nmEnsureCell((gx + a) + ',' + (gz + b));
+  { // [PERF] 진행 방향 앞쪽(최대 ~240m)을 중심으로 후보 셀을 모아 가까운 순서대로 큐에 넣음
+    const pv = player.vel, ax = Math.max(-240, Math.min(240, (pv ? pv.x : 0) * 0.8)), az = Math.max(-240, Math.min(240, (pv ? pv.z : 0) * 0.8));
+    const gx = Math.floor((player.pos.x + ax) / SPATIAL_CELL), gz = Math.floor((player.pos.z + az) / SPATIAL_CELL);
+    const q = NM._pq || (NM._pq = []), c = [];
+    for (let a = -3; a <= 3; a++) for (let b = -3; b <= 3; b++) { const k = (gx + a) + ',' + (gz + b); if (!NM.cellDone.has(k)) c.push([a * a + b * b, k]); }
+    c.sort((u, v) => u[0] - v[0]); q.length = 0; for (let i = 0; i < c.length; i++) q.push(c[i][1]); }
 }
 
 // =============================================================================
@@ -7335,9 +7374,9 @@ const glide = { active: false, alpha: 0.12, bank: 0, speed: 0, liftG: 1, ld: 0, 
 // ── ⑥ 속도 기반 카메라 컨트롤러 (플레이어 로직과 분리: 속력 → FOV / 추적 거리) ──
 const SpeedCamera = {
   speedMin: 12.0, speedMax: 62.0,        // m/s  이 구간에서 0→1 매핑
-  fovMin: 70.0, fovMax: 95.0,           // deg
-  distMin: 4.2, distMax: 8.8,            // m  cameraFollowDistance
-  glideFovBonus: 4.0, glideDistBonus: 1.2, glideRollGain: 0.35,
+  fovMin: 70.0, fovMax: 79.0,           // deg  [TUNE] 고속 시 화각 확대 축소 (95→79)
+  distMin: 4.2, distMax: 5.6,            // m  cameraFollowDistance  [TUNE] 고속 시 카메라 후퇴 축소 (8.8→5.6)
+  glideFovBonus: 1.5, glideDistBonus: 0.4, glideRollGain: 0.35,
   speedRise: 5.0, speedFall: 1.8,        // 1/s 측정 속도 스무딩(가속 빠르게, 감속 천천히)
   fovRise: 4.5, fovFall: 2.0, distRise: 3.0, distFall: 1.6,
   speedSm: 0, dist: 4.2, k: 0, targetFov: 72.0,
@@ -9288,7 +9327,7 @@ function updateSpeedFX(speed) {
   if (!speedFxEl) {
     speedFxEl = document.createElement('div');
     const m = 'radial-gradient(ellipse at center, rgba(0,0,0,0) 38%, #000 82%)';
-    speedFxEl.style.cssText = 'position:absolute;inset:-25%;z-index:8;pointer-events:none;opacity:0;will-change:transform,opacity;'
+    speedFxEl.style.cssText = 'position:absolute;inset:0;z-index:8;pointer-events:none;opacity:0;will-change:opacity;contain:strict;transform:translateZ(0);'
       + 'background:radial-gradient(ellipse at center, rgba(0,0,0,0) 45%, rgba(2,6,23,0.6) 80%),'
       + 'repeating-conic-gradient(from 0deg at 50% 50%, rgba(255,255,255,0) 0deg 4deg, rgba(255,255,255,0.16) 4.3deg 4.7deg, rgba(255,255,255,0) 5deg 9deg);'
       + '-webkit-mask-image:' + m + ';mask-image:' + m + ';';
@@ -9296,8 +9335,7 @@ function updateSpeedFX(speed) {
   }
   const on = isPOVMode && !isSpectator && !isBirdEyeMode;
   const k = on ? Math.min(0.7, Math.max(0, (speed - 26) / 50)) : 0;
-  speedFxEl.style.opacity = k.toFixed(3);
-  if (k > 0) speedFxEl.style.transform = 'rotate(' + ((performance.now() * 0.03 * (0.5 + k)) % 360).toFixed(1) + 'deg)';
+  const ks = k.toFixed(2); if (speedFxEl._k !== ks) { speedFxEl._k = ks; speedFxEl.style.opacity = ks; }   // [PERF] 회전 제거(마스크 레이어 매 프레임 재합성 방지), 값 바뀔 때만 갱신
 }
 
 function msm2SpeedCap() { const k = slingState.carryT > 0 ? slingState.carryT / 8 : 0; return MSM2_MAX_SPEED_MS + slingState.carryExtra * k; }
