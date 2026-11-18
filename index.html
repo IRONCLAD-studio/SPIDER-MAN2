@@ -15543,10 +15543,30 @@ html.ipad-mode,html.ipad-mode body{touch-action:manipulation;overscroll-behavior
   }
   function armWhoosh() { burst({ kind: 'p', type: 'bandpass', f0: 400, f1: 1600, q: 0.6, dur: 0.22, g: 0.12 }); }
   // 멀리서 들리는 도시 소리
-  function horn() {
-    if (!ac) return; var t = ac.currentTime, n = Math.random() < 0.4 ? 2 : 1, pan = rnd(-0.8, 0.8), base = rnd(0.9, 1.15);
-    for (var k = 0; k < n; k++) [392, 494].forEach(function (f) { tone({ type: 'sawtooth', f0: f * base, dur: rnd(0.25, 0.6), g: 0.03, a: 0.02, lp: 1400, pan: pan, send: 0.35, t: k * 0.55 }); });
+  function hornVoice(f, t0, dur, g, pan0, pan1, send, lpf, dop) {
+    if (!ac || voices > 40) return; var t = ac.currentTime + t0, mix = ac.createGain(), fl = ac.createBiquadFilter(), pk = ac.createBiquadFilter();
+    fl.type = 'lowpass'; fl.frequency.value = lpf; fl.Q.value = 0.7; pk.type = 'peaking'; pk.frequency.value = 1400; pk.gain.value = 6; pk.Q.value = 1.1;
+    mix.gain.setValueAtTime(0.0001, t); mix.gain.linearRampToValueAtTime(g, t + 0.016); mix.gain.setValueAtTime(g, t + dur); mix.gain.exponentialRampToValueAtTime(0.0001, t + dur + 0.07);
+    mix.connect(pk); pk.connect(fl); var tail = fl;
+    if (ac.createStereoPanner) { var sp = ac.createStereoPanner(); sp.pan.setValueAtTime(pan0, t); sp.pan.linearRampToValueAtTime(pan1, t + dur); fl.connect(sp); tail = sp; }
+    tail.connect(master); if (send > 0) { var sg = ac.createGain(); sg.gain.value = send; tail.connect(sg); sg.connect(revIn); }
+    [f, f * 1.26].forEach(function (fr) { [0.997, 1.004].forEach(function (dt) {
+      var os = ac.createOscillator(); os.type = 'sawtooth'; os.frequency.setValueAtTime(fr * dt * (1 + dop), t); if (dop) os.frequency.linearRampToValueAtTime(fr * dt * (1 - dop), t + dur);
+      var og = ac.createGain(); og.gain.value = 0.5; os.connect(og); og.connect(mix); os.start(t); os.stop(t + dur + 0.12); voices++; os.onended = function () { voices--; };
+    }); });
   }
+  var CARS = [[392, 1], [415, 1], [440, 1], [349, 1]];
+  function honkScene(lvl) {
+    if (!ac) return; lvl = clamp(lvl, 0.25, 1); var near = rnd(0.25, 1), car = CARS[(Math.random() * CARS.length) | 0][0] * rnd(0.97, 1.04), r = Math.random();
+    var g = (0.04 + 0.1 * near) * lvl, lpf = 1300 + 3200 * near, send = 0.12 + 0.4 * (1 - near), p0 = rnd(-0.9, 0.9), p1 = clamp(p0 + rnd(-0.5, 0.5), -1, 1), dop = Math.random() < 0.4 ? 0.02 : 0;
+    function hk(t, d, f, gm) { hornVoice(f || car, t, d, g * (gm || 1), p0, p1, send, lpf, dop); }
+    if (r < 0.38) hk(0, rnd(0.14, 0.3));                                                   // 빵
+    else if (r < 0.68) { var d = rnd(0.15, 0.2); hk(0, d); hk(d + 0.13, d + 0.03); }        // 빵빵
+    else if (r < 0.83) hk(0, rnd(0.7, 1.3));                                                 // 빠————앙
+    else if (r < 0.93) { hk(0, 0.14); hk(0.24, 0.14); hk(0.48, 0.2); hornVoice(car * 1.12, 0.1, 0.5, g * 0.6, -p0, -p0, send, lpf, 0); }   // 빵빵빵 (+ 다른 차)
+    else hornVoice(rnd(180, 205), 0, rnd(0.9, 1.5), g * 1.1, p0, p1, send + 0.1, 1800, 0);   // 트럭 에어혼
+  }
+  function horn() { honkScene(1); }
   function siren() {
     if (!ac) return; var t = ac.currentTime, dur = rnd(5, 8), os = ac.createOscillator(), lf = ac.createOscillator(), lg = ac.createGain(), g = ac.createGain(), fl = ac.createBiquadFilter();
     os.type = 'triangle'; os.frequency.value = 900; lf.frequency.value = rnd(0.4, 0.6); lg.gain.value = 350; lf.connect(lg); lg.connect(os.frequency);
@@ -15555,10 +15575,10 @@ html.ipad-mode,html.ipad-mode body{touch-action:manipulation;overscroll-behavior
     os.start(t); lf.start(t); os.stop(t + dur + 0.1); lf.stop(t + dur + 0.1);
   }
   function birds() { var n = (3 + Math.random() * 4) | 0, pan = rnd(-0.7, 0.7), f = rnd(2600, 4200); for (var i = 0; i < n; i++) tone({ f0: f * rnd(0.9, 1.1), f1: f * rnd(1.15, 1.4), dur: rnd(0.05, 0.1), g: 0.012, pan: pan, send: 0.1, t: i * rnd(0.09, 0.16) }); }
-  var ambT = 0;
+  var ambT = 0, hornT = 0;
   function ambient(street, alt) {
     var r = Math.random();
-    if (r < 0.5) horn(); else if (r < 0.72) siren(); else if (alt < 40 && r < 0.95) birds();
+    if (r < 0.35) siren(); else if (alt < 40 && r < 0.8) birds();
   }
 
   // ── 상태 폴링 ──
@@ -15574,9 +15594,9 @@ html.ipad-mode,html.ipad-mode body{touch-action:manipulation;overscroll-behavior
     var street = Math.exp(-Math.max(0, alt) / 70);
     // 바람
     var ws = onG && !wl ? sp * 0.55 : sp, wk = clamp(ws / 38, 0, 1);
-    set(L.wind, 0.015 + 0.02 * clamp(alt / 150, 0, 1) + 0.55 * Math.pow(wk, 1.7)); L.wind.f.frequency.setTargetAtTime(220 + Math.min(ws, 55) * 42, T, 0.12);
-    set(L.hiss, 0.35 * Math.pow(clamp((ws - 12) / 30, 0, 1), 2)); L.lfoG.gain.setTargetAtTime(gd ? 0.05 * clamp(ws / 30, 0, 1) : 0, T, 0.2);
-    set(L.whis, 0.05 * Math.pow(clamp((ws - 22) / 22, 0, 1), 2)); L.whis.f.frequency.setTargetAtTime(1500 + ws * 25 + Math.sin(now * 0.002) * 120, T, 0.15);
+    set(L.wind, 0.008 + 0.01 * clamp(alt / 150, 0, 1) + 0.07 * Math.pow(wk, 1.6), 0.25); L.wind.f.frequency.setTargetAtTime(150 + Math.min(ws, 55) * 14, T, 0.25);
+    set(L.hiss, 0.012 * Math.pow(clamp((ws - 16) / 30, 0, 1), 2), 0.3); L.lfoG.gain.setTargetAtTime(0, T, 0.2);
+    set(L.whis, 0);
     // 도시 소음 (지상일수록 크게, 높이 올라가면 멀어짐)
     set(L.rumble, 0.05 + 0.1 * street, 0.4); set(L.traffic, 0.012 + 0.035 * street, 0.4);
     // 줄 장력
@@ -15588,7 +15608,6 @@ html.ipad-mode,html.ipad-mode body{touch-action:manipulation;overscroll-behavior
     if (sw && !P.swing) thwip();
     else if (!sw && P.swing && !wl) release();
     if (gl && !P.gl) armWhoosh();
-    if (gd && !P.glide) glideOpen();
     if (wl && !P.wall) wallHit(clamp((P.sp || sp) / 24, 0.25, 1));
     if (!wl && P.wall && pl.vel.y > 8) jump(true);
     if (onG && !P.ground && !wl) { var lv = clamp(-P.lastVy / 20, 0, 1); if (lv > 0.08) land(lv, alt > 4 ? 'roof' : 'street'); }
@@ -15605,6 +15624,8 @@ html.ipad-mode,html.ipad-mode body{touch-action:manipulation;overscroll-behavior
     } else if (Sx) P.ph = Sx.ph;
     P.ground = onG; P.swing = sw; P.wall = wl; P.glide = gd; P.gl = gl; P.sp = sp;
     // 먼 도시 소리
+    if (!hornT) hornT = now + rnd(1500, 4000);
+    if (now > hornT) { hornT = now + rnd(3500, 10000) * (1 + Math.max(0, alt) / 90); honkScene(0.3 + 0.7 * street); }   // 자동차 빵빵
     if (now > ambT) { ambT = now + rnd(7000, 20000); if (ambT > 0 && last) ambient(street, alt); last = 1; }
   }
   setInterval(tick, 33);
@@ -15617,7 +15638,7 @@ html.ipad-mode,html.ipad-mode body{touch-action:manipulation;overscroll-behavior
   btn.addEventListener('touchstart', function (e) { e.stopPropagation(); }, { passive: true });
   document.body.appendChild(btn);
   window.addEventListener('keydown', function (e) { if (e.key === 'm' || e.key === 'M') { muted = !muted; applyMute(); } });
-  window.SFX = { unlock: unlock, setVolume: function (v) { vol = clamp(v, 0, 1); applyMute(); }, mute: function (m) { muted = !!m; applyMute(); }, test: function () { unlock(); thwip(); setTimeout(function () { land(0.8, 'roof'); }, 600); setTimeout(horn, 1200); } };
+  window.SFX = { honk: function () { unlock(); honkScene(1); }, unlock: unlock, setVolume: function (v) { vol = clamp(v, 0, 1); applyMute(); }, mute: function (m) { muted = !!m; applyMute(); }, test: function () { unlock(); thwip(); setTimeout(function () { land(0.8, 'roof'); }, 600); setTimeout(horn, 1200); } };
 })();
 </script>
 
