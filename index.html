@@ -9012,7 +9012,7 @@ function findWallContact(reach) {
   }
   return best;
 }
-function detachWall(cool) { wallState.active = false; wallState.mom = false; wallState.webRun = false; wallState.noWall = Math.max(cool || 0.3, 0.5); wallState.awayT = 0; wallState.attachT = 0; }
+function detachWall(cool) { wallState.ropeHold = false; wallState.active = false; wallState.mom = false; wallState.webRun = false; wallState.noWall = Math.max(cool || 0.3, 0.5); wallState.awayT = 0; wallState.attachT = 0; }
 function wallJump(upward) {
   const nx=wallState.nx, nz=wallState.nz;
   detachWall(0.35);
@@ -9056,6 +9056,7 @@ function tryWebWallRun(inputDir, inputMag) {
   const tx = -c.nz, tz = c.nx, vt = v.x * tx + v.z * tz;
   const vin = Math.max(wallState.hitVn || 0, -(v.x * c.nx + v.z * c.nz));   // 충돌 직전 벽 방향 속도(충돌 처리가 지우기 전 값)
   const sp = Math.hypot(vt, v.y, vin);
+  const wasSwinging = isSwinging;                              // [WALL ROPE] 스윙 중이었으면 줄은 그대로 쥔 채 벽 달리기
   if (isSwinging) releaseWeb(false);
   let s, vy, label;
   if (vin >= Math.abs(vt) * 1.5) {                           // 정면: 운동량을 벽 위쪽으로 회전
@@ -9066,7 +9067,7 @@ function tryWebWallRun(inputDir, inputMag) {
     s = vt * k; vy *= k; label = '🕷 WEB WALL RUN (' + Math.round(tgt * 3.6) + ' km/h)';
   }
   wallEnterMomentum(c, s, vy, label);
-  wallState.webRun = true; wallState.noWall = 0; wallState.hitVn = 0; wallState.hitT = 0;
+  wallState.webRun = true; wallState.noWall = 0; wallState.hitVn = 0; wallState.hitT = 0; wallState.ropeHold = wasSwinging; wallState.ropeLen = player.pos.distanceTo(webAnchor);
   return true;
 }
 // v30: 웹 홀드 벽 달리기 중 점프 = 벽 킥 (마블 스파이더맨2) — 벽 반대쪽으로 차고 올라가며 벽을 따라 달리던 속도를 유지
@@ -10934,6 +10935,7 @@ const SPA = (function () {
   SPA.S = S;
   Object.assign(S, { cw: 0, ct: 99, cPlay: false, cAfter: false, cFromOn: false, cFb: 0, cPose: new Float32Array(SPA.clipSL), cOut: new Float32Array(SPA.clipSL), cFrom: new Float32Array(SPA.clipSL) });
   { const cp = new Float32Array(SPA.clipSL); SPA.clipSample(SPA.clipDur, cp); S.cOut.set(cp); S.cPose.set(cp); }
+  Object.assign(S, { rw: 0, ropeSide: null });
   Object.assign(S, { gOut: new Float32Array(SPA.clipSL), gMix: new Float32Array(SPA.clipSL), gin: 0, gw: 0 });
   Object.assign(S, { cHold: new Float32Array(SPA.clipSL), cShoot: new Float32Array(SPA.clipSL), cBlend: 0.18, fin: false, shT: 99, hT: 0, relAge: 0, peak: 0, pickSide: false, shSide: 'R', wsh: 0, anchorM: { x: 0, y: 3, z: 3 }, sh: { active: false, side: 'R', p: 1, g: 1 } });
   // 안정된 서 있는 자세(기본값)
@@ -11094,6 +11096,22 @@ const SPA = (function () {
       T[K['fX' + s]] = lerp(ext[0], tk[0], w) * 1; T[K['fY' + s]] = hipY + lerp(ext[1], tk[1], w); T[K['fZ' + s]] = lerp(ext[2], tk[2], w) + (asym > 0 ? 0.04 : -0.04) * (1 - w);
       T[K['fP' + s]] = 0.55; T[K['fYw' + s]] = 0; T[K['kPole' + s]] = 0;
     }
+  }
+
+  // ---------- [WALL ROPE] 스윙 중 벽에 닿아 줄을 잡은 채 벽을 걷거나 달릴 때: 앵커 쪽 손이 줄을 쥐고, 반대팔은 달리기 스윙을 유지 ----------
+  function ropeHoldArms(c, T, anchorM) {
+    const w = S.rw; if (w < 0.01 || !anchorM) return;
+    const kin = SPA.torso(T), sh = (q) => kin.pos['DEF_ARM_01.' + q];
+    const mid = vlerp(sh(L), sh(Rr), 0.5), ax = anchorM.x - mid.x;
+    if (ax > 0.1) S.ropeSide = L; else if (ax < -0.1) S.ropeSide = Rr; else if (!S.ropeSide) S.ropeSide = Rr;
+    const s = S.ropeSide, o = s === L ? Rr : L, P0 = sh(s), d = vsub(anchorM, P0), dist = vlen(d), dir = vnorm(d, V(0, 1, 0));
+    const armLen = SPA.LIMB.armL.l1 + SPA.LIMB.armL.l2, reach = M.max(0.2, M.min(armLen * 0.92, dist - 0.04)), tgt = vmad(P0, dir, reach);
+    T[K['aIk' + s]] = w; T[K['haX' + s]] = tgt.x; T[K['haY' + s]] = tgt.y; T[K['haZ' + s]] = tgt.z;
+    T[K['wr' + s]] = 0.1; T[K['shr' + s]] = 0.2 * w;
+    const gv = { gA: 0.0, gB: 0.95, gC: 0.95, gD: 0.0, gT: 0.4 };
+    for (const fn in gv) T[K[fn + s]] += (gv[fn] - T[K[fn + s]]) * w;     // 줄을 쥔 손
+    T[K['aAbd' + o]] += 0.22 * w;                                          // 반대팔은 균형을 위해 살짝 벌림
+    T[K.sR] += (s === L ? -1 : 1) * 0.07 * w;                              // 몸통이 줄 쪽으로 살짝 기움
   }
 
   // ---------- 활강 · 다이빙 · 슬링 ----------
@@ -11307,6 +11325,8 @@ HLP[K.aIkL] = HLP[K.aIkR] = 0.2;
       qT = qZ(-lean); Ctr = [0, 0.05, 0]; rate = 12;
     } else if (mode === 'wall') {
       wall = true; push = c.wallR || 0.46;
+      S.rw += (((c.wall && c.wall.rope) ? 1 : 0) - S.rw) * (1 - M.exp(-10 * dt)); if (S.rw < 0.005) S.rw = 0;
+      if (S.rw > 0.01 && c.anchorW) { const a = c.anchorW; anchorL = toL(a[0] - pos[0], a[1] - pos[1], a[2] - pos[2]); }
       const gq = V(c.velW ? c.velW[0] : 0, c.velW ? c.velW[1] : 0, c.velW ? c.velW[2] : 0), lv = toL(gq.x, gq.y, gq.z);
       if (lv.x * lv.x + lv.y * lv.y > 0.16) S.wallRy = M.atan2(lv.x, lv.y);
       qT = qmul(qX(-PI / 2), qmul(qY(S.wallRy), qZ(0))); Ctr = [0, 0, 0]; rate = 10;
@@ -11335,7 +11355,8 @@ HLP[K.aIkL] = HLP[K.aIkR] = 0.2;
     else if (mode === 'glide') genGlide(c, T);
     else if (mode === 'dive' || (mode === 'air' && sl.fly)) genDive(c, T);
     else if (mode === 'air') { genAir(c, T, dt); preLand(c, T); }
-    else genGround(c, T, dt, ms, mode === 'wall');
+    else { genGround(c, T, dt, ms, mode === 'wall'); if (mode === 'wall' && anchorL && S.rw > 0.01) ropeHoldArms(c, T, toModel(rig, anchorL, cq, pp)); }
+    if (mode !== 'wall') S.rw = 0;
     // 지상 착지 오버레이(슈퍼히어로/구르기)
     if (mode === 'ground' && S.land) {
       const t = S.land.t, kd = S.land.kind;
@@ -11531,7 +11552,7 @@ function updateSpiderManRig(dt) {
       dt, t: performance.now() / 1000, hSpeed, speed: player.vel.length(), vy: player.vel.y, onGround: !!player.onGround,
       yaw: spideyGroup.rotation.y, gl: GL.active ? GL.t : -1,
       gliding: !!(typeof glide !== 'undefined' && glide.active), swinging: !!isSwinging, twoHand: !!isSwinging && !msm2QuickWhip, diving: !!msm2IsDiving,
-      wall: { active: !!wallState.active, phase: wallState.phase || 0, moving: player.vel.length() > 0.4 }, wallR: (typeof WALL_R === 'number' ? WALL_R : 0.46),
+      wall: { active: !!wallState.active, phase: wallState.phase || 0, moving: player.vel.length() > 0.4, rope: !!(wallState.active && wallState.ropeHold && webHeld) }, wallR: (typeof WALL_R === 'number' ? WALL_R : 0.46),
       sling: { active: !!slingState.charging, g: slingState.g || 0, aimW: [slingState.aim.x, slingState.aim.y, slingState.aim.z], fly: slingState.glideT > 0 && !isSwinging },
       anchorW: [webAnchor.x, webAnchor.y, webAnchor.z], posW: [player.pos.x, player.pos.y, player.pos.z], velW: [player.vel.x, player.vel.y, player.vel.z],
       groundY: GROUND_Y, grav: (typeof PHYS !== 'undefined' && typeof AIR !== 'undefined') ? PHYS.gravity * AIR.fallGravityMul : 14.7, clearFn: spaClearTime   // [INERT] 착지 예측(t_impact)용 / [TUMBLE] 백플립 여유 판단
@@ -11541,17 +11562,22 @@ function updateSpiderManRig(dt) {
 
   // 거미줄: 한 줄. 일반 스윙은 두 손으로 같은 줄을 잡고(손 사이 중점에서 출발), 퀵 휩은 오른손 하나로 잡는다.
   if (webMeshL) webMeshL.visible = false;
-  if (isSwinging && webMesh) {
+  if (!wallState.active || (wallState.ropeHold && player.pos.distanceTo(webAnchor) > (wallState.ropeLen || 30) * 1.2 + 4)) wallState.ropeHold = false;   // 줄 길이를 넘어 멀어지면 놓음
+  const wallRope = !isSwinging && !!(wallState.active && wallState.ropeHold && webHeld);
+  if (!wallRope && wallState.ropeShown && !isSwinging && webMesh) { webMesh.visible = false; wallState.ropeShown = false; }
+  if ((isSwinging || wallRope) && webMesh) {
+    if (wallRope) wallState.ropeShown = true;
     spideyGroup.updateMatrixWorld(true);
     const bnd = (n) => (typeof bndNode === 'function' ? bndNode(rig, n) : null) || rig.bones[n];
     const hR = bnd('DEF_HAND.R') || rig.bones['HAND_IK.R'] || rig.bones['ORG_HAND.R'];
     const hL = bnd('DEF_HAND.L') || rig.bones['HAND_IK.L'];
     if (hR) {
       hR.getWorldPosition(handRightWorldPos);
-      if (!msm2QuickWhip && hL) { hL.getWorldPosition(_uaTmp); handRightWorldPos.add(_uaTmp).multiplyScalar(0.5); }
+      if (wallRope) { const hh = bnd('DEF_HAND.' + ((SPA.S && SPA.S.ropeSide) || 'R')); if (hh) hh.getWorldPosition(handRightWorldPos); }   // 벽 달리기: 줄을 쥔 한 손에서 앵커로
+      else if (!msm2QuickWhip && hL) { hL.getWorldPosition(_uaTmp); handRightWorldPos.add(_uaTmp).multiplyScalar(0.5); }
       // 웹 발사 연출: 발사 팔 손목(웹슈터)에서 줄이 앵커로 날아가고(p), 이후 시작점이 두 손 중점으로 이동(g)
       const shs = SPA.S && SPA.S.sh; let tipP = 1;
-      if (shs && (shs.p < 1 || shs.g < 1) && !msm2QuickWhip) {
+      if (shs && (shs.p < 1 || shs.g < 1) && !msm2QuickWhip && !wallRope) {
         const sn = bnd('DEF_WEBSHOOTERS_TWEAK_03.' + shs.side) || bnd('DEF_HAND.' + shs.side);
         if (sn) { sn.getWorldPosition(_uaHand); handRightWorldPos.lerpVectors(_uaHand, handRightWorldPos, shs.g); }
         tipP = 1 - Math.pow(1 - shs.p, 3);
@@ -15389,6 +15415,209 @@ html.ipad-mode,html.ipad-mode body{touch-action:manipulation;overscroll-behavior
     setStatus('기기 선택 대기 중…');
     ov.classList.add('show');
   };
+})();
+</script>
+
+<script>
+/* ═════════ [SFX] 실시간 합성 사운드 엔진 (외부 음원 없음 · WebAudio) ═════════
+   발소리(길/옥상/벽) · 점프/착지 · 웹 발사(THWIP)+부착 · 줄 장력 삐걱임 · 속도 바람/휘파람 · 활강 · 도시 소음(차량 웅웅, 경적, 사이렌, 새)
+   게임 상태를 30Hz 로 읽기만 하므로 기존 코드를 건드리지 않는다. M 키 = 음소거, 우측 상단 🔊 버튼 = 음소거 토글. */
+(function () {
+  'use strict';
+  if (window.SFX) return;
+  var AC = window.AudioContext || window.webkitAudioContext; if (!AC) return;
+  var ac = null, master, comp, revIn, bufW, bufP, bufB, L = {}, voices = 0, muted = false, vol = 0.85, silentEl = null;
+  var rnd = function (a, b) { return a + Math.random() * (b - a); }, clamp = function (x, a, b) { return x < a ? a : x > b ? b : x; };
+
+  function noise(len, kind) {
+    var n = (len * ac.sampleRate) | 0, b = ac.createBuffer(1, n, ac.sampleRate), d = b.getChannelData(0), l = 0, b0 = 0, b1 = 0, b2 = 0;
+    for (var i = 0; i < n; i++) {
+      var w = Math.random() * 2 - 1;
+      if (kind === 'w') d[i] = w;
+      else if (kind === 'b') { l = (l + 0.02 * w) / 1.02; d[i] = l * 3.5; }
+      else { b0 = 0.99765 * b0 + w * 0.0990460; b1 = 0.96300 * b1 + w * 0.2965164; b2 = 0.57000 * b2 + w * 1.0526913; d[i] = (b0 + b1 + b2 + w * 0.1848) * 0.2; }
+    }
+    return b;
+  }
+  function build() {
+    ac = new AC({ latencyHint: 'interactive' });
+    try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) {}
+    comp = ac.createDynamicsCompressor(); comp.threshold.value = -16; comp.knee.value = 24; comp.ratio.value = 4; comp.attack.value = 0.004; comp.release.value = 0.22;
+    master = ac.createGain(); master.gain.value = muted ? 0 : vol; master.connect(comp); comp.connect(ac.destination);
+    bufW = noise(2, 'w'); bufP = noise(4, 'p'); bufB = noise(4, 'b');
+    // 도시 골목 잔향(짧은 합성 임펄스)
+    var rl = (1.3 * ac.sampleRate) | 0, ir = ac.createBuffer(1, rl, ac.sampleRate), id = ir.getChannelData(0), lp = 0;
+    for (var i = 0; i < rl; i++) { var t = i / rl, w = (Math.random() * 2 - 1) * Math.pow(1 - t, 3.2); lp += (w - lp) * (0.9 - 0.75 * t); id[i] = lp; }
+    var conv = ac.createConvolver(); conv.buffer = ir; var rv = ac.createGain(); rv.gain.value = 0.55;
+    revIn = ac.createGain(); revIn.connect(conv); conv.connect(rv); rv.connect(master);
+    // ── 상시 레이어 ──
+    function loop(buf) { var s = ac.createBufferSource(); s.buffer = buf; s.loop = true; s.start(0, Math.random() * buf.duration * 0.5); return s; }
+    function chain(buf, type, f, q) { var s = loop(buf), fl = ac.createBiquadFilter(), g = ac.createGain(); fl.type = type; fl.frequency.value = f; fl.Q.value = q; g.gain.value = 0; s.connect(fl); fl.connect(g); g.connect(master); return { f: fl, g: g }; }
+    L.wind = chain(bufP, 'bandpass', 400, 0.7);          // 몸에 부딪히는 바람
+    L.hiss = chain(bufW, 'highpass', 3200, 0.7);         // 고속 쉭 소리
+    L.whis = chain(bufW, 'bandpass', 2000, 14);          // 휘파람(고속)
+    L.rumble = chain(bufB, 'lowpass', 220, 0.7);         // 도시 저주파 웅웅
+    L.traffic = chain(bufP, 'bandpass', 650, 0.5);       // 차량 소음
+    L.creak = chain(bufP, 'bandpass', 2400, 9);          // 줄 장력 삐걱
+    var lfo = ac.createOscillator(), lg = ac.createGain(); lfo.frequency.value = 11; lg.gain.value = 0; lfo.connect(lg); lg.connect(L.hiss.g.gain); lfo.start(); L.lfoG = lg;   // 활강 펄럭임
+    // iOS: 무음 스위치/백그라운드에서도 Web Audio 가 나오도록 무음 <audio> 를 반복 재생
+    try {
+      var sr = 8000, n = 4000, buf = new ArrayBuffer(44 + n * 2), v = new DataView(buf), ws = function (o, s) { for (var k = 0; k < s.length; k++) v.setUint8(o + k, s.charCodeAt(k)); };
+      ws(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); ws(8, 'WAVEfmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true); v.setUint32(24, sr, true); v.setUint32(28, sr * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true); ws(36, 'data'); v.setUint32(40, n * 2, true);
+      silentEl = new Audio(URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }))); silentEl.loop = true; silentEl.volume = 0.01; silentEl.setAttribute('playsinline', '');
+    } catch (e) {}
+  }
+  function unlock() {
+    if (!ac) build();
+    if (ac.state !== 'running') { try { ac.resume(); } catch (e) {} }
+    if (silentEl && silentEl.paused) { try { var p = silentEl.play(); if (p && p.catch) p.catch(function () {}); } catch (e) {} }
+  }
+  ['touchstart', 'touchend', 'pointerdown', 'mousedown', 'click', 'keydown'].forEach(function (ev) { window.addEventListener(ev, unlock, { passive: true, capture: true }); });
+  document.addEventListener('visibilitychange', function () { if (!ac) return; if (document.hidden) { try { ac.suspend(); } catch (e) {} } else unlock(); });
+
+  // ── 출력 버스 ──
+  function out(pan, send) {
+    var n = ac.createGain(), tail = n;
+    if (pan && ac.createStereoPanner) { var sp = ac.createStereoPanner(); sp.pan.value = clamp(pan, -1, 1); n.connect(sp); tail = sp; }
+    tail.connect(master);
+    if (send > 0) { var s = ac.createGain(); s.gain.value = send; tail.connect(s); s.connect(revIn); }
+    return n;
+  }
+  function burst(o) {
+    if (!ac || voices > 40) return; var t = ac.currentTime + (o.t || 0), buf = o.kind === 'w' ? bufW : o.kind === 'b' ? bufB : bufP, dur = o.dur;
+    var src = ac.createBufferSource(); src.buffer = buf;
+    var f = ac.createBiquadFilter(); f.type = o.type || 'bandpass'; f.Q.value = o.q || 1; f.frequency.setValueAtTime(o.f0, t); if (o.f1) f.frequency.exponentialRampToValueAtTime(Math.max(20, o.f1), t + dur);
+    var g = ac.createGain(), a = o.a || 0.003; g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(Math.max(0.0002, o.g), t + a); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    src.connect(f); f.connect(g); g.connect(out(o.pan, o.send)); src.start(t, Math.random() * (buf.duration - dur - 0.1), dur + 0.05); src.stop(t + dur + 0.05); voices++; src.onended = function () { voices--; };
+  }
+  function tone(o) {
+    if (!ac || voices > 40) return; var t = ac.currentTime + (o.t || 0), dur = o.dur, a = o.a || 0.004;
+    var os = ac.createOscillator(); os.type = o.type || 'sine'; os.frequency.setValueAtTime(o.f0, t); if (o.f1) os.frequency.exponentialRampToValueAtTime(Math.max(20, o.f1), t + dur);
+    var g = ac.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(Math.max(0.0002, o.g), t + a); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    var tail = g; if (o.lp) { var f = ac.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = o.lp; os.connect(f); f.connect(g); } else os.connect(g);
+    g.connect(out(o.pan, o.send)); os.start(t); os.stop(t + dur + 0.05); voices++; os.onended = function () { voices--; };
+  }
+
+  // ── 효과음 ──
+  function footstep(kind, v, run) {
+    var pv = rnd(0.92, 1.08); v = clamp(v, 0.2, 1.2) * rnd(0.85, 1.1);
+    if (kind === 'wall') {
+      tone({ f0: 90 * pv, f1: 45, dur: 0.13, g: 0.17 * v }); burst({ kind: 'p', type: 'lowpass', f0: 800, dur: 0.09, g: 0.15 * v });
+      burst({ kind: 'w', type: 'bandpass', f0: 3500 * pv, f1: 6500, q: 1.5, dur: 0.07, g: 0.05 * v, t: 0.025 });   // 흡착 떼어내는 소리
+      return;
+    }
+    burst({ kind: 'p', type: 'bandpass', f0: 1500 * pv, f1: 900 * pv, q: 1.1, dur: run ? 0.06 : 0.08, g: 0.22 * v });
+    burst({ kind: 'w', type: 'highpass', f0: 4200, dur: 0.02, g: 0.07 * v });
+    tone({ f0: 120 * pv, f1: 55, dur: 0.1, g: 0.22 * v });
+    burst({ kind: 'p', type: 'bandpass', f0: 900, q: 0.5, dur: 0.12, g: 0.035 * v, t: 0.01 });    // 슈트 천 스치는 소리
+    if (kind === 'roof') for (var i = 0; i < 4; i++) burst({ kind: 'w', type: 'bandpass', f0: rnd(2500, 5500), q: 2, dur: rnd(0.015, 0.035), g: 0.06 * v, t: rnd(0.01, 0.09) });   // 자갈
+  }
+  function land(v, kind) {
+    tone({ f0: 75, f1: 32, dur: 0.3 + 0.2 * v, g: 0.55 * v + 0.05 });
+    burst({ kind: 'p', type: 'lowpass', f0: 1200, f1: 300, dur: 0.22, g: 0.45 * v + 0.04, send: v > 0.5 ? 0.25 : 0 });
+    burst({ kind: 'p', type: 'bandpass', f0: 800, q: 0.5, dur: 0.2, g: 0.06 * v + 0.02, t: 0.02 });
+    if (kind !== 'street') for (var i = 0; i < 6; i++) burst({ kind: 'w', type: 'bandpass', f0: rnd(2200, 5500), q: 2, dur: rnd(0.02, 0.05), g: 0.07 * v, t: rnd(0.02, 0.17) });
+    if (v > 0.55) burst({ kind: 'w', type: 'highpass', f0: 3000, dur: 0.05, g: 0.12 * v });
+  }
+  function jump(big) {
+    burst({ kind: 'p', type: 'bandpass', f0: 500, f1: 1400, q: 0.6, dur: big ? 0.28 : 0.2, g: big ? 0.16 : 0.09 });
+    tone({ f0: 130, f1: 80, dur: 0.1, g: 0.16 }); burst({ kind: 'p', type: 'bandpass', f0: 900, q: 0.5, dur: 0.12, g: 0.04, t: 0.02 });
+  }
+  function thwip() {
+    burst({ kind: 'w', type: 'bandpass', f0: 7000, f1: 1800, q: 2.2, dur: 0.075, g: 0.55, a: 0.002 });
+    tone({ f0: 1500, f1: 320, dur: 0.11, g: 0.22 }); tone({ type: 'triangle', f0: 3000, f1: 900, dur: 0.06, g: 0.08 });
+    burst({ kind: 'w', type: 'highpass', f0: 3500, dur: 0.16, g: 0.1, t: 0.01 });                                    // 웹슈터 공기 분출
+    burst({ kind: 'p', type: 'bandpass', f0: 1400, f1: 5200, q: 3, dur: 0.28, g: 0.12, t: 0.03, send: 0.1 });        // 줄이 날아가는 소리
+    tone({ f0: 170, f1: 60, dur: 0.16, g: 0.38, t: 0.1, send: 0.15 });                                               // 앵커 부착 쿵
+    burst({ kind: 'p', type: 'lowpass', f0: 1500, f1: 400, dur: 0.14, g: 0.35, t: 0.1, send: 0.15 });
+    burst({ kind: 'w', type: 'bandpass', f0: 3200, q: 3, dur: 0.035, g: 0.12, t: 0.1 });
+  }
+  function release() { burst({ kind: 'w', type: 'bandpass', f0: 3000, f1: 900, q: 1.5, dur: 0.12, g: 0.12 }); tone({ f0: 500, f1: 180, dur: 0.07, g: 0.08 }); }
+  function wallHit(v) {
+    tone({ f0: 100, f1: 45, dur: 0.22, g: 0.45 * v + 0.05 }); burst({ kind: 'p', type: 'lowpass', f0: 1000, dur: 0.2, g: 0.4 * v + 0.04 });
+    for (var i = 0; i < 5; i++) burst({ kind: 'w', type: 'highpass', f0: rnd(3000, 6000), dur: 0.03, g: 0.06 * v, t: rnd(0.02, 0.14) });
+  }
+  function glideOpen() {
+    burst({ kind: 'p', type: 'bandpass', f0: 300, f1: 1200, q: 0.7, dur: 0.45, g: 0.18 });
+    burst({ kind: 'w', type: 'bandpass', f0: 1200, q: 1, dur: 0.08, g: 0.12, t: 0.05 }); burst({ kind: 'w', type: 'bandpass', f0: 1000, q: 1, dur: 0.08, g: 0.1, t: 0.13 });
+  }
+  function armWhoosh() { burst({ kind: 'p', type: 'bandpass', f0: 400, f1: 1600, q: 0.6, dur: 0.22, g: 0.12 }); }
+  // 멀리서 들리는 도시 소리
+  function horn() {
+    if (!ac) return; var t = ac.currentTime, n = Math.random() < 0.4 ? 2 : 1, pan = rnd(-0.8, 0.8), base = rnd(0.9, 1.15);
+    for (var k = 0; k < n; k++) [392, 494].forEach(function (f) { tone({ type: 'sawtooth', f0: f * base, dur: rnd(0.25, 0.6), g: 0.03, a: 0.02, lp: 1400, pan: pan, send: 0.35, t: k * 0.55 }); });
+  }
+  function siren() {
+    if (!ac) return; var t = ac.currentTime, dur = rnd(5, 8), os = ac.createOscillator(), lf = ac.createOscillator(), lg = ac.createGain(), g = ac.createGain(), fl = ac.createBiquadFilter();
+    os.type = 'triangle'; os.frequency.value = 900; lf.frequency.value = rnd(0.4, 0.6); lg.gain.value = 350; lf.connect(lg); lg.connect(os.frequency);
+    fl.type = 'lowpass'; fl.frequency.value = 2200; g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.02, t + 1.5); g.gain.setValueAtTime(0.02, t + dur - 1.5); g.gain.linearRampToValueAtTime(0.0001, t + dur);
+    var o = out(0, 0.4); if (ac.createStereoPanner) { var sp = ac.createStereoPanner(); sp.pan.setValueAtTime(rnd(-0.9, -0.3), t); sp.pan.linearRampToValueAtTime(rnd(0.3, 0.9), t + dur); os.connect(fl); fl.connect(g); g.connect(sp); sp.connect(master); var s = ac.createGain(); s.gain.value = 0.4; sp.connect(s); s.connect(revIn); } else { os.connect(fl); fl.connect(g); g.connect(o); }
+    os.start(t); lf.start(t); os.stop(t + dur + 0.1); lf.stop(t + dur + 0.1);
+  }
+  function birds() { var n = (3 + Math.random() * 4) | 0, pan = rnd(-0.7, 0.7), f = rnd(2600, 4200); for (var i = 0; i < n; i++) tone({ f0: f * rnd(0.9, 1.1), f1: f * rnd(1.15, 1.4), dur: rnd(0.05, 0.1), g: 0.012, pan: pan, send: 0.1, t: i * rnd(0.09, 0.16) }); }
+  var ambT = 0;
+  function ambient(street, alt) {
+    var r = Math.random();
+    if (r < 0.5) horn(); else if (r < 0.72) siren(); else if (alt < 40 && r < 0.95) birds();
+  }
+
+  // ── 상태 폴링 ──
+  var P = { lastVy: 0, ground: true, swing: false, wall: false, glide: false, gl: false, ph: 0, vy: 0, step: 0, t: performance.now() }, last = 0;
+  function tick() {
+    if (!ac || ac.state !== 'running') return;
+    var now = performance.now(), dt = Math.min(0.1, (now - P.t) / 1000); P.t = now; var T = ac.currentTime;
+    var go = typeof isGameStarted !== 'undefined' && isGameStarted && typeof player !== 'undefined' && !document.hidden;
+    function set(n, v, k) { n.g.gain.setTargetAtTime(v, T, k || 0.12); }
+    if (!go) { for (var k in L) if (L[k] && L[k].g) set(L[k], 0, 0.3); return; }
+    var pl = player, sp = pl.vel.length(), hs = Math.hypot(pl.vel.x, pl.vel.z), alt = pl.pos.y, onG = !!pl.onGround;
+    var sw = typeof isSwinging !== 'undefined' && isSwinging, wl = typeof wallState !== 'undefined' && wallState.active, gd = typeof glide !== 'undefined' && glide.active, gl = typeof GL !== 'undefined' && GL.active;
+    var street = Math.exp(-Math.max(0, alt) / 70);
+    // 바람
+    var ws = onG && !wl ? sp * 0.55 : sp, wk = clamp(ws / 38, 0, 1);
+    set(L.wind, 0.015 + 0.02 * clamp(alt / 150, 0, 1) + 0.55 * Math.pow(wk, 1.7)); L.wind.f.frequency.setTargetAtTime(220 + Math.min(ws, 55) * 42, T, 0.12);
+    set(L.hiss, 0.35 * Math.pow(clamp((ws - 12) / 30, 0, 1), 2)); L.lfoG.gain.setTargetAtTime(gd ? 0.05 * clamp(ws / 30, 0, 1) : 0, T, 0.2);
+    set(L.whis, 0.05 * Math.pow(clamp((ws - 22) / 22, 0, 1), 2)); L.whis.f.frequency.setTargetAtTime(1500 + ws * 25 + Math.sin(now * 0.002) * 120, T, 0.15);
+    // 도시 소음 (지상일수록 크게, 높이 올라가면 멀어짐)
+    set(L.rumble, 0.05 + 0.1 * street, 0.4); set(L.traffic, 0.012 + 0.035 * street, 0.4);
+    // 줄 장력
+    var ten = sw ? clamp((((typeof PHYS_TEL !== 'undefined' ? PHYS_TEL.gForce : 1) || 1) - 1) / 2.2, 0, 1) : 0;
+    set(L.creak, sw ? 0.004 + 0.05 * Math.pow(ten, 1.5) * (0.7 + 0.3 * Math.random()) : 0, 0.1); L.creak.f.frequency.setTargetAtTime(1800 + ten * 1400 + Math.sin(now * 0.004) * 200, T, 0.1);
+    // 이벤트
+    var vIn = clamp(-P.vy / 20, 0, 1);
+    if (!onG) P.vy = pl.vel.y;
+    if (sw && !P.swing) thwip();
+    else if (!sw && P.swing && !wl) release();
+    if (gl && !P.gl) armWhoosh();
+    if (gd && !P.glide) glideOpen();
+    if (wl && !P.wall) wallHit(clamp((P.sp || sp) / 24, 0.25, 1));
+    if (!wl && P.wall && pl.vel.y > 8) jump(true);
+    if (onG && !P.ground && !wl) { var lv = clamp(-P.lastVy / 20, 0, 1); if (lv > 0.08) land(lv, alt > 4 ? 'roof' : 'street'); }
+    if (!onG && P.ground && !sw && !wl && pl.vel.y > 2.5) jump(false);
+    if (!onG) P.lastVy = pl.vel.y;
+    // 발소리: 모션 엔진의 보행 위상(S.ph)이 0(왼발)/0.5(오른발)을 지날 때 = 발이 닿는 순간
+    var Sx = typeof SPA !== 'undefined' && SPA.S, moving = (onG || wl) && !sw && (wl ? sp : hs) > 0.6;
+    if (Sx && moving && (Sx.mode === 'ground' || Sx.mode === 'wall')) {
+      var ph = Sx.ph, pp = P.ph, hit = (ph < pp) || (pp < 0.5 && ph >= 0.5);
+      if (hit && now - P.step > 110) {
+        P.step = now; var spd = wl ? sp : hs; footstep(wl ? 'wall' : alt > 4 ? 'roof' : 'street', 0.35 + 0.65 * clamp(spd / 14, 0, 1), spd > 8);
+      }
+      P.ph = ph;
+    } else if (Sx) P.ph = Sx.ph;
+    P.ground = onG; P.swing = sw; P.wall = wl; P.glide = gd; P.gl = gl; P.sp = sp;
+    // 먼 도시 소리
+    if (now > ambT) { ambT = now + rnd(7000, 20000); if (ambT > 0 && last) ambient(street, alt); last = 1; }
+  }
+  setInterval(tick, 33);
+
+  // ── 음소거 ──
+  function applyMute() { if (master) master.gain.setTargetAtTime(muted ? 0 : vol, ac.currentTime, 0.05); if (btn) btn.textContent = muted ? '🔇' : '🔊'; }
+  var btn = document.createElement('div');
+  btn.textContent = '🔊'; btn.style.cssText = 'position:fixed;top:52px;right:10px;width:34px;height:34px;border-radius:50%;background:rgba(0,0,0,.35);color:#fff;font-size:17px;line-height:34px;text-align:center;z-index:99999;opacity:.55;user-select:none;-webkit-user-select:none;touch-action:manipulation;cursor:pointer';
+  btn.addEventListener('click', function (e) { e.stopPropagation(); unlock(); muted = !muted; applyMute(); });
+  btn.addEventListener('touchstart', function (e) { e.stopPropagation(); }, { passive: true });
+  document.body.appendChild(btn);
+  window.addEventListener('keydown', function (e) { if (e.key === 'm' || e.key === 'M') { muted = !muted; applyMute(); } });
+  window.SFX = { unlock: unlock, setVolume: function (v) { vol = clamp(v, 0, 1); applyMute(); }, mute: function (m) { muted = !!m; applyMute(); }, test: function () { unlock(); thwip(); setTimeout(function () { land(0.8, 'roof'); }, 600); setTimeout(horn, 1200); } };
 })();
 </script>
 
