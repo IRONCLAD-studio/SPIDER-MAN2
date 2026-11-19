@@ -2552,7 +2552,7 @@ canvas { display: block; width: 100%; height: 100%; }
     <header class="st-brand">
       <h1 class="st-title"><span>Manhattan 1:1</span><span>Web-Swing</span></h1>
       <p class="st-sub">실제 크기의 맨해튼 위를 거미줄로 날아다니세요.</p>
-      <span id="game-version" class="st-ver">v31 · 웹 벽달리기 · 백플립</span>
+      <span id="game-version" class="st-ver">v32 · 웹 벽달리기 · 백플립</span>
     </header>
 
     <nav class="st-menu" aria-label="메인 메뉴">
@@ -5799,6 +5799,7 @@ function nrWay(D, off, i, plan) {
   }
   if (br && k === 1) for (let q = 0; q < n; q++) if (!ok[q]) { const d = nrDeckAt(S.p[q * 2], S.p[q * 2 + 1], 1e9); if (d !== null) { ok[q] = 1; Y[q] = d; onDeck = true; } }
   nrRuns(S, ok, Y, (P, m, y, s) => {
+    if (NR.trCap) trfCapture(k, hwv, ow, lanes, hwR, P, m, y);   // [v32] 움직이는 차량·보행자용 경로 수집
     const E = nrEdges(P, m, y, hwR, onDeck ? dy : 0), vs = new Float32Array(m); for (let q = 0; q < m; q++) vs[q] = s[q] / tl;
     nrEmit(E.cen, nrDrape(E, m, y, vs, nrU(slot, 0), nrU(slot, 1), tint, dy, hwR, onDeck, lyr));
     if (k === 0 && hwv < 8) for (let q = 0; q < m; q++) nrRgAdd(P[q * 2], P[q * 2 + 1], E.nr[q * 2 + 1], -E.nr[q * 2], hwR);
@@ -5902,7 +5903,7 @@ function nrDetail() {
   const CARS = [[196, 32, 36], [34, 62, 142], [206, 206, 210], [22, 22, 26], [122, 126, 132], [236, 236, 238], [40, 108, 72], [150, 152, 158], [92, 60, 40]], TAXI = [244, 188, 18], UNDER = [16, 16, 18];
   const SHIRT = [[200, 60, 50], [50, 90, 170], [230, 230, 225], [60, 60, 66], [220, 170, 50], [70, 140, 90], [150, 70, 150]], PANT = [[40, 44, 60], [70, 64, 56], [30, 30, 34], [60, 80, 110]], SKIN = [[236, 190, 160], [198, 146, 110], [140, 98, 70], [96, 64, 44]];
   const SIGN = [[255, 70, 60], [70, 170, 255], [255, 205, 50], [80, 235, 130], [240, 240, 250], [255, 130, 40]], UMB = [[200, 40, 40], [40, 110, 200], [230, 190, 40], [50, 150, 90], [220, 220, 224]];
-  const capC = { car: Math.ceil(70 * K), ped: Math.ceil(40 * K), tree: Math.ceil(80 * K), sign: Math.ceil(20 * K), cart: Math.ceil(6 * K) }, cnt = { car: 0, ped: 0, tree: 0, sign: 0, cart: 0 }, taken = new Set(), cc = new Map();
+  const capC = { car: Math.ceil(110 * K), ped: Math.ceil(12 * K), tree: Math.ceil(80 * K), sign: Math.ceil(20 * K), cart: Math.ceil(6 * K) }, cnt = { car: 0, ped: 0, tree: 0, sign: 0, cart: 0 }, taken = new Set(), cc = new Map();
   // [v15] 전역 상한 대신 청크(400m)당 상한: 큰 도로에서 상한이 소진돼 나머지 지역에 소품이 없던 문제 해결
   const ccObj = (x, z) => { const k = nrKeyC(x, z); let o = cc.get(k); if (!o) cc.set(k, o = { car: 0, ped: 0, tree: 0, sign: 0, cart: 0 }); return o; };
   const room = (t, x, z) => ccObj(x, z)[t] < capC[t], inc = (t, x, z) => { ccObj(x, z)[t]++; };
@@ -6386,11 +6387,12 @@ float lcWave(vec2 w) { return lcF(w * 0.45 + vec2(uLcT * 0.06, uLcT * 0.045)) + 
   const rank = { 8: 0, 6: 1, 5: 2, 4: 3, 3: 4, 2: 5, 9: 5, 7: 6, 1: 7, 0: 8 }, order = [];
   for (let i = 0; i < D.nW; i++) { const k = D.kind[i]; order.push([k === 0 ? rank[D.hw[i]] : k === 3 ? 10 : k === 4 ? 11 : k === 2 ? 12 : k === 1 ? 13 : 14, i]); }
   order.sort((a, b) => a[0] - b[0]);
+  NR.trCap = true;
   for (let q = 0; q < order.length; q++) {
     try { nrWay(D, off, order[q][1], plan); } catch (e) { if (!NR.err) { NR.err = 1; console.warn('road', e); } }
     if ((q % 700) === 699) { nycLoadStatus('도로·보도·철도·담장 생성 중… ' + Math.round(q / order.length * 100) + '%', 0.94 + 0.03 * q / order.length); await nmYield(); }
   }
-  NR.avoid = null;
+  NR.avoid = null; NR.trCap = false;
   nycLoadStatus('가로수·신호등·거리 시설물 배치 중…', 0.97); await nmYield(); nrProps(P); try { nrDetail(); } catch (e) { console.warn('detail', e); }
   const tg = nrTreeGeo(), tm = new THREE.Matrix4(), tq = new THREE.Quaternion(), tp = new THREE.Vector3(), ts = new THREE.Vector3(), tc = new THREE.Color(), up = new THREE.Vector3(0, 1, 0);
   let nT = 0, nV = 0;
@@ -6415,6 +6417,461 @@ float lcWave(vec2 w) { return lcF(w * 0.45 + vec2(uLcT * 0.06, uLcT * 0.045)) + 
   }
   NR.preD = null; NR.roadGrid = null; NR.ready = true; NR.stats = { verts: nV, trees: nT, decks: NR.decks.size };
   console.log('[NR] roads built', NR.stats);
+  try { trfInit(); } catch (e) { console.warn('[TRF] init 실패', e); TRF.on = false; }
+}
+
+// ===================== [v32] 도심 교통·인파: 도로 데이터를 따라 움직이는 차량·보행자 =====================
+// · 도로 생성(nrWay) 때 지면 도로/인도/횡단보도 중심선을 그대로 수집 → 플레이어 주변에서만 에이전트를 생성·소멸(InstancedMesh, 드로우콜 ~10회)
+// · 차량: IDM 차간거리 유지 + 교차로 신호(적색 정지) + 교차로에서 직진/회전 선택, 번화가일수록 많고 느림
+// · 보행자: 인도·횡단보도·광장을 걷고, 횡단보도는 보행 신호에 맞춰 건넘, 가끔 멈춰 서거나 둘이 함께 걸음
+// · 번화가(타임스퀘어·헤럴드 스퀘어·펜 스테이션·그랜드 센트럴·월가 등)는 밀도 가중치가 높음
+const TRF = { on: false, runsC: [], runsP: [], cars: [], peds: [], hot: [], scale: 1, ema: 0, T: 0, cap: false, D: 1, dT: 0, free: 90, lastX: 1e9, lastZ: 1e9, nCap: 0 };
+const TRF_HOT = [   // [위도, 경도, 반경(m), 가중치]
+  [40.7580, -73.9855, 520, 3.4], [40.7497, -73.9877, 380, 2.4], [40.7506, -73.9935, 380, 2.2], [40.7527, -73.9772, 420, 2.4],
+  [40.7587, -73.9787, 380, 2.2], [40.7681, -73.9819, 360, 1.7], [40.7359, -73.9911, 380, 2.0], [40.7074, -74.0113, 480, 2.0],
+  [40.7127, -74.0134, 360, 1.7], [40.7233, -74.0030, 380, 1.7], [40.7424, -74.0060, 320, 1.4], [40.7308, -73.9973, 320, 1.7],
+  [40.7625, -73.9740, 340, 1.7], [40.7158, -73.9970, 320, 1.6], [40.8075, -73.9456, 380, 1.3], [40.7410, -73.9897, 360, 1.5],
+  [40.7549, -73.9840, 420, 2.2], [40.7690, -73.9590, 300, 1.2]
+];
+const TRF_GX = Math.sin(28.9 * Math.PI / 180), TRF_GZ = -Math.cos(28.9 * Math.PI / 180);   // 애비뉴 방향(맨해튼 격자)
+const trfAxis = (tx, tz) => Math.abs(tx * TRF_GX + tz * TRF_GZ) >= 0.7071 ? 0 : 1;
+function trfPhase(x, z, T) { const cx = Math.floor(x / 150), cz = Math.floor(z / 150); const h = (Math.imul(cx, 374761393) + Math.imul(cz, 668265263)) >>> 0; return (T + (h % 6000) / 100) % 60; }
+function trfSig(x, z, axis, T) { let p = trfPhase(x, z, T) - 30 * axis; if (p < 0) p += 60; if (p >= 30) return 2; return p < 25 ? 0 : p < 28 ? 1 : 2; }   // 0 초록 1 노랑 2 빨강
+function trfDensity(x, z) { let d = 1; for (let i = 0; i < TRF.hot.length; i++) { const h = TRF.hot[i], dx = x - h[0], dz = z - h[1], q = (dx * dx + dz * dz) / (h[2] * h[2]); if (q < 9) d += h[3] * Math.exp(-q); } return d; }
+const TRF_DMAX = 5.2;
+
+// ---------- 수집(도로 생성 중 호출) ----------
+function trfCapture(k, hwv, ow, lanes, hw, P, m, Y) {
+  let car;
+  if (k === 0) { if (hwv === 6) return; car = hwv !== 8; } else if (k === 1 || k === 2) car = false; else return;
+  const r = { p: P, y: Y, m, hw, cls: hwv, ow: ow ? 1 : 0, lanes: lanes | 0, kind: k };
+  if (car) TRF.runsC.push(r); else TRF.runsP.push(r);
+}
+// 격자 인덱스(CSR)
+function trfGrid(xs, zs, cell) {
+  const n = xs.length; let mnx = 1e9, mnz = 1e9, mxx = -1e9, mxz = -1e9;
+  for (let i = 0; i < n; i++) { if (xs[i] < mnx) mnx = xs[i]; if (xs[i] > mxx) mxx = xs[i]; if (zs[i] < mnz) mnz = zs[i]; if (zs[i] > mxz) mxz = zs[i]; }
+  if (!(n > 0)) return { cell, gx0: 0, gz0: 0, gw: 1, gh: 1, off: new Int32Array(2), idx: new Int32Array(0) };
+  const gx0 = Math.floor(mnx / cell) - 1, gz0 = Math.floor(mnz / cell) - 1, gw = Math.floor(mxx / cell) - gx0 + 2, gh = Math.floor(mxz / cell) - gz0 + 2;
+  const off = new Int32Array(gw * gh + 1), idx = new Int32Array(n), cid = new Int32Array(n);
+  for (let i = 0; i < n; i++) { const c = (Math.floor(zs[i] / cell) - gz0) * gw + Math.floor(xs[i] / cell) - gx0; cid[i] = c; off[c + 1]++; }
+  for (let c = 0; c < gw * gh; c++) off[c + 1] += off[c];
+  const fill = off.slice(0, gw * gh);
+  for (let i = 0; i < n; i++) idx[fill[cid[i]]++] = i;
+  return { cell, gx0, gz0, gw, gh, off, idx };
+}
+function trfBuildNet(runs) {
+  const n = runs.length; let tot = 0; for (const r of runs) tot += r.m;
+  const off = new Int32Array(n + 1), X = new Float32Array(tot), Z = new Float32Array(tot), Y = new Float32Array(tot), S = new Float32Array(tot), runOf = new Int32Array(tot);
+  const hw = new Float32Array(n), cls = new Uint8Array(n), ow = new Uint8Array(n), kind = new Uint8Array(n), lanes = new Uint8Array(n);
+  let o = 0;
+  for (let i = 0; i < n; i++) {
+    const r = runs[i]; off[i] = o; let acc = 0;
+    for (let q = 0; q < r.m; q++) {
+      const x = r.p[q * 2], z = r.p[q * 2 + 1]; X[o + q] = x; Z[o + q] = z; Y[o + q] = r.y ? r.y[q] : 0; runOf[o + q] = i;
+      if (q > 0) acc += Math.hypot(x - X[o + q - 1], z - Z[o + q - 1]); S[o + q] = acc;
+    }
+    hw[i] = r.hw; cls[i] = r.cls; ow[i] = r.ow; kind[i] = r.kind; lanes[i] = Math.min(12, r.lanes); o += r.m;
+  }
+  off[n] = o;
+  return { n, off, X, Z, Y, S, runOf, hw, cls, ow, kind, lanes, tot, grid: trfGrid(X, Z, 24) };
+}
+// 도로 가장자리를 따라가는 보행 경로(인도 데이터가 없는 곳 보강): 큰 도로를 양쪽 가장자리로 오프셋한 선
+function trfSideRuns(runsC, runsP) {
+  let made = 0;
+  for (const r of runsC) {
+    if (r.hw < 3.0 || r.cls <= 1 || r.cls === 7 || r.m < 3) continue;
+    for (const sd of [-1, 1]) {
+      const m = r.m, P = new Float32Array(m * 2), Y = new Float32Array(m), off = r.hw + 1.6;
+      for (let q = 0; q < m; q++) {
+        const a = Math.max(0, q - 1), b = Math.min(m - 1, q + 1); let tx = r.p[b * 2] - r.p[a * 2], tz = r.p[b * 2 + 1] - r.p[a * 2 + 1]; const l = Math.hypot(tx, tz) || 1; tx /= l; tz /= l;
+        const x = r.p[q * 2] + (-tz) * sd * off, z = r.p[q * 2 + 1] + tx * sd * off; P[q * 2] = x; P[q * 2 + 1] = z; Y[q] = r.y[q] + 0.1;
+      }
+      // 건물 위/물 위인 점에서 구간을 자름
+      let a = -1;
+      for (let q = 0; q <= m; q++) {
+        const ok = q < m && nrLand(P[q * 2], P[q * 2 + 1]) && !nrOcc(P[q * 2], P[q * 2 + 1]);
+        if (ok) { if (a < 0) a = q; continue; }
+        if (a >= 0 && q - a >= 3) { runsP.push({ p: P.slice(a * 2, q * 2), y: Y.slice(a, q), m: q - a, hw: 0.9, cls: 99, ow: 0, lanes: 0, kind: 1 }); made++; }
+        a = -1;
+      }
+    }
+  }
+  return made;
+}
+// ---------- 지오메트리 ----------
+function trfMerge(parts) {
+  let nv = 0, ni = 0; for (const p of parts) { nv += p.g.attributes.position.count; ni += p.g.index.count; }
+  const pos = new Float32Array(nv * 3), nor = new Float32Array(nv * 3), col = new Float32Array(nv * 3), idx = new Uint32Array(ni); let vo = 0, io = 0;
+  for (const p of parts) {
+    const g = p.g, n = g.attributes.position.count, c = p.c;
+    pos.set(g.attributes.position.array, vo * 3); nor.set(g.attributes.normal.array, vo * 3);
+    for (let i = 0; i < n; i++) { col[(vo + i) * 3] = c[0]; col[(vo + i) * 3 + 1] = c[1]; col[(vo + i) * 3 + 2] = c[2]; }
+    const I = g.index.array; for (let i = 0; i < I.length; i++) idx[io + i] = I[i] + vo; vo += n; io += I.length; g.dispose();
+  }
+  const G = new THREE.BufferGeometry(); G.setAttribute('position', new THREE.BufferAttribute(pos, 3)); G.setAttribute('normal', new THREE.BufferAttribute(nor, 3)); G.setAttribute('color', new THREE.BufferAttribute(col, 3)); G.setIndex(new THREE.BufferAttribute(idx, 1));
+  return G;
+}
+function trfBox(w, h, l, x, y, z, c, tp) {   // tp: {f: 윗면 앞쪽 길이 배율, b: 뒤쪽 배율, w: 윗면 폭 배율}
+  const g = new THREE.BoxGeometry(w, h, l), P = g.attributes.position;
+  if (tp) for (let i = 0; i < P.count; i++) { if (P.getY(i) > 0) { const zz = P.getZ(i); P.setZ(i, zz * (zz > 0 ? tp.f : tp.b)); P.setX(i, P.getX(i) * tp.w); } }
+  g.translate(x, y, z); if (tp) g.computeVertexNormals();
+  return { g, c };
+}
+function trfWheel(r, wd, x, y, z) { const g = new THREE.CylinderGeometry(r, r, wd, 8); g.rotateZ(Math.PI / 2); g.translate(x, y, z); return { g, c: [0.05, 0.05, 0.06] }; }
+function trfVehGeos() {
+  const W = [1, 1, 1], GL = [0.09, 0.13, 0.19], HL = [1.0, 0.93, 0.75], TL = [0.85, 0.05, 0.04], DK = [0.3, 0.3, 0.3];
+  const car = {
+    body: trfMerge([trfBox(1.8, 0.62, 4.5, 0, 0.56, 0, W), trfBox(1.82, 0.12, 4.52, 0, 0.3, 0, DK), trfBox(1.56, 0.5, 2.3, 0, 1.12, -0.25, W, { f: 0.62, b: 0.8, w: 0.88 })]),
+    trim: trfMerge([trfBox(1.6, 0.31, 2.16, 0, 1.13, -0.25, GL, { f: 0.6, b: 0.78, w: 0.9 }), trfWheel(0.33, 0.24, 0.82, 0.33, 1.42), trfWheel(0.33, 0.24, -0.82, 0.33, 1.42), trfWheel(0.33, 0.24, 0.82, 0.33, -1.42), trfWheel(0.33, 0.24, -0.82, 0.33, -1.42),
+      trfBox(0.36, 0.14, 0.07, 0.6, 0.64, 2.25, HL), trfBox(0.36, 0.14, 0.07, -0.6, 0.64, 2.25, HL), trfBox(0.38, 0.14, 0.07, 0.62, 0.68, -2.25, TL), trfBox(0.38, 0.14, 0.07, -0.62, 0.68, -2.25, TL)]), len: 4.5, wid: 1.8
+  };
+  const bus = {
+    body: trfMerge([trfBox(2.55, 2.45, 11, 0, 1.78, 0, W), trfBox(2.57, 0.2, 11.02, 0, 0.62, 0, DK)]),
+    trim: trfMerge([trfBox(2.59, 0.95, 10.2, 0, 2.45, -0.1, GL), trfBox(2.3, 1.2, 0.06, 0, 2.2, 5.52, GL), trfWheel(0.5, 0.3, 1.2, 0.5, 3.6), trfWheel(0.5, 0.3, -1.2, 0.5, 3.6), trfWheel(0.5, 0.3, 1.2, 0.5, -3.2), trfWheel(0.5, 0.3, -1.2, 0.5, -3.2),
+      trfBox(0.4, 0.2, 0.07, 0.9, 0.9, 5.54, HL), trfBox(0.4, 0.2, 0.07, -0.9, 0.9, 5.54, HL), trfBox(0.4, 0.2, 0.07, 0.95, 1.0, -5.54, TL), trfBox(0.4, 0.2, 0.07, -0.95, 1.0, -5.54, TL)]), len: 11, wid: 2.55
+  };
+  const truck = {
+    body: trfMerge([trfBox(2.4, 2.5, 5.2, 0, 1.95, -1.0, W), trfBox(2.3, 1.7, 2.0, 0, 1.3, 2.7, W, { f: 0.75, b: 1, w: 1 }), trfBox(2.3, 0.2, 7.6, 0, 0.6, 0.3, DK)]),
+    trim: trfMerge([trfBox(2.0, 0.7, 0.06, 0, 1.75, 3.62, GL), trfWheel(0.5, 0.3, 1.0, 0.5, 2.7), trfWheel(0.5, 0.3, -1.0, 0.5, 2.7), trfWheel(0.5, 0.3, 1.0, 0.5, -2.2), trfWheel(0.5, 0.3, -1.0, 0.5, -2.2),
+      trfBox(0.4, 0.2, 0.07, 0.8, 0.85, 3.72, HL), trfBox(0.4, 0.2, 0.07, -0.8, 0.85, 3.72, HL), trfBox(0.4, 0.2, 0.07, 0.85, 0.9, -3.62, TL), trfBox(0.4, 0.2, 0.07, -0.85, 0.9, -3.62, TL)]), len: 7.6, wid: 2.4
+  };
+  return [car, bus, truck];
+}
+function trfPedGeos() {
+  const W = [1, 1, 1];
+  const torso = trfMerge([trfBox(0.38, 0.56, 0.22, 0, 1.18, 0, W), trfBox(0.09, 0.5, 0.1, 0.235, 1.15, 0, W), trfBox(0.09, 0.5, 0.1, -0.235, 1.15, 0, W)]);
+  const hg = new THREE.SphereGeometry(0.105, 8, 6); hg.translate(0, 1.64, 0);
+  const pa = hg.attributes.position, col = new Float32Array(pa.count * 3);
+  for (let i = 0; i < pa.count; i++) { const hair = pa.getY(i) > 1.67 || (pa.getZ(i) < -0.04 && pa.getY(i) > 1.6); const v = hair ? 0.16 : 1; col[i * 3] = v; col[i * 3 + 1] = v; col[i * 3 + 2] = v; }
+  hg.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  const lg = new THREE.BoxGeometry(0.15, 0.84, 0.17); lg.translate(0, -0.42, 0);
+  const lc = new Float32Array(lg.attributes.position.count * 3).fill(1); lg.setAttribute('color', new THREE.BufferAttribute(lc, 3));
+  return { torso, head: hg, leg: lg };
+}
+// ---------- 초기화(월드 생성 직후 1회) ----------
+function trfInit() {
+  if (TRF.on) return;
+  const lite = !!window.__LITE, ipad = !!window.__IPAD;
+  TRF.hot = TRF_HOT.map(h => { const p = latLonToWorld(h[0], h[1]); return [p.x, p.z, h[2], h[3]]; });
+  let carTot = 0, pedTot = 0; for (const r of TRF.runsC) carTot += r.m; for (const r of TRF.runsP) pedTot += r.m;
+  const sideMade = pedTot < carTot * 0.8 ? trfSideRuns(TRF.runsC, TRF.runsP) : 0;   // 인도 데이터가 충분하면 그대로 사용, 부족하면 도로 가장자리 경로로 보강
+  TRF.cN = trfBuildNet(TRF.runsC); TRF.pN = trfBuildNet(TRF.runsP);
+  TRF.stat = { carRuns: TRF.runsC.length, carSamples: TRF.cN.tot, pedRuns: TRF.runsP.length, pedSamples: TRF.pN.tot, side: sideMade };
+  TRF.runsC = []; TRF.runsP = [];
+  // 신호 교차점: 도로 끝점 주변에 교차하는 도로가 있는 곳
+  const N = TRF.cN, nx = [], nz = [], cw0 = [], cw1 = [], nodeCell = new Map();
+  for (let r = 0; r < N.n; r++) {
+    const o = N.off[r], m = N.off[r + 1] - o; if (m < 2) continue;
+    for (let e = 0; e < 2; e++) {
+      const ei = e ? o + m - 1 : o, ai = e ? ei - 1 : ei + 1; let tx = N.X[ei] - N.X[ai], tz = N.Z[ei] - N.Z[ai]; const l = Math.hypot(tx, tz) || 1; tx /= l; tz /= l;
+      const ex = N.X[ei], ez = N.Z[ei]; let cross = false, chw = 0;
+      trfEach(N.grid, ex, ez, 1, gi => {
+        const r2 = N.runOf[gi]; if (r2 === r) return; const dx = N.X[gi] - ex, dz = N.Z[gi] - ez; if (dx * dx + dz * dz > 400) return;
+        const T = trfTan(N, gi); if (Math.abs(tx * T[1] - tz * T[0]) > 0.55) { cross = true; if (N.hw[r2] > chw) chw = N.hw[r2]; }
+      });
+      if (!cross) continue;
+      const key = Math.round(ex / 12) + ',' + Math.round(ez / 12); let id = -1;
+      for (let a = -1; a <= 1 && id < 0; a++) for (let b = -1; b <= 1 && id < 0; b++) { const q = nodeCell.get((Math.round(ex / 12) + a) + ',' + (Math.round(ez / 12) + b)); if (q !== undefined && Math.hypot(nx[q] - ex, nz[q] - ez) < 14) id = q; }
+      if (id < 0) { id = nx.length; nx.push(ex); nz.push(ez); cw0.push(0); cw1.push(0); nodeCell.set(key, id); }
+      const ax = trfAxis(tx, tz), W = [cw0, cw1];
+      if (N.hw[r] > W[ax][id]) W[ax][id] = N.hw[r]; if (chw > W[1 - ax][id]) W[1 - ax][id] = chw;
+    }
+  }
+  TRF.nodeX = Float32Array.from(nx); TRF.nodeZ = Float32Array.from(nz); TRF.nodeW = [Float32Array.from(cw0), Float32Array.from(cw1)]; TRF.nodeG = trfGrid(TRF.nodeX, TRF.nodeZ, 24);
+  TRF.stat.nodes = nx.length;
+  // 렌더러
+  const vg = trfVehGeos(), pg = trfPedGeos(), K = lite ? 0.45 : ipad ? 0.65 : 1;
+  const envMap = NR.mPr && NR.mPr.envMap || null;
+  TRF.matBody = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.5, metalness: 0.12, envMap, envMapIntensity: 0.4 });
+  TRF.matTrim = new THREE.MeshBasicMaterial({ vertexColors: true });
+  TRF.matPed = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.92, metalness: 0 });
+  const caps = [Math.ceil(240 * K), Math.ceil(30 * K), Math.ceil(40 * K)];
+  TRF.vt = vg.map((v, i) => {
+    const cap = caps[i];
+    const body = new THREE.InstancedMesh(v.body, TRF.matBody, cap), trim = new THREE.InstancedMesh(v.trim, TRF.matTrim, cap);
+    body.instanceMatrix.setUsage(THREE.DynamicDrawUsage); trim.instanceMatrix = body.instanceMatrix;
+    body.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(cap * 3), 3); body.instanceColor.setUsage(THREE.DynamicDrawUsage);
+    for (const mm of [body, trim]) { mm.frustumCulled = false; mm.count = 0; mm.name = 'TRF_Veh' + i; mm.matrixAutoUpdate = false; scene.add(mm); }
+    body.receiveShadow = true; body.castShadow = false;
+    return { body, trim, cap, n: 0, len: v.len, wid: v.wid, list: [] };
+  });
+  const pc = Math.ceil(560 * K);
+  const torso = new THREE.InstancedMesh(pg.torso, TRF.matPed, pc), head = new THREE.InstancedMesh(pg.head, TRF.matPed, pc), legs = new THREE.InstancedMesh(pg.leg, TRF.matPed, pc * 2);
+  torso.instanceMatrix.setUsage(THREE.DynamicDrawUsage); head.instanceMatrix = torso.instanceMatrix; legs.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  torso.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(pc * 3), 3); head.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(pc * 3), 3); legs.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(pc * 6), 3);
+  for (const a of [torso.instanceColor, head.instanceColor, legs.instanceColor]) a.setUsage(THREE.DynamicDrawUsage);
+  for (const mm of [torso, head, legs]) { mm.frustumCulled = false; mm.count = 0; mm.name = 'TRF_Ped'; mm.matrixAutoUpdate = false; mm.receiveShadow = true; scene.add(mm); }
+  TRF.pm = { torso, head, legs, cap: pc };
+  TRF.maxC = caps[0]; TRF.maxP = pc; TRF.K = K; TRF.fr = new THREE.Frustum(); TRF.pmx = new THREE.Matrix4(); TRF.v3 = new THREE.Vector3();
+  TRF.gh = new Int32Array(2048).fill(-1); TRF.gn = new Int32Array(1024);
+  TRF.scale = 1; TRF.on = true;
+  console.log('[TRF] init', JSON.stringify(TRF.stat));
+}
+// 격자 순회
+function trfEach(G, x, z, rad, fn) {
+  const cx = Math.floor(x / G.cell) - G.gx0, cz = Math.floor(z / G.cell) - G.gz0;
+  for (let b = cz - rad; b <= cz + rad; b++) { if (b < 0 || b >= G.gh) continue; for (let a = cx - rad; a <= cx + rad; a++) { if (a < 0 || a >= G.gw) continue; const c = b * G.gw + a; for (let i = G.off[c]; i < G.off[c + 1]; i++) fn(G.idx[i]); } }
+}
+const TRF_T2 = [0, 1];
+function trfTan(N, gi) {   // 샘플 gi 에서 s 증가 방향 접선
+  const r = N.runOf[gi], o = N.off[r], e = N.off[r + 1] - 1; const a = gi < e ? gi : gi - 1, b = a + 1;
+  let tx = N.X[b] - N.X[a], tz = N.Z[b] - N.Z[a]; const l = Math.hypot(tx, tz) || 1; TRF_T2[0] = tx / l; TRF_T2[1] = tz / l; return TRF_T2;
+}
+const TSP = { x: 0, z: 0, y: 0, tx: 0, tz: 1, sl: 0, q: 0 };
+function trfSample(N, r, s, q) {
+  const o = N.off[r], m = N.off[r + 1] - o, S = N.S;
+  if (m < 2) { TSP.x = N.X[o]; TSP.z = N.Z[o]; TSP.y = N.Y[o]; TSP.tx = 0; TSP.tz = 1; TSP.sl = 0; TSP.q = 0; return; }
+  if (q < 0) q = 0; else if (q > m - 2) q = m - 2;
+  while (q < m - 2 && S[o + q + 1] < s) q++;
+  while (q > 0 && S[o + q] > s) q--;
+  const i = o + q, seg = S[i + 1] - S[i], f = seg > 1e-4 ? Math.min(1, Math.max(0, (s - S[i]) / seg)) : 0, inv = seg > 1e-4 ? 1 / seg : 0;
+  const ax = N.X[i], az = N.Z[i], bx = N.X[i + 1], bz = N.Z[i + 1];
+  TSP.x = ax + (bx - ax) * f; TSP.z = az + (bz - az) * f; TSP.y = N.Y[i] + (N.Y[i + 1] - N.Y[i]) * f;
+  if (inv) { TSP.tx = (bx - ax) * inv; TSP.tz = (bz - az) * inv; TSP.sl = (N.Y[i + 1] - N.Y[i]) * inv; } else { TSP.tx = 0; TSP.tz = 1; TSP.sl = 0; }
+  TSP.q = q;
+}
+// 다음 도로 선택(교차로에서 직진/회전)
+const TRF_CAND = [];
+function trfChooseNext(N, r, dir, ped) {
+  const o = N.off[r], m = N.off[r + 1] - o, ei = dir > 0 ? o + m - 1 : o, ai = dir > 0 ? ei - 1 : ei + 1; if (m < 2) return null;
+  const ex = N.X[ei], ez = N.Z[ei]; let tx = ex - N.X[ai], tz = ez - N.Z[ai]; const tl = Math.hypot(tx, tz) || 1; tx /= tl; tz /= tl;
+  const R = ped ? 7 : 16, R2 = R * R; TRF_CAND.length = 0;
+  trfEach(N.grid, ex, ez, 1, gi => {
+    const r2 = N.runOf[gi]; if (r2 === r) return; const dx = N.X[gi] - ex, dz = N.Z[gi] - ez, d2 = dx * dx + dz * dz; if (d2 > R2) return;
+    const fwd = dx * tx + dz * tz, lat = Math.abs(dx * -tz + dz * tx); if (lat > (ped ? 7 : 11) || fwd < -(ped ? 6 : 9)) return;
+    for (let i = 0; i < TRF_CAND.length; i++) if (TRF_CAND[i].r === r2) { if (d2 < TRF_CAND[i].d2) { TRF_CAND[i].gi = gi; TRF_CAND[i].d2 = d2; } return; }
+    TRF_CAND.push({ r: r2, gi, d2 });
+  });
+  let tot = 0; const opts = [];
+  for (const c of TRF_CAND) {
+    const r2 = c.r, o2 = N.off[r2], m2 = N.off[r2 + 1] - o2, q2 = c.gi - o2;
+    for (let d2 = 1; d2 >= -1; d2 -= 2) {
+      if (d2 < 0 && N.ow[r2]) continue; if (d2 > 0 && q2 >= m2 - 1) continue; if (d2 < 0 && q2 <= 0) continue;
+      const b = d2 > 0 ? c.gi + 1 : c.gi - 1; let vx = N.X[b] - N.X[c.gi], vz = N.Z[b] - N.Z[c.gi]; const vl = Math.hypot(vx, vz) || 1; vx /= vl; vz /= vl;
+      const cs = tx * vx + tz * vz; if (cs < (ped ? -0.6 : -0.2)) continue;
+      let w = cs > 0.85 ? 5 : cs > 0.4 ? 2.4 : cs > -0.2 ? 1.2 : 0.25;
+      if (ped) { if (N.kind[r2] === 2) w *= 0.8; w *= 1 / (1 + 0.15 * Math.sqrt(c.d2)); } else w *= 1 / (1 + 0.04 * Math.sqrt(c.d2));
+      opts.push({ r: r2, gi: c.gi, dir: d2, cs, w }); tot += w;
+    }
+  }
+  if (!opts.length) return null;
+  let pick = Math.random() * tot; for (const p of opts) { pick -= p.w; if (pick <= 0) return { r: p.r, s: N.S[p.gi], dir: p.dir, cs: p.cs, q: p.gi - N.off[p.r] }; }
+  const p = opts[opts.length - 1]; return { r: p.r, s: N.S[p.gi], dir: p.dir, cs: p.cs, q: p.gi - N.off[p.r] };
+}
+// ---------- 색상 ----------
+const TRF_CARS = [[196, 32, 36], [34, 62, 142], [206, 206, 210], [22, 22, 26], [122, 126, 132], [236, 236, 238], [40, 108, 72], [150, 152, 158], [92, 60, 40], [60, 70, 90], [170, 120, 40]], TRF_TAXI = [244, 188, 18];
+const TRF_TRUCK = [[236, 236, 238], [96, 62, 38], [40, 80, 150], [200, 200, 205], [180, 40, 36]], TRF_BUS = [[222, 226, 232], [210, 214, 222]];
+const TRF_SHIRT = [[200, 60, 50], [50, 90, 170], [230, 230, 225], [60, 60, 66], [220, 170, 50], [70, 140, 90], [150, 70, 150], [30, 30, 34], [120, 130, 140], [230, 120, 150], [240, 150, 60], [40, 120, 150]];
+const TRF_PANT = [[40, 44, 60], [70, 64, 56], [30, 30, 34], [60, 80, 110], [100, 96, 88], [20, 24, 40], [120, 100, 80]], TRF_SKIN = [[236, 190, 160], [198, 146, 110], [140, 98, 70], [96, 64, 44], [245, 205, 175]];
+const trfPick = a => a[(Math.random() * a.length) | 0];
+// ---------- 스폰 ----------
+function trfRandSpawn(N, cx, cz, rMin, rMax, ped) {
+  for (let t = 0; t < 8; t++) {
+    const ang = Math.random() * 6.2832, d = Math.sqrt(rMin * rMin + Math.random() * (rMax * rMax - rMin * rMin)), x = cx + Math.cos(ang) * d, z = cz + Math.sin(ang) * d;
+    const G = N.grid, a = Math.floor(x / G.cell) - G.gx0, b = Math.floor(z / G.cell) - G.gz0; if (a < 0 || b < 0 || a >= G.gw || b >= G.gh) continue;
+    const c = b * G.gw + a, n = G.off[c + 1] - G.off[c]; if (!n) continue;
+    const gi = G.idx[G.off[c] + ((Math.random() * n) | 0)], px = N.X[gi], pz = N.Z[gi];
+    if (Math.random() * TRF_DMAX > trfDensity(px, pz) * (ped ? 1 : 1)) continue;
+    if (!TRF.free) { const v = TRF.v3.set(px, N.Y[gi] + 1, pz), dd = Math.hypot(px - cx, pz - cz); if (dd < (ped ? 75 : 110) && TRF.fr.containsPoint(v)) continue; }
+    return gi;
+  }
+  return -1;
+}
+function trfLane(c, N) {
+  const r = c.run, hw = N.hw[r], ow = N.ow[r]; let L = N.lanes[r]; if (!L) L = Math.max(1, Math.round(hw * 2 / 3.3));
+  let lat;
+  if (ow) { const li = (Math.random() * L) | 0; lat = -hw + (li + 0.5) / L * 2 * hw; lat = Math.max(-(hw - 2.9), Math.min(hw - 2.9, lat)); if (hw < 3.9) lat = 0; }
+  else { const lpd = Math.max(1, Math.floor(L / 2)), li = (Math.random() * lpd) | 0; lat = (li + 0.5) / lpd * hw; lat = Math.max(0.9, Math.min(lat, hw - 2.9)); if (hw < 2.6) lat = hw * 0.5; }
+  c.latT = lat;
+}
+const TRF_SPD = { 0: 19, 1: 19, 2: 11.5, 3: 11.5, 4: 10, 5: 9, 7: 9, 9: 12 };
+function trfSpawnCar(cx, cz) {
+  const N = TRF.cN, gi = trfRandSpawn(N, cx, cz, 25, 255, false); if (gi < 0) return false;
+  const r = N.runOf[gi], o = N.off[r], m = N.off[r + 1] - o, q = gi - o; if (m < 3 || N.hw[r] < 2.3) return false;
+  const dir = N.ow[r] ? 1 : (Math.random() < 0.5 ? 1 : -1); if ((dir > 0 && q >= m - 2) || (dir < 0 && q <= 1)) return false;
+  const x = N.X[gi], z = N.Z[gi]; for (const c of TRF.cars) { const dx = c.x - x, dz = c.z - z; if (dx * dx + dz * dz < 64) return false; }
+  const D = trfDensity(x, z), ww = N.hw[r], rr = Math.random();
+  let type = 0; if (rr < 0.045 && ww >= 4.5) type = 1; else if (rr < 0.11 && ww >= 3.4) type = 2;
+  const vt = TRF.vt[type]; if (vt.list.length >= vt.cap) return false;
+  const body = type === 0 ? (Math.random() < Math.min(0.55, 0.2 + 0.1 * (D - 1)) ? TRF_TAXI : trfPick(TRF_CARS)) : type === 1 ? trfPick(TRF_BUS) : trfPick(TRF_TRUCK);
+  const c = { type, run: r, dir, s: N.S[gi], q: q, lat: 0, latT: 0, v: 0, v0: 10, x, z, y: N.Y[gi], h: 0, pit: 0, dx: 0, dz: 0, nx: undefined, stuck: 0, col: body, len: vt.len, wid: vt.wid, acc: 0, k: 0.85 + Math.random() * 0.3, px: x, pz: z };
+  trfLane(c, N); c.lat = c.latT; trfSample(N, r, c.s, q); c.q = TSP.q;
+  const tx = TSP.tx * dir, tz = TSP.tz * dir; c.h = Math.atan2(tx, tz); c.x = TSP.x - tz * c.lat; c.z = TSP.z + tx * c.lat; c.px = c.x; c.pz = c.z;
+  c.v0 = (TRF_SPD[N.cls[r]] || 9) * c.k * (type ? 0.85 : 1) / (1 + 0.1 * (D - 1)); c.v = c.v0 * 0.6;
+  TRF.cars.push(c); vt.list.push(c); return true;
+}
+function trfSpawnPed(cx, cz) {
+  const N = TRF.pN, gi = trfRandSpawn(N, cx, cz, 15, 175, true); if (gi < 0) return false;
+  const r = N.runOf[gi], o = N.off[r], m = N.off[r + 1] - o, q = gi - o; if (m < 2) return false;
+  const dir = Math.random() < 0.5 ? 1 : -1, hw = N.hw[r], plaza = N.cls[r] === 8;
+  const mk = (ls, lat, v, buddy) => ({ run: r, dir, s: ls, q: Math.min(q, m - 2), lat, latT: lat, v, v0: v, x: 0, z: 0, y: 0, h: 0, ph: Math.random() * 6.28, sc: 0.92 + Math.random() * 0.16, shirt: trfPick(TRF_SHIRT), pant: trfPick(TRF_PANT), skin: trfPick(TRF_SKIN), dx: 0, dz: 0, nx: undefined, wait: false, pause: 0, px: 0, pz: 0, stuck: 0, buddy });
+  const v = 1.15 + Math.random() * 0.5, lat = plaza ? (Math.random() * 2 - 1) * hw * 0.8 : (0.15 + Math.random() * 0.55) * Math.min(hw, 3);
+  const a = mk(N.S[gi], lat, v, false); trfPedPlace(a, N);
+  TRF.peds.push(a);
+  if (Math.random() < 0.14 && TRF.peds.length < TRF.maxP - 2) { const b = mk(Math.max(0, Math.min(N.S[o + m - 1], N.S[gi] - dir * 0.8)), lat + 0.55, v, true); trfPedPlace(b, N); b.shirt = trfPick(TRF_SHIRT); TRF.peds.push(b); }
+  return true;
+}
+function trfPedPlace(p, N) {
+  trfSample(N, p.run, p.s, p.q); p.q = TSP.q; const tx = TSP.tx * p.dir, tz = TSP.tz * p.dir;
+  p.x = TSP.x - tz * p.lat; p.z = TSP.z + tx * p.lat; p.y = TSP.y; p.h = Math.atan2(tx, tz); p.px = p.x; p.pz = p.z;
+}
+// ---------- 갱신 ----------
+function trfAng(a, b) { let d = a - b; while (d > Math.PI) d -= 6.2832; while (d < -Math.PI) d += 6.2832; return d; }
+function trfStepCar(c, dt, T, N) {
+  const r = c.run, o = N.off[r], m = N.off[r + 1] - o, len = N.S[o + m - 1];
+  c.s += c.dir * c.v * dt;
+  let rem = c.dir > 0 ? len - c.s : c.s;
+  if (c.nx === undefined && rem < 50) c.nx = trfChooseNext(N, r, c.dir, false);
+  if (rem <= 0) {
+    if (!c.nx) return false;
+    const nx = c.nx; c.nx = undefined; c.run = nx.r; c.dir = nx.dir; c.s = nx.s; c.q = nx.q;
+    trfSample(N, c.run, c.s, c.q); c.q = TSP.q; const ttx = TSP.tx * c.dir, ttz = TSP.tz * c.dir;
+    const ox = c.x, oz = c.z; trfLane(c, N);
+    const nxp = TSP.x - ttz * c.lat, nzp = TSP.z + ttx * c.lat; c.dx = ox - nxp; c.dz = oz - nzp;
+    if (c.dx * c.dx + c.dz * c.dz > 900) { c.dx = 0; c.dz = 0; }
+    const cl = N.cls[c.run]; c.v0 = (TRF_SPD[cl] || 9) * c.k * (c.type ? 0.85 : 1) / (1 + 0.1 * (TRF.D - 1));
+    rem = c.dir > 0 ? N.S[N.off[c.run + 1] - 1] - c.s : c.s;
+  }
+  // 현재 위치(레일)
+  trfSample(N, c.run, c.s, c.q); c.q = TSP.q;
+  const ttx = TSP.tx * c.dir, ttz = TSP.tz * c.dir;
+  c.lat += (c.latT - c.lat) * Math.min(1, dt * 1.1);
+  const dk = Math.exp(-dt * 1.5); c.dx *= dk; c.dz *= dk;
+  const x = TSP.x - ttz * c.lat + c.dx, z = TSP.z + ttx * c.lat + c.dz;
+  const mvx = x - c.x, mvz = z - c.z; c.x = x; c.z = z; c.y = TSP.y;
+  if (mvx * mvx + mvz * mvz > 1e-6) c.h += trfAng(Math.atan2(mvx, mvz), c.h) * (1 - Math.exp(-dt * 9));
+  const sp = Math.atan(TSP.sl * c.dir); c.pit += (sp - c.pit) * Math.min(1, dt * 6);
+  // 가속도(IDM)
+  const hx = Math.sin(c.h), hz = Math.cos(c.h), rx = hz, rz = -hx;
+  const a = c.type === 1 ? 1.3 : c.type === 2 ? 1.6 : 2.2, b = 3.0, sq = 2 * Math.sqrt(a * b);
+  let v0 = c.v0; if (c.nx && c.nx.cs <= 0.8 && rem < 60) { const vt = c.nx.cs > 0.2 ? 6 : 4; v0 = Math.min(v0, Math.sqrt(vt * vt + 2 * b * Math.max(0, rem - 6))); }
+  let acc = a * (1 - Math.pow(c.v / Math.max(0.5, v0), 4));
+  // 앞차
+  let gapMin = 1e9, vL = 0;
+  { const ax = c.x + hx * 18, az = c.z + hz * 18, ic = Math.floor(ax / 14), jc = Math.floor(az / 14);
+    for (let jj = jc - 2; jj <= jc + 2; jj++) for (let ii = ic - 2; ii <= ic + 2; ii++) {
+      let k = TRF.gh[(Math.imul(ii, 73856093) ^ Math.imul(jj, 19349663)) & 2047];
+      while (k >= 0) { const d = TRF.cars[k]; k = TRF.gn[k]; if (d === c || d.dead) continue; const ddx = d.x - c.x, ddz = d.z - c.z, fw = ddx * hx + ddz * hz; if (fw <= 0 || fw > 60) continue; const lt = Math.abs(ddx * rx + ddz * rz); if (lt > (c.wid + d.wid) * 0.5 + 0.3) continue; const dh = Math.sin(d.h) * hx + Math.cos(d.h) * hz; if (dh < 0.3) continue; const gap = fw - (c.len + d.len) * 0.5; if (gap < gapMin) { gapMin = gap; vL = d.v * dh; } } }
+  }
+  if (gapMin < 1e8) { const g = Math.max(0.3, gapMin), dv = c.v - vL, ss = 2.2 + Math.max(0, c.v * 1.1 + c.v * dv / sq); acc -= a * (ss / g) * (ss / g); }
+  // 신호(정지선)
+  c.waitSig = 0;
+  { const G = TRF.nodeG, ax = c.x + hx * 22, az = c.z + hz * 22; let best = 1e9, bn = -1;
+    trfEach(G, ax, az, 1, ni => { const dx = TRF.nodeX[ni] - c.x, dz = TRF.nodeZ[ni] - c.z, fw = dx * hx + dz * hz; if (fw < -3 || fw > 62) return; if (Math.abs(dx * rx + dz * rz) > 5) return; if (fw < best) { best = fw; bn = ni; } });
+    if (bn >= 0) {
+      const ax2 = trfAxis(hx, hz), st = trfSig(TRF.nodeX[bn], TRF.nodeZ[bn], ax2, T), cwid = TRF.nodeW[1 - ax2][bn] || 5, ds = best - cwid - 1.8 - c.len * 0.5;
+      if (ds > -0.8 && (st === 2 || (st === 1 && ds > c.v * c.v / 7))) { const g = Math.max(0.3, ds + 1.0), ss = 2.0 + Math.max(0, c.v * 1.0 + c.v * c.v / sq); acc -= a * (ss / g) * (ss / g); if (c.v < 0.3 && ds < 3) c.waitSig = 1; }
+    }
+  }
+  acc = Math.max(-8, Math.min(a, acc)); c.acc += (acc - c.acc) * Math.min(1, dt * 8);
+  c.v = Math.max(0, c.v + acc * dt);
+  if (c.v < 0.25) { c.stuck += dt; } else c.stuck = 0;
+  if (c.stuck > 45) { c.stuck = 0; if (!c.waitSig) return false; c.waitSig = 0; }
+  return true;
+}
+function trfWalkOK(N, r, T) {
+  const o = N.off[r], m = N.off[r + 1] - o, e = o + m - 1, mx = (N.X[o] + N.X[e]) * 0.5, mz = (N.Z[o] + N.Z[e]) * 0.5; let tx = N.X[e] - N.X[o], tz = N.Z[e] - N.Z[o]; const l = Math.hypot(tx, tz) || 1;
+  const roadAx = 1 - trfAxis(tx / l, tz / l); let p = trfPhase(mx, mz, T) - 30 * roadAx; if (p < 0) p += 60; return p >= 31.5 && p < 51;
+}
+function trfStepPed(p, dt, T, N) {
+  let r = p.run, o = N.off[r], m = N.off[r + 1] - o, len = N.S[o + m - 1];
+  let moving = true;
+  if (p.wait) { moving = false; if (trfWalkOK(N, p.nx.r, T)) { p.wait = false; trfPedSwitch(p, N); r = p.run; } }
+  else if (p.pause > 0) { p.pause -= dt; moving = false; }
+  else {
+    p.s += p.dir * p.v * dt;
+    const rem = p.dir > 0 ? len - p.s : p.s;
+    if (rem <= 0.15) {
+      const nx = trfChooseNext(N, r, p.dir, true);
+      p.s = p.dir > 0 ? len : 0;
+      if (!nx) { p.dir = -p.dir; p.latT = -p.latT; }
+      else { p.nx = nx; if (N.kind[nx.r] === 2 && !trfWalkOK(N, nx.r, T)) { p.wait = true; moving = false; } else { trfPedSwitch(p, N); r = p.run; } }
+    }
+  }
+  trfSample(N, p.run, p.s, p.q); p.q = TSP.q;
+  const ttx = TSP.tx * p.dir, ttz = TSP.tz * p.dir;
+  p.lat += (p.latT - p.lat) * Math.min(1, dt * 1.5);
+  const dk = Math.exp(-dt * 2.2); p.dx *= dk; p.dz *= dk;
+  const x = TSP.x - ttz * p.lat + p.dx, z = TSP.z + ttx * p.lat + p.dz, mvx = x - p.x, mvz = z - p.z;
+  p.x = x; p.z = z; p.y = TSP.y + 0.04;
+  if (mvx * mvx + mvz * mvz > 4e-6) p.h += trfAng(Math.atan2(mvx, mvz), p.h) * (1 - Math.exp(-dt * 8));
+  p.mv = moving ? p.v : 0; if (moving) p.ph += p.v * dt * 4.6;
+  return true;
+}
+function trfPedSwitch(p, N) {
+  const nx = p.nx; p.nx = undefined; if (!nx) return;
+  const ox = p.x, oz = p.z; p.run = nx.r; p.dir = nx.dir; p.s = nx.s; p.q = nx.q;
+  const hw = N.hw[nx.r], plaza = N.cls[nx.r] === 8; p.latT = plaza ? (Math.random() * 2 - 1) * hw * 0.8 : (0.15 + Math.random() * 0.55) * Math.min(hw, 3);
+  if (p.buddy) p.latT += 0.55;
+  trfSample(N, p.run, p.s, p.q); p.q = TSP.q; const ttx = TSP.tx * p.dir, ttz = TSP.tz * p.dir;
+  p.dx = ox - (TSP.x - ttz * p.lat); p.dz = oz - (TSP.z + ttx * p.lat); if (p.dx * p.dx + p.dz * p.dz > 144) { p.dx = 0; p.dz = 0; }
+  if (Math.random() < 0.05 && !p.buddy) p.pause = 3 + Math.random() * 8;
+}
+function trfUpdate(dt) {
+  if (!TRF.on || !isGameStarted || mapOpen) return;
+  const t0 = performance.now(); dt = Math.min(dt, 0.05); TRF.T += dt;
+  const cam = camera.position, cx = cam.x, cz = cam.z;
+  if (Math.hypot(cx - TRF.lastX, cz - TRF.lastZ) > 600) { TRF.cars.length = 0; TRF.peds.length = 0; for (const v of TRF.vt) v.list.length = 0; TRF.free = 90; }
+  TRF.lastX = cx; TRF.lastZ = cz;
+  camera.updateMatrixWorld(); TRF.pmx.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse); TRF.fr.setFromProjectionMatrix(TRF.pmx);
+  if ((TRF.dT -= dt) <= 0) { TRF.dT = 0.4; TRF.D = trfDensity(cx, cz); }
+  const D = TRF.D, sc = TRF.scale, K = TRF.K;
+  const tC = Math.min(TRF.maxC, Math.round((85 + 45 * (D - 1)) * K * sc)), tP = Math.min(TRF.maxP, Math.round((170 + 120 * (D - 1)) * K * sc));
+  const N = TRF.cN, PN = TRF.pN;
+  // 소멸
+  for (let i = TRF.cars.length - 1; i >= 0; i--) { const c = TRF.cars[i], dx = c.x - cx, dz = c.z - cz; if (dx * dx + dz * dz > 290 * 290 || (i >= tC * 1.2 && !TRF.fr.containsPoint(TRF.v3.set(c.x, c.y + 1, c.z)))) { trfRemCar(c, i); } }
+  for (let i = TRF.peds.length - 1; i >= 0; i--) { const p = TRF.peds[i], dx = p.x - cx, dz = p.z - cz; if (dx * dx + dz * dz > 200 * 200 || (i >= tP * 1.2 && !TRF.fr.containsPoint(TRF.v3.set(p.x, p.y + 1, p.z)))) { TRF.peds[i] = TRF.peds[TRF.peds.length - 1]; TRF.peds.pop(); } }
+  // 스폰
+  let bc = TRF.free ? 40 : 12, bp = TRF.free ? 70 : 24;
+  while (bc-- > 0 && TRF.cars.length < tC) trfSpawnCar(cx, cz);
+  while (bp-- > 0 && TRF.peds.length < tP) trfSpawnPed(cx, cz);
+  if (TRF.free > 0) TRF.free--;
+  // 차량 해시
+  TRF.gh.fill(-1); const cars = TRF.cars; if (TRF.gn.length < cars.length + 1) TRF.gn = new Int32Array(cars.length * 2 + 16);
+  for (let i = 0; i < cars.length; i++) { const c = cars[i], k = (Math.imul(Math.floor(c.x / 14), 73856093) ^ Math.imul(Math.floor(c.z / 14), 19349663)) & 2047; TRF.gn[i] = TRF.gh[k]; TRF.gh[k] = i; }
+  const T = TRF.T;
+  let nd = 0; for (let i = 0; i < cars.length; i++) { const c = cars[i]; if (!trfStepCar(c, dt, T, N)) { c.dead = true; nd++; } }
+  if (nd) for (let i = cars.length - 1; i >= 0; i--) if (cars[i].dead) trfRemCar(cars[i], i);
+  const peds = TRF.peds; for (let i = peds.length - 1; i >= 0; i--) { if (!trfStepPed(peds[i], dt, T, PN)) { peds[i] = peds[peds.length - 1]; peds.pop(); } }
+  trfWrite();
+  // 부하 적응: 프레임 비용이 크면 개수를 줄이고 여유가 있으면 복원
+  const ms = performance.now() - t0; TRF.ema += (ms - TRF.ema) * 0.05;
+  if (TRF.ema > 3.2) TRF.scale = Math.max(0.35, TRF.scale - 0.004); else if (TRF.ema < 1.8) TRF.scale = Math.min(1, TRF.scale + 0.002);
+}
+function trfRemCar(c, i) {
+  const l = TRF.vt[c.type].list, j = l.indexOf(c); if (j >= 0) { l[j] = l[l.length - 1]; l.pop(); }
+  TRF.cars[i] = TRF.cars[TRF.cars.length - 1]; TRF.cars.pop();
+}
+function trfWrite() {
+  for (let t = 0; t < 3; t++) {
+    const vt = TRF.vt[t], list = vt.list, n = Math.min(list.length, vt.cap), A = vt.body.instanceMatrix.array, C = vt.body.instanceColor.array;
+    for (let i = 0; i < n; i++) {
+      const c = list[i], sh = Math.sin(c.h), ch = Math.cos(c.h), pit = c.pit + Math.max(-0.035, Math.min(0.035, c.acc * 0.006)), cp = Math.cos(pit), sp = Math.sin(pit);
+      const fx = sh * cp, fy = sp, fz = ch * cp, rx = ch, rz = -sh, ux = fy * rz, uy = fz * rx - fx * rz, uz = -fy * rx, k = i * 16;
+      A[k] = rx; A[k + 1] = 0; A[k + 2] = rz; A[k + 3] = 0; A[k + 4] = ux; A[k + 5] = uy; A[k + 6] = uz; A[k + 7] = 0; A[k + 8] = fx; A[k + 9] = fy; A[k + 10] = fz; A[k + 11] = 0; A[k + 12] = c.x; A[k + 13] = c.y + 0.02; A[k + 14] = c.z; A[k + 15] = 1;
+      C[i * 3] = c.col[0] / 255; C[i * 3 + 1] = c.col[1] / 255; C[i * 3 + 2] = c.col[2] / 255;
+    }
+    vt.body.count = vt.trim.count = n; vt.body.instanceMatrix.needsUpdate = true; vt.body.instanceColor.needsUpdate = true;
+  }
+  const P = TRF.pm, peds = TRF.peds, n = Math.min(peds.length, P.cap), A = P.torso.instanceMatrix.array, L = P.legs.instanceMatrix.array, CT = P.torso.instanceColor.array, CH = P.head.instanceColor.array, CL = P.legs.instanceColor.array;
+  for (let i = 0; i < n; i++) {
+    const p = peds[i], sh = Math.sin(p.h), ch = Math.cos(p.h), s = p.sc, bob = p.mv > 0 ? Math.abs(Math.sin(p.ph)) * 0.035 : 0, y = p.y + bob, k = i * 16;
+    A[k] = ch * s; A[k + 1] = 0; A[k + 2] = -sh * s; A[k + 3] = 0; A[k + 4] = 0; A[k + 5] = s; A[k + 6] = 0; A[k + 7] = 0; A[k + 8] = sh * s; A[k + 9] = 0; A[k + 10] = ch * s; A[k + 11] = 0; A[k + 12] = p.x; A[k + 13] = y; A[k + 14] = p.z; A[k + 15] = 1;
+    const sw = p.mv > 0 ? Math.sin(p.ph) * 0.6 : 0, hy = y + 0.86 * s;
+    for (let l = 0; l < 2; l++) {
+      const ang = l ? -sw : sw, ca = Math.cos(ang), sa = Math.sin(ang), side = (l ? -0.09 : 0.09) * s, q = (i * 2 + l) * 16;
+      // R = Ry(h)·Rx(ang): 열0=(ch,0,-sh) 열1=(sa·sh, ca, sa·ch) 열2=(ca·sh, -sa, ca·ch)
+      L[q] = ch * s; L[q + 1] = 0; L[q + 2] = -sh * s; L[q + 3] = 0;
+      L[q + 4] = sa * sh * s; L[q + 5] = ca * s; L[q + 6] = sa * ch * s; L[q + 7] = 0;
+      L[q + 8] = ca * sh * s; L[q + 9] = -sa * s; L[q + 10] = ca * ch * s; L[q + 11] = 0;
+      L[q + 12] = p.x + ch * side; L[q + 13] = hy; L[q + 14] = p.z - sh * side; L[q + 15] = 1;
+      const cl = (i * 2 + l) * 3; CL[cl] = p.pant[0] / 255; CL[cl + 1] = p.pant[1] / 255; CL[cl + 2] = p.pant[2] / 255;
+    }
+    CT[i * 3] = p.shirt[0] / 255; CT[i * 3 + 1] = p.shirt[1] / 255; CT[i * 3 + 2] = p.shirt[2] / 255; CH[i * 3] = p.skin[0] / 255; CH[i * 3 + 1] = p.skin[1] / 255; CH[i * 3 + 2] = p.skin[2] / 255;
+  }
+  P.torso.count = P.head.count = n; P.legs.count = n * 2;
+  P.torso.instanceMatrix.needsUpdate = true; P.legs.instanceMatrix.needsUpdate = true; P.torso.instanceColor.needsUpdate = true; P.head.instanceColor.needsUpdate = true; P.legs.instanceColor.needsUpdate = true;
 }
 
 // ---------------- 월드 로딩 ----------------
@@ -10478,6 +10935,7 @@ function animate() {
   if (isSpectator) updateSpectator(dt);
   nmFrame(dt);
   try { propsUpdate(dt); } catch (e) { PROPS.acc = -5; }
+  try { trfUpdate(dt); } catch (e) { if (!TRF.err) { TRF.err = 1; console.warn('[TRF] update 오류 → 비활성화', e); } TRF.on = false; }
 
   hudTimer += dt;
   if (hudTimer > 0.25) {
