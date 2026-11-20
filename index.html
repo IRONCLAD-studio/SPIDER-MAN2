@@ -9952,7 +9952,7 @@ const GFX_PRESETS = {
   medium: { label: '보통 (권장)',            maxPR: 2.0, shadow: 2048, bShadow: true,  bloom: false, shR: 150 },
   high:   { label: '높음 (고화질 그림자+블룸)', maxPR: 2.0, shadow: 2048, bShadow: true,  bloom: true, loadR: 900, shR: 190 },
   ultra:  { label: '최고급 (울트라: 반사·빛줄기·시네마 후처리)', maxPR: 2.0, shadow: 4096, bShadow: true, bloom: true, ultra: true, loadR: 1200, shR: 230 },
-  cinema: { label: '시네마틱 (SSR·볼류메트릭·모션블러·AO·2단 그림자)', maxPR: 2.0, shadow: 4096, bShadow: true, bloom: true, ultra: true, cinema: true, loadR: 1200, shR: 230 },
+  cinema: { label: '시네마틱 (SSR·볼류메트릭·모션블러·AO·2단 그림자)', maxPR: 1.25, shadow: 2048, bShadow: true, bloom: true, ultra: true, cinema: true, loadR: 800, shR: 230 },
   realistic: { label: '리얼리스틱 (RT Shadow + RTAO)', maxPR: 2.0, shadow: 0, bShadow: false, bloom: true, ultra: true, cinema: true, realistic: true, loadR: 1200, shR: 230 }
 };
 
@@ -10404,7 +10404,7 @@ function gfxBloomInit() {
             if (Rv.z < 0.5) {
               float stepL = max(0.8, D * 0.012); vec3 p = vp, pp = vp; float pd = -1.0;
               p += Rv * stepL * hh(gl_FragCoord.xy * 0.731);   // 고정 지터(시간 변화 없음 → 깜빡임 없음)
-              for (int i = 0; i < 40; i++) {
+              for (int i = 0; i < 24; i++) {
                 pp = p; p += Rv * stepL; stepL *= 1.06; if (p.z > -0.3) break;
                 vec2 su = proj(p);
                 if (su.x < 0.0 || su.x > 1.0 || su.y < 0.0 || su.y > 1.0) break;
@@ -10868,7 +10868,7 @@ function gfx2ReflOf(o) {
   o.userData.gfxR = r; return r;
 }
 function gfx2RenderG(W, H) {
-  const w = Math.max(4, Math.round(W * 0.75)), h = Math.max(4, Math.round(H * 0.75)), fl = gfx2Float();
+  const w = Math.max(4, Math.round(W * 0.5)), h = Math.max(4, Math.round(H * 0.5)), fl = gfx2Float();
   if (!GFX2.gb || GFX2.gbW !== w || GFX2.gbH !== h) {
     if (GFX2.gb) GFX2.gb.dispose();
     GFX2.gb = new THREE.WebGLRenderTarget(w, h, { minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, format: THREE.RGBAFormat, type: fl ? THREE.FloatType : THREE.UnsignedByteType, depthBuffer: true });
@@ -11028,9 +11028,16 @@ function propsUpdate(dt) {
   }
 }
 
+// [FPS CAP] 프레임 60 고정: 120/144Hz 모니터에서도 60fps 로 제한(GPU·CPU 부하 절반 이하, 프레임 간격 균일). 콘솔: FPS_CAP = 0 → 해제, 30 등 변경 가능
+window.FPS_CAP = 60; let __capLast = 0;
 function animate() {
   requestAnimationFrame(animate);
   const now = performance.now();
+  if (window.FPS_CAP > 0) {
+    const step = 1000 / window.FPS_CAP, el = now - __capLast;
+    if (el < step - 0.75) return;                       // 아직 다음 프레임 시각이 아님 → 렌더/물리 모두 건너뜀
+    __capLast = (el > step * 3) ? now : now - (el % step);   // 드리프트 보정(긴 정지 후엔 리셋)
+  }
   const dtRaw = Math.min(0.1, (now - lastTime) / 1000);   // [REAL-G] 저프레임에서도 물리 시간이 실시간과 일치하도록 0.1s까지 허용
   const dt = Math.min(0.05, dtRaw);
   lastTime = now;
