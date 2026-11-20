@@ -10779,7 +10779,7 @@ function gfxUpdate() {
     const avg = GFX.acc / GFX.frames; GFX.frames = 0; GFX.acc = 0;
     const maxPR = Math.min(window.devicePixelRatio || 1, GFX_MOBILE ? Math.min(GFX_PRESETS[GFX.quality].maxPR, 2.0) : GFX_PRESETS[GFX.quality].maxPR);
     const hiQ = GFX.quality === 'high' || GFX.quality === 'ultra' || GFX.quality === 'cinema' || GFX.quality === 'realistic';
-    const lockPR = GFX.lockPR || (hiQ && gfxEffDetail() >= 1200 && !GFX_MOBILE);   // [v15] 폰은 FPS 낮으면 해상도 자동 하향
+    const lockPR = GFX.lockPR || (hiQ && gfxEffDetail() >= 1200 && !GFX_MOBILE) || (GFX_MOBILE && window.PR_LOCK !== false);   // [해상도 고정] 폰: 자동 해상도 하향/상향 금지 → 처음 화질 유지 + 렌더타깃 재할당 누적 방지 (콘솔: PR_LOCK = false 로 해제)   // [v15] 폰은 FPS 낮으면 해상도 자동 하향
     const floorPR = lockPR ? maxPR : Math.min(maxPR, GFX_MOBILE ? 0.8 : 1.5);   // [60fps/발열] 폰은 0.8 까지 내려갈 수 있게 해 열 스로틀링에도 프레임 유지
     if (lockPR) { if (Math.abs(GFX.pr - maxPR) > 0.01) gfxSetPR(maxPR); }
     else if (avg > (GFX_MOBILE ? 19.5 : 24) && GFX.pr > floorPR + 0.01) { gfxSetPR(Math.max(floorPR, GFX.pr - 0.1)); GFX.lockUp = GFX_MOBILE ? 600 : 480; }
@@ -11031,9 +11031,23 @@ function propsUpdate(dt) {
 
 // [FPS CAP] 프레임 60 고정: 120/144Hz 모니터에서도 60fps 로 제한(GPU·CPU 부하 절반 이하, 프레임 간격 균일). 콘솔: FPS_CAP = 0 → 해제, 30 등 변경 가능
 window.FPS_CAP = 60; let __capLast = 0;
+// [PERF HUD] 주소 끝에 ?perf=1 을 붙이면 좌상단에 fps·해상도·지오메트리/텍스처/프로그램 수·장면 오브젝트 수 표시 → 시간이 지날수록 숫자가 계속 늘어나는 항목이 누수 원인
+let __perfEl = null, __perfAcc = 0, __perfFrames = 0, __perfT = 0;
+function __perfHudTick(now) {
+  try {
+    if (!__perfEl) { __perfEl = document.createElement('div'); __perfEl.style.cssText = 'position:fixed;left:6px;top:6px;z-index:99999;font:10px/1.35 monospace;color:#7CFC9A;background:rgba(0,0,0,.55);padding:4px 6px;border-radius:4px;pointer-events:none;white-space:pre'; document.body.appendChild(__perfEl); __perfT = now; }
+    __perfFrames++;
+    if (now - __perfT < 1000) return;
+    const fps = __perfFrames * 1000 / (now - __perfT); __perfFrames = 0; __perfT = now;
+    let n = 0; scene.traverse(() => { n++; });
+    const i = renderer.info, m = i.memory, r = i.render;
+    __perfEl.textContent = 'fps ' + fps.toFixed(0) + '  PR ' + (GFX.pr || 0).toFixed(2) + '\ngeo ' + m.geometries + '  tex ' + m.textures + '  prog ' + (i.programs ? i.programs.length : '-') + '\ncalls ' + r.calls + '  tris ' + (r.triangles / 1000).toFixed(0) + 'k\nscene ' + n + '  cells ' + (NM.cellMeshes ? NM.cellMeshes.length : '-') + '  fc ' + (typeof FC !== 'undefined' && FC.cells ? FC.cells.size : '-') + '\ncars ' + (TRF.cars ? TRF.cars.length : '-') + '  peds ' + (TRF.peds ? TRF.peds.length : '-') + '  cols ' + (NM.cellDone ? NM.cellDone.size : '-');
+  } catch (e) { __perfEl = null; window.__perfOff = true; }
+}
 function animate() {
   requestAnimationFrame(animate);
   const now = performance.now();
+  if (!window.__perfOff && /[?&]perf/.test(location.search)) __perfHudTick(now);
   if (window.FPS_CAP > 0) {
     const step = 1000 / window.FPS_CAP, el = now - __capLast;
     if (el < step - 0.75) return;                       // 아직 다음 프레임 시각이 아님 → 렌더/물리 모두 건너뜀
