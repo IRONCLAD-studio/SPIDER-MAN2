@@ -2552,7 +2552,7 @@ canvas { display: block; width: 100%; height: 100%; }
     <header class="st-brand">
       <h1 class="st-title"><span>Manhattan 1:1</span><span>Web-Swing</span></h1>
       <p class="st-sub">실제 크기의 맨해튼 위를 거미줄로 날아다니세요.</p>
-      <span id="game-version" class="st-ver">v32 · 웹 벽달리기 · 백플립</span>
+      <span id="game-version" class="st-ver">v34 · 웹 벽달리기 · 백플립</span>
     </header>
 
     <nav class="st-menu" aria-label="메인 메뉴">
@@ -6808,8 +6808,40 @@ function trfPedSwitch(p, N) {
   p.dx = ox - (TSP.x - ttz * p.lat); p.dz = oz - (TSP.z + ttx * p.lat); if (p.dx * p.dx + p.dz * p.dz > 144) { p.dx = 0; p.dz = 0; }
   if (Math.random() < 0.05 && !p.buddy) p.pause = 3 + Math.random() * 8;
 }
+
+// ---------- 열린 공간(광장·공원·삼각 광장 등)을 자유롭게 돌아다니는 보행자 ----------
+// 걸을 수 있는 곳 = 육지 · 건물 밖 · 차도 밖 · 보행 경로(인도/횡단보도/광장)에서 60m 이내
+function trfOpenOK(x, z) {
+  if (!nrLand(x, z) || nrOcc(x, z)) return false;
+  const C = TRF.cN, P = TRF.pN; let bad = false, near = false;
+  trfEach(C.grid, x, z, 1, gi => { if (bad) return; const dx = C.X[gi] - x, dz = C.Z[gi] - z, w = C.hw[C.runOf[gi]] + 1.2; if (dx * dx + dz * dz < w * w) bad = true; });
+  if (bad) return false;
+  trfEach(P.grid, x, z, 3, gi => { if (near) return; const dx = P.X[gi] - x, dz = P.Z[gi] - z; if (dx * dx + dz * dz < 3600) near = true; });
+  return near;
+}
+function trfSpawnWander(cx, cz) {
+  for (let t = 0; t < 16; t++) {
+    const ang = Math.random() * 6.2832, d = 4 + Math.random() * 170, x = cx + Math.cos(ang) * d, z = cz + Math.sin(ang) * d;
+    if (!trfOpenOK(x, z)) continue;
+    if (Math.random() * TRF_DMAX > trfDensity(x, z) * 1.3) continue;
+    if (!TRF.free && d < 75 && TRF.fr.containsPoint(TRF.v3.set(x, nmGroundAt(x, z) + 1, z))) continue;
+    const h = Math.random() * 6.2832, v = 1.0 + Math.random() * 0.5;
+    TRF.peds.push({ free: 1, run: 0, dir: 1, s: 0, q: 0, lat: 0, latT: 0, v, v0: v, x, z, y: nmGroundAt(x, z) + 0.04, h, hT: h, ph: Math.random() * 6.28, sc: 0.92 + Math.random() * 0.16, shirt: trfPick(TRF_SHIRT), pant: trfPick(TRF_PANT), skin: trfPick(TRF_SKIN), dx: 0, dz: 0, nx: undefined, wait: false, pause: Math.random() < 0.2 ? Math.random() * 6 : 0, px: x, pz: z, mv: v, turnT: 3 + Math.random() * 10 });
+    return true;
+  }
+  return false;
+}
+function trfStepWander(p, dt) {
+  if (p.pause > 0) { p.pause -= dt; p.mv = 0; return; }
+  p.mv = p.v; p.turnT -= dt;
+  if (p.turnT <= 0) { p.turnT = 4 + Math.random() * 10; p.hT += (Math.random() - 0.5) * 1.6; if (Math.random() < 0.15) { p.pause = 2 + Math.random() * 7; p.mv = 0; } }
+  p.h += trfAng(p.hT, p.h) * (1 - Math.exp(-dt * 5));
+  const nx = p.x + Math.sin(p.h) * p.v * dt, nz = p.z + Math.cos(p.h) * p.v * dt;
+  if (trfOpenOK(nx, nz)) { p.x = nx; p.z = nz; } else { p.hT = p.h + 2.0 + Math.random() * 2.2; p.turnT = 3; }
+  p.ph += p.v * dt * 4.6; p.y = nmGroundAt(p.x, p.z) + 0.04;
+}
 function trfUpdate(dt) {
-  if (!TRF.on || !isGameStarted || mapOpen) return;
+  if (!TRF.on || mapOpen || !window.__worldReady) return;   // 시작 화면(월드 미리보기)에서도 차·사람이 움직이도록 isGameStarted 와 무관하게 동작
   const t0 = performance.now(); dt = Math.min(dt, 0.05); TRF.T += dt;
   const cam = camera.position, cx = cam.x, cz = cam.z;
   if (Math.hypot(cx - TRF.lastX, cz - TRF.lastZ) > 600) { TRF.cars.length = 0; TRF.peds.length = 0; for (const v of TRF.vt) v.list.length = 0; TRF.free = 90; }
@@ -6825,7 +6857,10 @@ function trfUpdate(dt) {
   // 스폰
   let bc = TRF.free ? 40 : 12, bp = TRF.free ? 70 : 24;
   while (bc-- > 0 && TRF.cars.length < tC) trfSpawnCar(cx, cz);
-  while (bp-- > 0 && TRF.peds.length < tP) trfSpawnPed(cx, cz);
+  let nW = 0; for (let i = 0; i < TRF.peds.length; i++) if (TRF.peds[i].free) nW++;
+  const tW = Math.round((100 + 80 * (D - 1)) * K * sc);
+  while (bp-- > 0 && TRF.peds.length - nW < tP && TRF.peds.length < TRF.maxP) trfSpawnPed(cx, cz);
+  for (let n = 0; n < (TRF.free ? 40 : 10) && nW < tW && TRF.peds.length < TRF.maxP; n++) { if (trfSpawnWander(cx, cz)) nW++; else break; }
   if (TRF.free > 0) TRF.free--;
   // 차량 해시
   TRF.gh.fill(-1); const cars = TRF.cars; if (TRF.gn.length < cars.length + 1) TRF.gn = new Int32Array(cars.length * 2 + 16);
@@ -6833,7 +6868,7 @@ function trfUpdate(dt) {
   const T = TRF.T;
   let nd = 0; for (let i = 0; i < cars.length; i++) { const c = cars[i]; if (!trfStepCar(c, dt, T, N)) { c.dead = true; nd++; } }
   if (nd) for (let i = cars.length - 1; i >= 0; i--) if (cars[i].dead) trfRemCar(cars[i], i);
-  const peds = TRF.peds; for (let i = peds.length - 1; i >= 0; i--) { if (!trfStepPed(peds[i], dt, T, PN)) { peds[i] = peds[peds.length - 1]; peds.pop(); } }
+  const peds = TRF.peds; for (let i = peds.length - 1; i >= 0; i--) { const p = peds[i]; if (p.free) { trfStepWander(p, dt); continue; } if (!trfStepPed(p, dt, T, PN)) { peds[i] = peds[peds.length - 1]; peds.pop(); } }
   trfWrite();
   // 부하 적응: 프레임 비용이 크면 개수를 줄이고 여유가 있으면 복원
   const ms = performance.now() - t0; TRF.ema += (ms - TRF.ema) * 0.05;
