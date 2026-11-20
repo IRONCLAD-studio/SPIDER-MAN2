@@ -5142,15 +5142,56 @@ function nmEsbRoof() {
 }
 
 // ---------------- 프레임 업데이트 ----------------
+// [PERF] 맵 셀 빌드 분산: 한 프레임에 몰리던 nmBuildCols 를 프레임당 ~3ms 예산으로 나눠 처리하고, 진행 방향 앞쪽 셀을 먼저 만든다.
+// 플레이어 주변 3×3 은 spatialColliderGrid.get() 이 즉시 동기 빌드하므로 충돌 안전성은 그대로. 건물/그래픽 데이터는 변경 없음.
+const NMQ = { q: [], cur: null, l: null, i: 0, budget: 3.0, err: 0, built: 0, maxMs: 0 };
+window.__NMQ = NMQ;
+function nmQueueScan() {
+  const px = player.pos.x, pz = player.pos.z, vx = player.vel.x, vz = player.vel.z, sp = Math.hypot(vx, vz);
+  const look = sp > 6 ? Math.min(sp * 1.5, 300) : 0, ax = look ? px + vx / sp * look : px, az = look ? pz + vz / sp * look : pz;
+  const out = [], seen = new Set();
+  const add = (cx, cz, rad) => {
+    const gx = Math.floor(cx / SPATIAL_CELL), gz = Math.floor(cz / SPATIAL_CELL);
+    for (let a = -rad; a <= rad; a++) for (let b = -rad; b <= rad; b++) {
+      const k = (gx + a) + ',' + (gz + b);
+      if (seen.has(k) || NM.cellDone.has(k)) continue; seen.add(k);
+      if (!NM.idx.has(k)) { NM.cellDone.add(k); continue; }            // 건물 없는 셀은 즉시 완료 처리(비용 0)
+      const dx = (gx + a + 0.5) * SPATIAL_CELL - px, dz = (gz + b + 0.5) * SPATIAL_CELL - pz; let d = Math.hypot(dx, dz);
+      if (sp > 8 && (dx * vx + dz * vz) < -0.3 * sp * d) d *= 1.6;       // 뒤쪽 셀은 후순위
+      out.push([d, k]);
+    }
+  };
+  add(px, pz, 3);                  // 기존과 동일한 7×7 범위
+  if (look > 100) add(ax, az, 2);  // 고속 시 진행 방향 앞쪽 추가
+  out.sort((p, q) => p[0] - q[0]); NMQ.q = out.map(e => e[1]);
+}
+function nmPump() {
+  const t0 = performance.now(), B = NMQ.budget;
+  for (;;) {
+    if (NMQ.cur === null) {
+      let k = null; while (NMQ.q.length) { const c = NMQ.q.shift(); if (!NM.cellDone.has(c)) { k = c; break; } }
+      if (k === null) break;
+      NMQ.cur = k; NMQ.l = NM.idx.get(k) || []; NMQ.i = 0;
+    }
+    if (NM.cellDone.has(NMQ.cur)) { NMQ.cur = null; continue; }
+    while (NMQ.i < NMQ.l.length) { nmBuildCols(NMQ.l[NMQ.i++]); NMQ.built++; if (performance.now() - t0 > B) break; }
+    if (NMQ.i >= NMQ.l.length) { nmEnsureCell(NMQ.cur); NMQ.cur = null; }   // 전부 만들어졌으면 완료 표시(내부는 built 가드라 중복 비용 없음)
+    if (performance.now() - t0 > B) break;
+  }
+  const ms = performance.now() - t0; if (ms > NMQ.maxMs) NMQ.maxMs = ms;
+}
 function nmFrame(dt) {
   if (NR.lcT) NR.lcT.value += dt;
   fcUpdate(dt);
   if (NM.ready) realEnvTick();
-  if (!NM.ready) return; NM.camT += dt; if (NM.camT < 0.3) return; NM.camT = 0;
+  if (!NM.ready) return;
+  if (!NMQ.err) { try { nmPump(); } catch (e) { NMQ.err = 1; console.warn('[NMQ] 분산 빌드 오류 → 기존 방식으로 복귀', e); } }
+  NM.camT += dt; if (NM.camT < 0.3) return; NM.camT = 0;
   ldmTick();
   const cx = camera.position.x, cz = camera.position.z, R = (GFXU.chunk || 2300) + 250;
   for (const c of NM.cellMeshes) c.mesh.visible = Math.hypot(c.x - cx, c.z - cz) < (c.r || R) + 300;
   if (window.__winFar) window.__winFar.value = Math.min(2600, Math.max(250, gfxEffDetail() * 1.0));
+  if (!NMQ.err) { nmQueueScan(); return; }
   const gx = Math.floor(player.pos.x / SPATIAL_CELL), gz = Math.floor(player.pos.z / SPATIAL_CELL);
   for (let a = -3; a <= 3; a++) for (let b = -3; b <= 3; b++) nmEnsureCell((gx + a) + ',' + (gz + b));
 }
@@ -6855,12 +6896,13 @@ function trfUpdate(dt) {
   for (let i = TRF.cars.length - 1; i >= 0; i--) { const c = TRF.cars[i], dx = c.x - cx, dz = c.z - cz; if (dx * dx + dz * dz > 290 * 290 || (i >= tC * 1.2 && !TRF.fr.containsPoint(TRF.v3.set(c.x, c.y + 1, c.z)))) { trfRemCar(c, i); } }
   for (let i = TRF.peds.length - 1; i >= 0; i--) { const p = TRF.peds[i], dx = p.x - cx, dz = p.z - cz; if (dx * dx + dz * dz > 200 * 200 || (i >= tP * 1.2 && !TRF.fr.containsPoint(TRF.v3.set(p.x, p.y + 1, p.z)))) { TRF.peds[i] = TRF.peds[TRF.peds.length - 1]; TRF.peds.pop(); } }
   // 스폰
-  let bc = TRF.free ? 40 : 12, bp = TRF.free ? 70 : 24;
+  const spd = (typeof player !== 'undefined') ? Math.hypot(player.vel.x, player.vel.z) : 0, hiV = !TRF.free && spd > 40;   // [PERF] 고속 시 스폰 분산
+  let bc = TRF.free ? 40 : (hiV ? 4 : 12), bp = TRF.free ? 70 : (hiV ? 8 : 24);
   while (bc-- > 0 && TRF.cars.length < tC) trfSpawnCar(cx, cz);
   let nW = 0; for (let i = 0; i < TRF.peds.length; i++) if (TRF.peds[i].free) nW++;
   const tW = Math.round((100 + 80 * (D - 1)) * K * sc);
   while (bp-- > 0 && TRF.peds.length - nW < tP && TRF.peds.length < TRF.maxP) trfSpawnPed(cx, cz);
-  for (let n = 0; n < (TRF.free ? 40 : 10) && nW < tW && TRF.peds.length < TRF.maxP; n++) { if (trfSpawnWander(cx, cz)) nW++; else break; }
+  for (let n = 0; n < (TRF.free ? 40 : (hiV ? 3 : 10)) && nW < tW && TRF.peds.length < TRF.maxP; n++) { if (trfSpawnWander(cx, cz)) nW++; else break; }
   if (TRF.free > 0) TRF.free--;
   // 차량 해시
   TRF.gh.fill(-1); const cars = TRF.cars; if (TRF.gn.length < cars.length + 1) TRF.gn = new Int32Array(cars.length * 2 + 16);
@@ -10959,7 +11001,7 @@ function animate() {
   GROUND_Y = nmGroundAt(player.pos.x, player.pos.z);
   if (!isSwinging) evaluateWebTargets(); // 스윙 중에는 새 타겟이 필요 없으므로 탐색 생략
   if (isGameStarted && !mapOpen && !isSpectator) {   // [REAL-G] 물리 서브스텝: 한 스텝 ≤ 1/30s (프레임이 느려도 낙하가 슬로모션처럼 보이지 않음)
-    const nSteps = Math.max(1, Math.ceil(dtRaw / (1 / 30))), h = dtRaw / nSteps;
+    const nSteps = Math.min(2, Math.max(1, Math.ceil(dtRaw / (1 / 30)))), h = dtRaw / nSteps;
     for (let si = 0; si < nSteps; si++) updatePhysics(h);
   }
   updateSpiderManRig(dt);
