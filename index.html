@@ -11033,21 +11033,45 @@ function propsUpdate(dt) {
 window.FPS_CAP = 60; let __capLast = 0;
 // [PERF HUD] 주소 끝에 ?perf=1 을 붙이면 좌상단에 fps·해상도·지오메트리/텍스처/프로그램 수·장면 오브젝트 수 표시 → 시간이 지날수록 숫자가 계속 늘어나는 항목이 누수 원인
 let __perfEl = null, __perfAcc = 0, __perfFrames = 0, __perfT = 0;
+// [MEM EVICT] 지나간 구역의 건물별 캐시(그림자 삼각형 _gs, 웹 부착점 앵커)는 해제 코드가 없어 탐험할수록 수백 MB 로 누적 → 모바일 메모리 압박·GC 끊김.
+//   플레이어에서 멀어진 셀(>1200m / 앵커 >1500m)의 캐시를 주기적으로 비운다. 가까워지면 필요할 때 자동으로 다시 만들어진다(_gs 는 undefined 면 재생성, 앵커는 anchDone 해제).
+window.MEM_EVICT = true; window.__evictStat = { gs: 0, anc: 0 };
+setInterval(() => {
+  try {
+    if (!window.MEM_EVICT || typeof isGameStarted === 'undefined' || !isGameStarted || !NM.ready || typeof player === 'undefined') return;
+    const px = player.pos.x, pz = player.pos.z, S = SPATIAL_CELL, st = window.__evictStat;
+    for (const list of spatialColliderGrid._m.values()) {
+      const c0 = list[0]; if (!c0 || Math.hypot(c0.centX - px, c0.centZ - pz) < 1200) continue;
+      for (let i = 0; i < list.length; i++) if (list[i]._gs) { list[i]._gs = undefined; st.gs++; }
+    }
+    const AM = spatialAnchorGrid._m;
+    for (const k of Array.from(AM.keys())) {
+      const ij = k.split(','), cx = (+ij[0] + 0.5) * S, cz = (+ij[1] + 0.5) * S;
+      if (Math.hypot(cx - px, cz - pz) < 1500) continue;
+      const cl = spatialColliderGrid._m.get(k); if (cl) for (let i = 0; i < cl.length; i++) cl[i]._an = 0;
+      AM.delete(k); NM.anchDone.delete(k); st.anc++;
+    }
+  } catch (e) { window.MEM_EVICT = false; console.warn('[MEM EVICT] 비활성', e); }
+}, 6000);
+window.PERF_HUD = true;   // 기본 표시. 화면 왼쪽 위 모서리를 빠르게 3번 탭하면 켜고 끔 (콘솔: PERF_HUD = false)
+(function () { let c = 0, t0 = 0; window.addEventListener('touchstart', (e) => { const t = e.touches && e.touches[0]; if (!t || t.clientX > 90 || t.clientY > 90) return; const n = performance.now(); c = (n - t0 < 900) ? c + 1 : 1; t0 = n; if (c >= 3) { c = 0; window.PERF_HUD = !window.PERF_HUD; } }, { passive: true }); })();
 function __perfHudTick(now) {
   try {
+    if (!window.PERF_HUD) { if (__perfEl) __perfEl.style.display = 'none'; return; }
+    if (__perfEl) __perfEl.style.display = '';
     if (!__perfEl) { __perfEl = document.createElement('div'); __perfEl.style.cssText = 'position:fixed;left:6px;top:6px;z-index:99999;font:10px/1.35 monospace;color:#7CFC9A;background:rgba(0,0,0,.55);padding:4px 6px;border-radius:4px;pointer-events:none;white-space:pre'; document.body.appendChild(__perfEl); __perfT = now; }
     __perfFrames++;
     if (now - __perfT < 1000) return;
     const fps = __perfFrames * 1000 / (now - __perfT); __perfFrames = 0; __perfT = now;
     let n = 0; scene.traverse(() => { n++; });
     const i = renderer.info, m = i.memory, r = i.render;
-    __perfEl.textContent = 'fps ' + fps.toFixed(0) + '  PR ' + (GFX.pr || 0).toFixed(2) + '\ngeo ' + m.geometries + '  tex ' + m.textures + '  prog ' + (i.programs ? i.programs.length : '-') + '\ncalls ' + r.calls + '  tris ' + (r.triangles / 1000).toFixed(0) + 'k\nscene ' + n + '  cells ' + (NM.cellMeshes ? NM.cellMeshes.length : '-') + '  fc ' + (typeof FC !== 'undefined' && FC.cells ? FC.cells.size : '-') + '\ncars ' + (TRF.cars ? TRF.cars.length : '-') + '  peds ' + (TRF.peds ? TRF.peds.length : '-') + '  cols ' + (NM.cellDone ? NM.cellDone.size : '-');
+    __perfEl.textContent = 'fps ' + fps.toFixed(0) + '  PR ' + (GFX.pr || 0).toFixed(2) + '\ngeo ' + m.geometries + '  tex ' + m.textures + '  prog ' + (i.programs ? i.programs.length : '-') + '\ncalls ' + r.calls + '  tris ' + (r.triangles / 1000).toFixed(0) + 'k\nscene ' + n + '  cells ' + (NM.cellMeshes ? NM.cellMeshes.length : '-') + '  fc ' + (typeof FC !== 'undefined' && FC.cells ? FC.cells.size : '-') + '\ncars ' + (TRF.cars ? TRF.cars.length : '-') + '  peds ' + (TRF.peds ? TRF.peds.length : '-') + '  cols ' + (NM.cellDone ? NM.cellDone.size : '-') + '\nancCells ' + spatialAnchorGrid._m.size + '  colCells ' + spatialColliderGrid._m.size + '  freed gs ' + window.__evictStat.gs + ' anc ' + window.__evictStat.anc;
   } catch (e) { __perfEl = null; window.__perfOff = true; }
 }
 function animate() {
   requestAnimationFrame(animate);
   const now = performance.now();
-  if (!window.__perfOff && /[?&]perf/.test(location.search)) __perfHudTick(now);
+  if (!window.__perfOff) __perfHudTick(now);
   if (window.FPS_CAP > 0) {
     const step = 1000 / window.FPS_CAP, el = now - __capLast;
     if (el < step - 0.75) return;                       // 아직 다음 프레임 시각이 아님 → 렌더/물리 모두 건너뜀
