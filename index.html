@@ -7812,6 +7812,14 @@ const SWING = {
   cornerBoost: 2.5,           // 코너링 시 수렴 속도 배율 (2~3배)
   cornerSteerThreshold: 0.55, // 앵커 쪽으로 이 이상 조향하면 코너링 판정
   cornerResponse: 8.0,        // 1/s 배율 변화 스무딩
+  swingAssist: 0.8,           // 0~1  physicsPivot = lerp(visualAnchor, idealCenterPivot, swingAssist)  (설정창 Assist 레벨과 곱해짐)
+  lateralDamping: 2.5,        // 1/s  조향 입력이 작을 때 횡방향 속도 지수 감쇠율
+  lateralSteerThreshold: 0.30,// 좌우 조향 입력이 이보다 작으면 '직진'으로 보고 횡속도 감쇠
+  lateralToForward: 0.5,      // 감쇠된 횡속도 중 전진 속도로 전환되는 비율
+  headingFollowStraight: 0.7, // 1/s 직진 중 기준 진행 방향이 실제 속도 방향을 따라가는 속도
+  headingFollowCorner: 6.0,   // 1/s 코너링 중 기준 진행 방향 추종 속도
+  cornerReturnRate: 3.0,      // 1/s 코너링 시 physicsPivot → visualAnchor 복귀 속도(빠름)
+  pivotRecenterRate: 0.5,     // 1/s 코너링이 끝난 뒤 보정 피벗으로 되돌아가는 속도(직진 중 벽 쪽 끌림 방지)
   steerSmooth: 3.2,          // 1/s 조향 입력 관성
   turnRateSlow: 70.0, turnRateFast: 40.0, turnSpeedLo: 10.0, turnSpeedHi: 45.0,   // deg/s 스윙 평면 조향 보조
   // ── ④ 진자 제약 솔버 ──
@@ -7843,7 +7851,9 @@ const GROUND = { accel: 95.0, brake: 150.0, decel: 90.0 };   // 지상 이동 �
 const SWING_PHASE = { NONE: 0, DOWNSWING: 1, APEX: 2, UPSWING: 3, RELEASE: 4 };
 const SWING_PHASE_NAMES = ['-', 'DOWNSWING', 'APEX', 'UPSWING', 'RELEASE'];
 let swingPhase = SWING_PHASE.NONE, swingElapsedTime = 0, swingPivotBlend = 0, swingSteerSm = 0, swingCornerMul = 1;
-let swingInX = 0, swingInZ = 0, swingReel = 0, swingTurnRateDeg = 0, swingPivotU = 0;
+let swingInX = 0, swingInZ = 0, swingReel = 0, swingTurnRateDeg = 0, swingPivotU = 0;   // swingPivotU: 0 = 보정 피벗(physicsPivot) · 1 = 실제 벽(visualAnchor) 복귀 비율
+let swingHeadX = 0, swingHeadZ = 1;                 // [Dual-Pivot/Anti-ZigZag] 스윙 기준 진행 방향(수평 단위벡터): 좌우 성분 분해·피벗 투영 기준
+const swingIdealPivot = new THREE.Vector3();        // idealCenterPivot: visualAnchor 의 좌우 편차를 제거해 진행 방향 수직(스윙) 평면 위로 투영한 점
 let swingSawDescent = false, swingApexTimer = 0, swingLenMod = 0, releaseDragFreeT = 0;
 const swingKick = { active: false, t: 0, remaining: 0, imp: new THREE.Vector3(), q: 0 };
 
@@ -8645,6 +8655,12 @@ function updateGroundLaunch(dt) {
   if (!GL.fired && (GL.t >= ev.fire || !player.onGround)) { GL.fired = true; shootWebNow(); }   // 팔이 완전히 뻗어 힘이 실리는 프레임(fire)에 실제 웹스윙 시작
   if (GL.t >= ev.lift || (GL.fired && !isSwinging)) GL.active = false;
 }
+// idealCenterPivot: 플레이어 위치 기준 좌우(lateral) 축 성분을 제거해 visualAnchor 를 진행 방향 스윙 평면(수직면) 위로 투영
+function swingComputeIdealPivot(out, px, pz) {
+  const lx = -swingHeadZ, lz = swingHeadX;                       // 진행 방향의 좌우 축
+  const d = (webAnchor.x - px) * lx + (webAnchor.z - pz) * lz;   // 앵커의 좌우 편차
+  return out.set(webAnchor.x - lx * d, webAnchor.y, webAnchor.z - lz * d);
+}
 function shootWebNow() {
   if (!isGameStarted || isSwinging) return;
   stopGlide('web');
@@ -8665,12 +8681,14 @@ function shootWebNow() {
   const nx = swingWallNormal.x, nz = swingWallNormal.z;
   let fx = tdx - nx * (tdx * nx + tdz * nz), fz = tdz - nz * (tdx * nx + tdz * nz);
   const fl = Math.hypot(fx, fz); if (fl > 1e-4) { fx /= fl; fz /= fl; } else { fx = tdx; fz = tdz; }
-  // 피벗 이동 한도: 벽 ↔ 플레이어 간격 안쪽으로만 (피벗이 플레이어를 넘어가면 반대편으로 끌려감)
-  const gap = (_swHand.x - webAnchor.x) * nx + (_swHand.z - webAnchor.z) * nz;
-  const off = Math.min(S.maxPivotOffset * alpha, Math.max(0, gap * S.pivotWallGapRatio));
-  // initialPhysicsPivot = visualAnchor + wallNormal·maxOffset·alpha (+ 진행축 오프셋)
+  // [Dual-Pivot Projection] visualAnchor(= webAnchor, 실제 벽 hit.point)는 로프 렌더링/손 IK 전용으로 그대로 둔다.
+  // physicsPivot = lerp(visualAnchor, idealCenterPivot, swingAssist): 좌우 편차를 제거한 진행 방향 스윙 평면 위의 점.
+  swingHeadX = tdx; swingHeadZ = tdz;
   if (swingHardRope) physicsPivotPoint.copy(webAnchor);   // 1인칭 하드: 물리 피벗 = 실제 부착점
-  else physicsPivotPoint.set(webAnchor.x + nx * off + fx * S.pivotForwardOffset * alpha, webAnchor.y, webAnchor.z + nz * off + fz * S.pivotForwardOffset * alpha);
+  else {
+    swingComputeIdealPivot(swingIdealPivot, _swHand.x, _swHand.z);
+    physicsPivotPoint.copy(webAnchor).lerp(swingIdealPivot, S.swingAssist * alpha);
+  }
   let d0 = _swHand.distanceTo(physicsPivotPoint);
   if (false) {                                    // 너무 짧은 줄은 피벗을 바깥으로 밀어 최소 길이 확보
     _swTmp.subVectors(physicsPivotPoint, _swHand); if (_swTmp.lengthSq() < 1e-6) _swTmp.set(0, 1, 0);
@@ -8739,16 +8757,35 @@ function updateSwingPhysics(dt, inputDir, inputMag) {
     const targetFeet = GROUND_Y + S.floorClearance, lowestFeet = pv.y - ropeLength - H;
     if (lowestFeet < targetFeet) { const wantMax = pv.y - H - targetFeet; if (wantMax >= S.reelMinRope) swingShortenRope(Math.max(wantMax, ropeLength - S.floorReelRate * dt)); }
   }
-  // [이중 피벗] 화면의 줄은 실제 벽(webAnchor)에 붙지만 물리 피벗(physicsPivotPoint)은 도로 안쪽·진행 방향으로 옮겨 두었다가,
-  // 시간이 지나거나(pivotConvergeTime) 앵커 쪽으로 크게 꺾을 때(cornerBoost 배속) 실제 부착점으로 부드럽게 수렴시킨다. 줄 길이는 피벗 이동분만큼 보정해 장력·속도 유지.
   if (!swingHardRope) {
-    const ax = webAnchor.x - pos.x, az = webAnchor.z - pos.z, al = Math.hypot(ax, az) || 1;
-    const toward = inputMag > S.steerDeadzone ? (inputDir.x * ax + inputDir.z * az) / al : 0;
-    swingCornerMul += ((toward > S.cornerSteerThreshold ? S.cornerBoost : 1) - swingCornerMul) * (1 - Math.exp(-S.cornerResponse * dt));
+    // ── [Anti-ZigZag] 수평 속도를 진행 방향 / 좌우 성분으로 분해 → 조향 입력이 작으면 좌우 성분 지수 감쇠, 감쇠분의 50%를 전진 속도로 전환 ──
+    const hs = Math.hypot(vel.x, vel.z);
+    let latIn = 0;
+    if (hs > 2.0) {
+      // 기준 진행 방향: 코너링 중엔 빠르게, 직진 중엔 천천히 실제 속도 방향을 따라간다(그래야 좌우 흔들림이 '횡속도'로 남아 감쇠된다)
+      let lx = -swingHeadZ, lz = swingHeadX;
+      latIn = Math.abs(swingInX * lx + swingInZ * lz);
+      const hk = 1 - Math.exp(-(latIn > S.cornerSteerThreshold ? S.headingFollowCorner : S.headingFollowStraight) * dt);
+      swingHeadX += (vel.x / hs - swingHeadX) * hk; swingHeadZ += (vel.z / hs - swingHeadZ) * hk;
+      const hn = Math.hypot(swingHeadX, swingHeadZ) || 1; swingHeadX /= hn; swingHeadZ /= hn;
+      lx = -swingHeadZ; lz = swingHeadX;
+      if (latIn < S.lateralSteerThreshold) {
+        let fwd = vel.x * swingHeadX + vel.z * swingHeadZ, lat = vel.x * lx + vel.z * lz;
+        const newLat = lat * Math.exp(-S.lateralDamping * dt);
+        if (fwd > 0) fwd += (Math.abs(lat) - Math.abs(newLat)) * S.lateralToForward;   // 감쇠된 횡속도의 50% → 전진 속도
+        vel.x = swingHeadX * fwd + lx * newLat; vel.z = swingHeadZ * fwd + lz * newLat;
+      }
+    }
+    // ── [Dynamic Cornering] 강하게 선회할 때만 physicsPivot → visualAnchor 로 빠르게 Lerp 복귀, 직진 중엔 보정 피벗 유지(벽 쪽 끌림 방지) ──
+    const cornering = latIn > S.cornerSteerThreshold;
+    swingCornerMul += ((cornering ? S.cornerBoost : 1) - swingCornerMul) * (1 - Math.exp(-S.cornerResponse * dt));   // HUD 표시용
+    swingPivotU = cornering ? Math.min(1, swingPivotU + dt * S.cornerReturnRate) : Math.max(0, swingPivotU - dt * S.pivotRecenterRate);
     const dBefore = Math.hypot(pos.x - pv.x, pos.y + H - pv.y, pos.z - pv.z);
-    swingPivotU = Math.min(1, swingPivotU + dt * swingCornerMul / S.pivotConvergeTime);
+    swingComputeIdealPivot(swingIdealPivot, pos.x, pos.z);
+    swingBasePivot.copy(webAnchor).lerp(swingIdealPivot, S.swingAssist * swingAlpha());   // 보정 피벗(좌우 편차 제거)
     const u = swingPivotU * swingPivotU * (3 - 2 * swingPivotU);
-    pv.set(swingBasePivot.x + (webAnchor.x - swingBasePivot.x) * u, swingBasePivot.y + (webAnchor.y - swingBasePivot.y) * u, swingBasePivot.z + (webAnchor.z - swingBasePivot.z) * u);
+    pv.copy(swingBasePivot).lerp(webAnchor, u);
+    // 피벗이 움직인 만큼 줄 길이를 보정해 장력·속도 유지 (제약은 전적으로 physicsPivot 기준)
     ropeLength = Math.max(S.reelMinRope * 0.5, ropeLength + (Math.hypot(pos.x - pv.x, pos.y + H - pv.y, pos.z - pv.z) - dBefore));
   }
   const SUB = 4, sd = dt / SUB;
