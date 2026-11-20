@@ -10779,10 +10779,10 @@ function gfxUpdate() {
     const maxPR = Math.min(window.devicePixelRatio || 1, GFX_MOBILE ? Math.min(GFX_PRESETS[GFX.quality].maxPR, 2.0) : GFX_PRESETS[GFX.quality].maxPR);
     const hiQ = GFX.quality === 'high' || GFX.quality === 'ultra' || GFX.quality === 'cinema' || GFX.quality === 'realistic';
     const lockPR = GFX.lockPR || (hiQ && gfxEffDetail() >= 1200 && !GFX_MOBILE);   // [v15] 폰은 FPS 낮으면 해상도 자동 하향
-    const floorPR = lockPR ? maxPR : Math.min(maxPR, GFX_MOBILE ? 1.25 : 1.5);
+    const floorPR = lockPR ? maxPR : Math.min(maxPR, GFX_MOBILE ? 0.8 : 1.5);   // [60fps/발열] 폰은 0.8 까지 내려갈 수 있게 해 열 스로틀링에도 프레임 유지
     if (lockPR) { if (Math.abs(GFX.pr - maxPR) > 0.01) gfxSetPR(maxPR); }
-    else if (avg > 24 && GFX.pr > floorPR + 0.01) { gfxSetPR(Math.max(floorPR, GFX.pr - 0.1)); GFX.lockUp = 480; }
-    else if (avg < 18.5 && GFX.lockUp === 0 && GFX.pr < maxPR - 0.01) { gfxSetPR(Math.min(maxPR, GFX.pr + 0.05)); GFX.lockUp = 240; }
+    else if (avg > (GFX_MOBILE ? 19.5 : 24) && GFX.pr > floorPR + 0.01) { gfxSetPR(Math.max(floorPR, GFX.pr - 0.1)); GFX.lockUp = GFX_MOBILE ? 600 : 480; }
+    else if (avg < (GFX_MOBILE ? 17.2 : 18.5) && GFX.lockUp === 0 && GFX.pr < maxPR - 0.01) { gfxSetPR(Math.min(maxPR, GFX.pr + 0.05)); GFX.lockUp = GFX_MOBILE ? 900 : 240; }
   }
 }
 
@@ -10874,7 +10874,7 @@ function gfx2RenderG(W, H) {
     GFX2.gb = new THREE.WebGLRenderTarget(w, h, { minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, format: THREE.RGBAFormat, type: fl ? THREE.FloatType : THREE.UnsignedByteType, depthBuffer: true });
     GFX2.gbW = w; GFX2.gbH = h;
   }
-  const swap = [];
+  const swap = GFX2._swap || (GFX2._swap = []); swap.length = 0;
   scene.traverse(o => {
     if (o.isMesh) {
       const m = o.material; if (!o.visible) return;
@@ -10889,9 +10889,9 @@ function gfx2RenderG(W, H) {
       { let _p = o, _sp = false; while (_p) { if (_p === spideyGroup) { _sp = true; break; } _p = _p.parent; } o.material = (!_sp && m === window.__baseWallMat) ? (GFX2.nmG = GFX2.nmG || {})[fl ? 'f' : 'u'] || (GFX2.nmG[fl ? 'f' : 'u'] = nmMakeGMat(fl)) : gfx2GMat(_sp ? (fl ? -1 : 0) : gfx2ReflOf(o)); }
     } else if ((o.isLine || o.isPoints || o.isSprite) && o.visible) { swap.push(o, 1, true); o.visible = false; }
   });
-  const bg = scene.background, sa = renderer.shadowMap.autoUpdate, cc = new THREE.Color(); renderer.getClearColor(cc); const ca = renderer.getClearAlpha();
+  const bg = scene.background, sa = renderer.shadowMap.autoUpdate, cc = GFX2._cc || (GFX2._cc = new THREE.Color()); renderer.getClearColor(cc); const ca = renderer.getClearAlpha();
   scene.background = null; renderer.shadowMap.autoUpdate = false;
-  const clr = new THREE.Color(); if (fl) { clr.r = 2600; clr.g = 0; clr.b = 0; } else clr.setRGB(1, 1, 0);
+  const clr = GFX2._clr || (GFX2._clr = new THREE.Color()); if (fl) { clr.r = 2600; clr.g = 0; clr.b = 0; } else clr.setRGB(1, 1, 0);
   renderer.setClearColor(clr, 1);
   try { renderer.setRenderTarget(GFX2.gb); renderer.clear(); renderer.render(scene, camera); }
   finally {
