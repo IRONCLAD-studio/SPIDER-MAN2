@@ -9972,7 +9972,7 @@ function gfxApplyUser() {
 }
 function gfxShadowParams() {
   const lv = Math.min(4, Math.max(1, Math.round(GFXU.shDetail) || 3));
-  const cap = GFX_MOBILE ? 4096 : Math.min(8192, (renderer && renderer.capabilities && renderer.capabilities.maxTextureSize) || 4096);
+  const cap = GFX_MOBILE ? 2048 : Math.min(8192, (renderer && renderer.capabilities && renderer.capabilities.maxTextureSize) || 4096);
   return { size: Math.min(GFX_SH_SIZES[lv - 1], cap), R: Math.max(40, Math.round(GFXU.shDist)) };
 }
 function gfxReapplyShadowParams() {
@@ -10027,6 +10027,7 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     const SC = THREE.ShaderChunk; let chunk = SC.shadowmap_pars_fragment;
     const re = /#elif defined\( SHADOWMAP_TYPE_PCF_SOFT \)[\s\S]*?(?=#elif defined\( SHADOWMAP_TYPE_VSM \))/;
     if (!re.test(chunk)) return;
+    const _mob = !!(window.matchMedia && window.matchMedia('(pointer:coarse)').matches), NB = _mob ? 4 : 6, NP = _mob ? 8 : 14;
     const soft = `#elif defined( SHADOWMAP_TYPE_PCF_SOFT )
 	{
 		vec3 sdx = dFdx( shadowCoord.xyz ); vec3 sdy = dFdy( shadowCoord.xyz );
@@ -10039,10 +10040,10 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
 		vec2 texel = 1.0 / shadowMapSize;
 		float ang = 6.2831853 * fract( 52.9829189 * fract( dot( gl_FragCoord.xy, vec2( 0.06711056, 0.00583715 ) ) ) );
 		float blk = 0.0; float cnt = 0.0;
-		for ( int i = 0; i < 6; i ++ ) {
+		for ( int i = 0; i < ${NB}; i ++ ) {
 			float fi = float( i );
 			float aa = fi * 2.399963 + ang;
-			vec2 o = vec2( cos( aa ), sin( aa ) ) * ( sqrt( ( fi + 0.5 ) / 6.0 ) * 7.0 ) * texel;
+			vec2 o = vec2( cos( aa ), sin( aa ) ) * ( sqrt( ( fi + 0.5 ) / ${NB}.0 ) * 7.0 ) * texel;
 			float dd = unpackRGBAToDepth( texture2D( shadowMap, shadowCoord.xy + o ) );
 			float pz = dot( o, slope );
 			if ( dd < shadowCoord.z + pz ) { blk += dd - pz; cnt += 1.0; }
@@ -10051,13 +10052,13 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
 		else {
 			float pen = clamp( shadowRadius * max( shadowCoord.z - blk / cnt, 0.0 ), 1.0, 7.0 );
 			float lit = 0.0;
-			for ( int j = 0; j < 14; j ++ ) {
+			for ( int j = 0; j < ${NP}; j ++ ) {
 				float fj = float( j );
 				float a2 = fj * 2.399963 + ang + 1.7;
-				vec2 o2 = vec2( cos( a2 ), sin( a2 ) ) * ( sqrt( ( fj + 0.5 ) / 14.0 ) * pen ) * texel;
+				vec2 o2 = vec2( cos( a2 ), sin( a2 ) ) * ( sqrt( ( fj + 0.5 ) / ${NP}.0 ) * pen ) * texel;
 				lit += texture2DCompare( shadowMap, shadowCoord.xy + o2, shadowCoord.z + dot( o2, slope ) );
 			}
-			shadow = lit / 14.0;
+			shadow = lit / ${NP}.0;
 		}
 	}
 `;
@@ -10472,11 +10473,11 @@ function gfxBloomInit() {
         if (ultra > 0.5) {
           // 갓레이(태양 빛줄기)
           if (sunVis > 0.01) {
-            vec2 dl = (sunUv - uv) / 28.0 * 0.92; vec2 sp = uv; float w = 1.0; vec3 acc = vec3(0.0);
+            vec2 dl = (sunUv - uv) / ${(window.matchMedia && window.matchMedia('(pointer:coarse)').matches) ? 14 : 28}.0 * 0.92; vec2 sp = uv; float w = 1.0; vec3 acc = vec3(0.0);
             sp += dl * hh(uv * 311.0 + time);
-            for (int i = 0; i < 28; i++) { sp += dl; vec3 t = texture2D(tScene, sp).rgb; float l = max(t.r, max(t.g, t.b)); acc += t * smoothstep(0.72, 1.0, l) * w; w *= 0.955; }
+            for (int i = 0; i < ${(window.matchMedia && window.matchMedia('(pointer:coarse)').matches) ? 14 : 28}; i++) { sp += dl; vec3 t = texture2D(tScene, sp).rgb; float l = max(t.r, max(t.g, t.b)); acc += t * smoothstep(0.72, 1.0, l) * w; w *= 0.955; }
             float fall = pow(clamp(1.0 - length((uv - sunUv) * vec2(aspect, 1.0)) * 0.9, 0.0, 1.0), 1.6);
-            c += acc / 28.0 * 0.8 * sunVis * (0.35 + fall);
+            c += acc / ${(window.matchMedia && window.matchMedia('(pointer:coarse)').matches) ? 14 : 28}.0 * 0.8 * sunVis * (0.35 + fall);
             // 아나모픽 렌즈 플레어: 수평 스트릭 + 고스트
             vec2 fd = (uv - sunUv) * vec2(aspect, 1.0);
             c += vec3(0.35, 0.55, 1.0) * exp(-abs(fd.y) * 90.0) * exp(-abs(fd.x) * 1.6) * sunVis * 0.25;
@@ -10612,7 +10613,7 @@ function gfxSetQuality(q) {
   const P = GFX_PRESETS[q];
   gfxApplyUser();
   if (q !== 'low') { try { GFX.envKey = ''; gfxBuildEnv(); } catch (e) { console.warn('env', e); } }
-  gfxApplyShadows(); gfxSetPR(Math.min(window.devicePixelRatio || 1, GFX_MOBILE ? Math.min(P.maxPR, 2.0) : P.maxPR)); gfxSetBloom(gfxBloomWanted(P)); gfx2Apply(!!P.cinema); try { vfxApplyQuality(q); } catch (e) { console.warn('vfxq', e); }
+  gfxApplyShadows(); gfxSetPR(GFX_MOBILE ? gfxMobPR() : Math.min(window.devicePixelRatio || 1, P.maxPR)); gfxSetBloom(gfxBloomWanted(P)); gfx2Apply(!!P.cinema); try { vfxApplyQuality(q); } catch (e) { console.warn('vfxq', e); }
   const b = document.getElementById('btn-gfx-quality');
   if (b) { b.innerText = '그래픽 품질: ' + P.label; b.classList.toggle('off', q === 'low'); }
   try { gfxSyncUserUI(); } catch (e) {}
@@ -10777,7 +10778,7 @@ function gfxUpdate() {
   if (GFX.lockUp > 0) GFX.lockUp--;
   if (GFX.frames >= 45) {
     const avg = GFX.acc / GFX.frames; GFX.frames = 0; GFX.acc = 0;
-    const maxPR = Math.min(window.devicePixelRatio || 1, GFX_MOBILE ? Math.min(GFX_PRESETS[GFX.quality].maxPR, 2.0) : GFX_PRESETS[GFX.quality].maxPR);
+    const maxPR = GFX_MOBILE ? gfxMobPR() : Math.min(window.devicePixelRatio || 1, GFX_PRESETS[GFX.quality].maxPR);
     const hiQ = GFX.quality === 'high' || GFX.quality === 'ultra' || GFX.quality === 'cinema' || GFX.quality === 'realistic';
     const lockPR = GFX.lockPR || (hiQ && gfxEffDetail() >= 1200 && !GFX_MOBILE) || (GFX_MOBILE && window.PR_LOCK !== false);   // [해상도 고정] 폰: 자동 해상도 하향/상향 금지 → 처음 화질 유지 + 렌더타깃 재할당 누적 방지 (콘솔: PR_LOCK = false 로 해제)   // [v15] 폰은 FPS 낮으면 해상도 자동 하향
     const floorPR = lockPR ? maxPR : Math.min(maxPR, GFX_MOBILE ? 0.8 : 1.5);   // [60fps/발열] 폰은 0.8 까지 내려갈 수 있게 해 열 스로틀링에도 프레임 유지
@@ -11053,6 +11054,11 @@ setInterval(() => {
     }
   } catch (e) { window.MEM_EVICT = false; console.warn('[MEM EVICT] 비활성', e); }
 }, 6000);
+// [해상도 1080p 이상] 폰 렌더 해상도 = 1920×1080(207만 픽셀) 상당(기본) 또는 기기 네이티브. 이보다 낮추지 않는다. 화면 오른쪽 위 모서리 3탭: 1080p ↔ 네이티브 전환
+window.MOBILE_PR_MODE = window.MOBILE_PR_MODE || '1080';
+function gfxMobPR() { const dpr = window.devicePixelRatio || 1; if (window.MOBILE_PR_MODE === 'native') return dpr; return Math.min(dpr, Math.max(1, Math.sqrt(1920 * 1080 / Math.max(1, window.innerWidth * window.innerHeight)))); }
+(function () { let c = 0, t0 = 0; window.addEventListener('touchstart', (e) => { const t = e.touches && e.touches[0]; if (!t || t.clientX < window.innerWidth - 90 || t.clientY > 90) return; const n = performance.now(); c = (n - t0 < 900) ? c + 1 : 1; t0 = n;
+  if (c >= 3) { c = 0; window.MOBILE_PR_MODE = window.MOBILE_PR_MODE === 'native' ? '1080' : 'native'; try { gfxSetPR(gfxMobPR()); } catch (_) {} } }, { passive: true }); })();
 window.PERF_HUD = true;   // 기본 표시. 화면 왼쪽 위 모서리를 빠르게 3번 탭하면 켜고 끔 (콘솔: PERF_HUD = false)
 (function () { let c = 0, t0 = 0; window.addEventListener('touchstart', (e) => { const t = e.touches && e.touches[0]; if (!t || t.clientX > 90 || t.clientY > 90) return; const n = performance.now(); c = (n - t0 < 900) ? c + 1 : 1; t0 = n; if (c >= 3) { c = 0; window.PERF_HUD = !window.PERF_HUD; } }, { passive: true }); })();
 function __perfHudTick(now) {
