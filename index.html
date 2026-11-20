@@ -7877,6 +7877,7 @@ const glide = { active: false, alpha: 0.12, bank: 0, speed: 0, liftG: 1, ld: 0, 
                 f: new THREE.Vector3(0, 0, 1), u: new THREE.Vector3(0, 1, 0) };
 
 // ── ⑥ 속도 기반 카메라 컨트롤러 (플레이어 로직과 분리: 속력 → FOV / 추적 거리) ──
+window.CAM_LAND = { on: true, fov: 0.78, dist: 0.72 };
 const SpeedCamera = {
   speedMin: 12.0, speedMax: 62.0,        // m/s  이 구간에서 0→1 매핑
   fovMin: 70.0, fovMax: 95.0,           // deg
@@ -7884,7 +7885,7 @@ const SpeedCamera = {
   glideFovBonus: 4.0, glideDistBonus: 1.2, glideRollGain: 0.35,
   speedRise: 5.0, speedFall: 1.8,        // 1/s 측정 속도 스무딩(가속 빠르게, 감속 천천히)
   fovRise: 4.5, fovFall: 2.0, distRise: 3.0, distFall: 1.6,
-  speedSm: 0, dist: 4.2, k: 0, targetFov: 72.0,
+  speedSm: 0, dist: 4.2, k: 0, targetFov: 72.0, fovScale: 1,   // fovScale: 가로모드 보정 배율(세로 FOV 에 곱함)
   reset() { this.speedSm = 0; this.dist = this.distMin; this.k = 0; this.targetFov = this.fovMin; },
   update(speed, dt, gliding) {
     this.speedSm += (speed - this.speedSm) * (1 - Math.exp(-(speed > this.speedSm ? this.speedRise : this.speedFall) * dt));
@@ -7892,7 +7893,7 @@ const SpeedCamera = {
     this.k = t * t * (3 - 2 * t);
     const td = THREE.MathUtils.lerp(this.distMin, this.distMax, this.k) + (gliding ? this.glideDistBonus : 0);
     this.dist += (td - this.dist) * (1 - Math.exp(-(td > this.dist ? this.distRise : this.distFall) * dt));
-    this.targetFov = THREE.MathUtils.lerp(this.fovMin, this.fovMax, this.k) + (gliding ? this.glideFovBonus : 0);
+    this.targetFov = (THREE.MathUtils.lerp(this.fovMin, this.fovMax, this.k) + (gliding ? this.glideFovBonus : 0)) * this.fovScale;
   },
   stepFov(cur, dt) { return cur + (this.targetFov - cur) * (1 - Math.exp(-(this.targetFov > cur ? this.fovRise : this.fovFall) * dt)); }
 };
@@ -12177,8 +12178,12 @@ function updateCameraAndHUD(dt) {
   const speed = player.vel.length();
   const speedKmh = Math.round(speed * 3.6);
   // ── [SWING v2 · 모듈6] 속도 기반 동적 카메라 컨트롤러(SpeedCamera): 속력 → FOV / 추적 거리 ──
+  // [가로모드 보정] three.js 의 fov 는 '세로' 화각이라 폰 가로모드(화면비 ~2.1)에선 가로 화각이 과하게 넓고 캐릭터가 멀어 보인다 → 가로모드(모바일)에서 화각·추적 거리를 줄인다.
+  //   콘솔 튜닝: CAM_LAND.fov = 0.78 (작을수록 좁게/확대), CAM_LAND.dist = 0.72 (작을수록 가깝게), CAM_LAND.on = false 로 해제
+  const _camLand = window.CAM_LAND.on && GFX_MOBILE && camera.aspect > 1.0 && !isPOVMode && !isBirdEyeMode;
+  SpeedCamera.fovScale = _camLand ? window.CAM_LAND.fov : 1;
   SpeedCamera.update(speed, dt, glide.active);
-  cameraSpeedSm = SpeedCamera.speedSm; cameraFollowDistance = SpeedCamera.dist;
+  cameraSpeedSm = SpeedCamera.speedSm; cameraFollowDistance = SpeedCamera.dist * (_camLand ? window.CAM_LAND.dist : 1);
   const speedK = SpeedCamera.k;
   const swingLowOffset = isSwinging ? THREE.MathUtils.clamp(-player.vel.y * 0.02, -0.25, 0.45) : 0;
   const rawTarget = new THREE.Vector3(player.pos.x, player.pos.y + 1.35 + swingLowOffset, player.pos.z);
