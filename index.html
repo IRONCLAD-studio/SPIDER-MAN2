@@ -11055,10 +11055,10 @@ setInterval(() => {
   } catch (e) { window.MEM_EVICT = false; console.warn('[MEM EVICT] 비활성', e); }
 }, 6000);
 // [해상도 1080p 이상] 폰 렌더 해상도 = 1920×1080(207만 픽셀) 상당(기본) 또는 기기 네이티브. 이보다 낮추지 않는다. 화면 오른쪽 위 모서리 3탭: 1080p ↔ 네이티브 전환
-window.MOBILE_PR_MODE = window.MOBILE_PR_MODE || '1080';
-function gfxMobPR() { const dpr = window.devicePixelRatio || 1; if (window.MOBILE_PR_MODE === 'native') return dpr; if (window.MOBILE_PR_MODE === '1.5' || window.MOBILE_PR_MODE === '1.0') return Math.min(dpr, parseFloat(window.MOBILE_PR_MODE)); return Math.min(dpr, Math.max(1, Math.sqrt(1920 * 1080 / Math.max(1, window.innerWidth * window.innerHeight)))); }
+window.MOBILE_PR_MODE = window.MOBILE_PR_MODE || '2.0';   // 기본 2.0(처음 화질). 오른쪽 위 3탭: 2.0 → 1080p → 네이티브 → 1.5
+function gfxMobPR() { const dpr = window.devicePixelRatio || 1; if (window.MOBILE_PR_MODE === 'native') return dpr; if (window.MOBILE_PR_MODE === '2.0' || window.MOBILE_PR_MODE === '1.5' || window.MOBILE_PR_MODE === '1.0') return Math.min(dpr, parseFloat(window.MOBILE_PR_MODE)); return Math.min(dpr, Math.max(1, Math.sqrt(1920 * 1080 / Math.max(1, window.innerWidth * window.innerHeight)))); }
 (function () { let c = 0, t0 = 0; window.addEventListener('touchstart', (e) => { const t = e.touches && e.touches[0]; if (!t || t.clientX < window.innerWidth - 90 || t.clientY > 90) return; const n = performance.now(); c = (n - t0 < 900) ? c + 1 : 1; t0 = n;
-  if (c >= 3) { c = 0; { const M = ['1080', 'native', '1.5', '1.0'], i = M.indexOf(window.MOBILE_PR_MODE); window.MOBILE_PR_MODE = M[(i + 1) % M.length]; } try { gfxSetPR(gfxMobPR()); } catch (_) {} } }, { passive: true }); })();
+  if (c >= 3) { c = 0; { const M = ['2.0', '1080', 'native', '1.5'], i = M.indexOf(window.MOBILE_PR_MODE); window.MOBILE_PR_MODE = M[(i + 1) % M.length]; } try { gfxSetPR(gfxMobPR()); } catch (_) {} } }, { passive: true }); })();
 window.PERF_HUD = true;   // 기본 표시. 화면 왼쪽 위 모서리를 빠르게 3번 탭하면 켜고 끔 (콘솔: PERF_HUD = false)
 (function () { let c = 0, t0 = 0; window.addEventListener('touchstart', (e) => { const t = e.touches && e.touches[0]; if (!t || t.clientX > 90 || t.clientY > 90) return; const n = performance.now(); c = (n - t0 < 900) ? c + 1 : 1; t0 = n; if (c >= 3) { c = 0; window.PERF_HUD = !window.PERF_HUD; } }, { passive: true }); })();
 function __perfHudTick(now) {
