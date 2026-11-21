@@ -9958,9 +9958,10 @@ const GFX_PRESETS = {
 };
 
 // ---------- 사용자 설정: 디테일 거리 · 청크 거리 · 그림자 거리/디테일 (localStorage 저장) ----------
-const GFXU_DEF = { detail: null, chunk: 2300, shDist: 800, shDetail: 3 };   // detail:null = 그래픽 품질 프리셋 값 사용 / 그림자 거리 기본 = 최대(600m)
+const _mobU = !!(window.matchMedia && window.matchMedia('(pointer:coarse)').matches);   // [폰 기본값] 맵 로드 거리 2300→1100m, 그림자 거리 800→260m: 한 프레임 삼각형·드로우콜이 3~4배 줄고 그림자 해상도는 오히려 올라감
+const GFXU_DEF = { detail: null, chunk: _mobU ? 1100 : 2300, shDist: _mobU ? 260 : 800, shDetail: 3 };   // detail:null = 그래픽 품질 프리셋 값 사용 / 그림자 거리 기본 = 최대(600m)
 const GFXU = Object.assign({}, GFXU_DEF);
-try { const _s = JSON.parse(localStorage.getItem('gfxUser2') || 'null'); if (_s) for (const k in GFXU_DEF) if (_s[k] !== undefined) GFXU[k] = _s[k]; } catch (e) {}
+try { const _first = _mobU && !localStorage.getItem('gfxMobTune1'); const _s = JSON.parse(localStorage.getItem('gfxUser2') || 'null'); if (_s && !_first) for (const k in GFXU_DEF) if (_s[k] !== undefined) GFXU[k] = _s[k]; if (_mobU) localStorage.setItem('gfxMobTune1', '1'); } catch (e) {}   // 폰: 최초 1회는 예전에 저장된 값(2300/800)을 무시하고 새 기본값 적용
 const GFX_SH_OFF = 600;                                  // 그림자 카메라를 태양 쪽으로 띄우는 거리(높은 건물 그림자 포함)
 const GFX_SH_SIZES = [1024, 2048, 4096, 8192], GFX_SH_NAMES = ['낮음 (1024)', '보통 (2048)', '높음 (4096)', '최고 (8192)'];
 function gfxUserSave() { try { localStorage.setItem('gfxUser2', JSON.stringify(GFXU)); } catch (e) {} }
