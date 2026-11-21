@@ -11078,6 +11078,8 @@ function animate() {
   requestAnimationFrame(animate);
   const now = performance.now();
   if (!window.__perfOff) __perfHudTick(now);
+  // [그림자 패스 절반] 폰: 태양 그림자맵을 2프레임에 1번만 다시 그림(건물은 정적이라 티가 거의 없고, 드로우콜·삼각형이 크게 줄어듦). 콘솔: SHADOW_HALF = false 로 해제
+  if (window.SHADOW_HALF !== false && window.matchMedia && window.matchMedia('(pointer:coarse)').matches) { window.__shF = (window.__shF || 0) + 1; renderer.shadowMap.autoUpdate = (window.__shF & 1) === 0; }
   try { if (renderer.info.autoReset) renderer.info.autoReset = false; renderer.info.reset(); } catch (e) {}   // 한 프레임 전체(모든 패스) 드로우콜·삼각형 누적 → 다음 HUD 갱신 때 표시
   const __c0 = performance.now(); Promise.resolve().then(() => { window.__cpuMs = (window.__cpuMs || 0) * 0.9 + (performance.now() - __c0) * 0.1; });
   if (window.FPS_CAP > 0) {
