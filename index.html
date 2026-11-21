@@ -11056,9 +11056,9 @@ setInterval(() => {
 }, 6000);
 // [해상도 1080p 이상] 폰 렌더 해상도 = 1920×1080(207만 픽셀) 상당(기본) 또는 기기 네이티브. 이보다 낮추지 않는다. 화면 오른쪽 위 모서리 3탭: 1080p ↔ 네이티브 전환
 window.MOBILE_PR_MODE = window.MOBILE_PR_MODE || '1080';
-function gfxMobPR() { const dpr = window.devicePixelRatio || 1; if (window.MOBILE_PR_MODE === 'native') return dpr; return Math.min(dpr, Math.max(1, Math.sqrt(1920 * 1080 / Math.max(1, window.innerWidth * window.innerHeight)))); }
+function gfxMobPR() { const dpr = window.devicePixelRatio || 1; if (window.MOBILE_PR_MODE === 'native') return dpr; if (window.MOBILE_PR_MODE === '1.5' || window.MOBILE_PR_MODE === '1.0') return Math.min(dpr, parseFloat(window.MOBILE_PR_MODE)); return Math.min(dpr, Math.max(1, Math.sqrt(1920 * 1080 / Math.max(1, window.innerWidth * window.innerHeight)))); }
 (function () { let c = 0, t0 = 0; window.addEventListener('touchstart', (e) => { const t = e.touches && e.touches[0]; if (!t || t.clientX < window.innerWidth - 90 || t.clientY > 90) return; const n = performance.now(); c = (n - t0 < 900) ? c + 1 : 1; t0 = n;
-  if (c >= 3) { c = 0; window.MOBILE_PR_MODE = window.MOBILE_PR_MODE === 'native' ? '1080' : 'native'; try { gfxSetPR(gfxMobPR()); } catch (_) {} } }, { passive: true }); })();
+  if (c >= 3) { c = 0; { const M = ['1080', 'native', '1.5', '1.0'], i = M.indexOf(window.MOBILE_PR_MODE); window.MOBILE_PR_MODE = M[(i + 1) % M.length]; } try { gfxSetPR(gfxMobPR()); } catch (_) {} } }, { passive: true }); })();
 window.PERF_HUD = true;   // 기본 표시. 화면 왼쪽 위 모서리를 빠르게 3번 탭하면 켜고 끔 (콘솔: PERF_HUD = false)
 (function () { let c = 0, t0 = 0; window.addEventListener('touchstart', (e) => { const t = e.touches && e.touches[0]; if (!t || t.clientX > 90 || t.clientY > 90) return; const n = performance.now(); c = (n - t0 < 900) ? c + 1 : 1; t0 = n; if (c >= 3) { c = 0; window.PERF_HUD = !window.PERF_HUD; } }, { passive: true }); })();
 function __perfHudTick(now) {
@@ -11071,13 +11071,15 @@ function __perfHudTick(now) {
     const fps = __perfFrames * 1000 / (now - __perfT); __perfFrames = 0; __perfT = now;
     let n = 0; scene.traverse(() => { n++; });
     const i = renderer.info, m = i.memory, r = i.render;
-    __perfEl.textContent = 'fps ' + fps.toFixed(0) + '  PR ' + (GFX.pr || 0).toFixed(2) + '\ngeo ' + m.geometries + '  tex ' + m.textures + '  prog ' + (i.programs ? i.programs.length : '-') + '\ncalls ' + r.calls + '  tris ' + (r.triangles / 1000).toFixed(0) + 'k\nscene ' + n + '  cells ' + (NM.cellMeshes ? NM.cellMeshes.length : '-') + '  fc ' + (typeof FC !== 'undefined' && FC.cells ? FC.cells.size : '-') + '\ncars ' + (TRF.cars ? TRF.cars.length : '-') + '  peds ' + (TRF.peds ? TRF.peds.length : '-') + '  cols ' + (NM.cellDone ? NM.cellDone.size : '-') + '\nancCells ' + spatialAnchorGrid._m.size + '  colCells ' + spatialColliderGrid._m.size + '  freed gs ' + window.__evictStat.gs + ' anc ' + window.__evictStat.anc;
+    __perfEl.textContent = 'fps ' + fps.toFixed(0) + '  PR ' + (GFX.pr || 0).toFixed(2) + '\ngeo ' + m.geometries + '  tex ' + m.textures + '  prog ' + (i.programs ? i.programs.length : '-') + '\ncalls ' + r.calls + '  tris ' + (r.triangles / 1000).toFixed(0) + 'k  cpu ' + (window.__cpuMs || 0).toFixed(1) + 'ms\nscene ' + n + '  cells ' + (NM.cellMeshes ? NM.cellMeshes.length : '-') + '  fc ' + (typeof FC !== 'undefined' && FC.cells ? FC.cells.size : '-') + '\ncars ' + (TRF.cars ? TRF.cars.length : '-') + '  peds ' + (TRF.peds ? TRF.peds.length : '-') + '  cols ' + (NM.cellDone ? NM.cellDone.size : '-') + '\nancCells ' + spatialAnchorGrid._m.size + '  colCells ' + spatialColliderGrid._m.size + '  freed gs ' + window.__evictStat.gs + ' anc ' + window.__evictStat.anc;
   } catch (e) { __perfEl = null; window.__perfOff = true; }
 }
 function animate() {
   requestAnimationFrame(animate);
   const now = performance.now();
   if (!window.__perfOff) __perfHudTick(now);
+  try { if (renderer.info.autoReset) renderer.info.autoReset = false; renderer.info.reset(); } catch (e) {}   // 한 프레임 전체(모든 패스) 드로우콜·삼각형 누적 → 다음 HUD 갱신 때 표시
+  const __c0 = performance.now(); Promise.resolve().then(() => { window.__cpuMs = (window.__cpuMs || 0) * 0.9 + (performance.now() - __c0) * 0.1; });
   if (window.FPS_CAP > 0) {
     const step = 1000 / window.FPS_CAP, el = now - __capLast;
     if (el < step - 0.75) return;                       // 아직 다음 프레임 시각이 아님 → 렌더/물리 모두 건너뜀
